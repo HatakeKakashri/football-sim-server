@@ -1,50 +1,40 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# Football Match Simulation Engine Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Server Authority
+The server is the single source of truth. Clients never execute match logic; they render interpolated snapshots. All match state, decisions, and outcomes are determined exclusively by the server.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Fixed Timestep Determinism
+The simulation uses a fixed timestep (60 Hz default), decoupled from any render or poll rate. The determinism target is same-build, same-machine reproducibility, not cross-platform bit-exactness.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Strict Pipeline Separation
+The tick pipeline follows a strict order: perception → decision → intent → execution/physics. Same-tick read/write separation ensures no agent's decision this tick can observe another agent's not-yet-applied decision from the same tick.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Purpose-Driven AI
+Utility AI is used only where a genuine multi-factor, continuous trade-off exists. Everything else—ball motion, offside, out-of-bounds, goals—is physics or a rule engine. The server ships the smallest deterministic slice first; AI is added only after the substrate is proven reproducible.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Determinism Discipline
+Hash-map iteration order, transcendental functions in hot paths, wall-clock time, unseeded RNG, and unordered query iteration for RNG-consuming systems are prohibited. All order-sensitive systems must be explicitly chained; query iteration for RNG-consuming systems must use stable EntityId sorting.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+## Technology Stack
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+- **Language**: Rust (edition 2024)
+- **ECS Framework**: `bevy_ecs` used as a library only (default rendering features off)
+- **Scheduling**: `Schedule` with every order-sensitive system explicitly chained; never rely on default parallel inference for order-sensitive systems
+- **Numeric Representation**: Plain `f32`; transcendentals avoided in the hot path (except logistic curve using `f32::exp()` directly)
+- **PRNG**: Mulberry32 seeded deterministic RNG
+- **Workspace Structure**: 11-crate workspace with clear dependency boundaries
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+## Development Workflow
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+- **Roadmap**: Determinism substrate proven first (Phase 0), before any AI/rules content
+- **Testing**: Per-tick state hash/checksum verification; same seed + same inputs → identical result
+- **Performance**: Functional completeness outranks performance work; profiling targets are unvalidated projections until Phase 5
+- **Documentation**: Single canonical design doc per project convention
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution supersedes all other development practices for the Football Match Simulation Engine. All pull requests and code reviews must verify compliance with the principles above. Complexity must be justified against these principles. Amendments require documentation, approval, and a migration plan.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-09-18 | **Last Amended**: 2026-09-18

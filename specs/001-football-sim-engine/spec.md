@@ -146,8 +146,8 @@ As a QA engineer, I want to replay matches from recorded seeds to reproduce and 
 ### Measurable Outcomes
 
 - **SC-001**: Simulation produces identical results across 100 consecutive runs with the same seed
-- **SC-002**: Simulation maintains consistent update rate regardless of system load
-- **SC-003**: Player decisions complete quickly enough for real-time gameplay
+- **SC-002**: Simulation maintains 60 Hz (±5%) update rate under 80% CPU utilization
+- **SC-003**: Player decisions complete within 2ms per tick at 60 Hz
 - **SC-004**: Manager decisions occur at appropriate match moments (goals, red cards, stamina thresholds)
 - **SC-005**: Replay of recorded matches reproduces identical sequences of events
 - **SC-006**: System handles full match simulation in reasonable real time

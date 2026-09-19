@@ -10,6 +10,7 @@ sim-physics = { path = "../sim-physics" }
 sim-rules = { path = "../sim-rules" }
 sim-referee = { path = "../sim-referee" }
 bevy_ecs.workspace = true
+serde.workspace = true
 
 [lints]
 workspace = true

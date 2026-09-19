@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Card, CardColor, Player, Referee, StoppageEvent};
+use sim_components::{Player, Referee};
 
 pub fn advantage_decision_system(mut query: Query<&mut Referee>) {
     // Placeholder for advantage decision

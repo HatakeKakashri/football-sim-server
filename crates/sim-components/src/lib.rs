@@ -1,10 +1,11 @@
 use bevy_ecs::prelude::*;
 use sim_math::Vec2;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TeamId(pub u8);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Role {
     Goalkeeper,
     CenterBack,
@@ -16,14 +17,14 @@ pub enum Role {
     Striker,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mentality {
     Attack,
     Balance,
     Defend,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Formation {
     FourFourTwo,
     FourThreeThree,
@@ -32,7 +33,7 @@ pub enum Formation {
     FiveThreeTwo,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MatchState {
     PreMatch,
     Kickoff,
@@ -43,7 +44,7 @@ pub enum MatchState {
     PenaltyShootout,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BallState {
     Free,
     Possessed,
@@ -63,6 +64,30 @@ pub enum Intent {
     HoldPosition,
     SupportAttack,
     TrackBack,
+}
+
+#[derive(Debug, Clone)]
+pub struct PerceptionSnapshot {
+    pub nearby_teammates: smallvec::SmallVec<[NearbyEntity; 8]>,
+    pub nearby_opponents: smallvec::SmallVec<[NearbyEntity; 8]>,
+    pub ball_position: Vec2,
+    pub goal_position: Vec2,
+    pub pitch_bounds: PitchBounds,
+}
+
+#[derive(Debug, Clone)]
+pub struct NearbyEntity {
+    pub entity: Entity,
+    pub distance: f32,
+    pub relative_position: Vec2,
+}
+
+#[derive(Debug, Clone)]
+pub struct PitchBounds {
+    pub distance_to_left: f32,
+    pub distance_to_right: f32,
+    pub distance_to_top: f32,
+    pub distance_to_bottom: f32,
 }
 
 #[derive(Component, Debug, Clone)]
@@ -89,7 +114,7 @@ pub struct RoleComponent(pub Role);
 #[derive(Component, Debug, Clone)]
 pub struct MatchStateComponent(pub MatchState);
 
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct MatchClock {
     pub elapsed: f32,
     pub half: u8,
@@ -115,6 +140,7 @@ pub struct Player {
     pub role: Role,
     pub skill: f32,
     pub intent: Option<Intent>,
+    pub perception: Option<PerceptionSnapshot>,
 }
 
 #[derive(Component, Debug, Clone)]
@@ -140,8 +166,20 @@ pub struct Match {
 
 #[derive(Component, Debug, Clone)]
 pub struct Manager {
+    pub decision_table: WeightedDecisionTable,
     pub last_decision_tick: u64,
     pub decision_cooldown: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WeightedDecisionTable {
+    pub factors: Vec<DecisionFactor>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DecisionFactor {
+    pub name: String,
+    pub weight: f32,
 }
 
 #[derive(Component, Debug, Clone)]
@@ -167,6 +205,23 @@ pub struct Card {
 pub enum CardColor {
     Yellow,
     Red,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ManagerCommand {
+    ChangeFormation(Formation),
+    Substitute { out: u64, substitute: u64 },
+    ChangeMentality(Mentality),
+    SetTactic(Tactic),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Tactic {
+    HighPress,
+    CounterAttack,
+    Possession,
+    LongBall,
+    WingPlay,
 }
 
 #[cfg(test)]

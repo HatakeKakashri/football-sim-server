@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 sim-math = { path = "../sim-math" }
+sim-components = { path = "../sim-components" }
 
 [lints]
 workspace = true

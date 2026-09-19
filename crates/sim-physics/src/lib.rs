@@ -1,6 +1,6 @@
 use bevy_ecs::prelude::*;
 use sim_components::{Ball, Position, Velocity};
-use sim_math::{PitchDimensions, Vec2};
+use sim_math::PitchDimensions;
 
 pub const MAX_PLAYER_SPEED: f32 = 10.0;
 pub const MAX_BALL_SPEED: f32 = 30.0;

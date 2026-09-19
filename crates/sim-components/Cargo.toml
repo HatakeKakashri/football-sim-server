@@ -6,6 +6,8 @@ edition.workspace = true
 [dependencies]
 sim-math = { path = "../sim-math" }
 bevy_ecs.workspace = true
+smallvec.workspace = true
+serde.workspace = true
 
 [lints]
 workspace = true

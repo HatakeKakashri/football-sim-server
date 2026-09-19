@@ -88,15 +88,15 @@
 
 ### Implementation for User Story 2
 
-- [ ] T036 [P] [US2] Implement ManagerCommand enum in sim-server (ChangeFormation, Substitute, ChangeMentality, SetTactic)
-- [ ] T037 [P] [US2] Implement CommandError enum in sim-server per contracts/simulation-api.md (InvalidForState, NoSubstitutesRemaining, etc.)
-- [ ] T038 [US2] Implement command validation logic in sim-server (validate against match state and available resources)
-- [ ] T039 [US2] Implement command queue in sim-server with tick-boundary application
-- [ ] T040 [US2] Implement Simulation::apply_command() in sim-core per contracts/simulation-api.md
-- [ ] T041 [US2] Implement MatchSnapshot struct in sim-server per contracts/client-protocol.md
-- [ ] T042 [US2] Implement Simulation::get_state() returning read-only snapshot in sim-core
-- [ ] T043 [US2] Add validation test: invalid command rejected, valid command applied at next tick
-- [ ] T044 [US2] Add state query test: all state comes from server simulation
+- [X] T036 [P] [US2] Implement ManagerCommand enum in sim-server (ChangeFormation, Substitute, ChangeMentality, SetTactic)
+- [X] T037 [P] [US2] Implement CommandError enum in sim-server per contracts/simulation-api.md (InvalidForState, NoSubstitutesRemaining, etc.)
+- [X] T038 [US2] Implement command validation logic in sim-server (validate against match state and available resources)
+- [X] T039 [US2] Implement command queue in sim-server with tick-boundary application
+- [X] T040 [US2] Implement Simulation::apply_command() in sim-core per contracts/simulation-api.md
+- [X] T041 [US2] Implement MatchSnapshot struct in sim-server per contracts/client-protocol.md
+- [X] T042 [US2] Implement Simulation::get_state() returning read-only snapshot in sim-core
+- [X] T043 [US2] Add validation test: invalid command rejected, valid command applied at next tick
+- [X] T044 [US2] Add state query test: all state comes from server simulation
 
 **Checkpoint**: Server-authoritative control complete - commands validated and applied correctly
 
@@ -110,17 +110,17 @@
 
 ### Implementation for User Story 3
 
-- [ ] T045 [P] [US3] Implement PerceptionSnapshot in sim-ai-core per data-model.md (nearby_teammates, nearby_opponents, ball_position, goal_position, pitch_bounds)
-- [ ] T046 [P] [US3] Implement Intent enum in sim-components per data-model.md (MoveTo, PassTo, Shoot, Tackle, Intercept, Press, HoldPosition, SupportAttack, TrackBack)
-- [ ] T047 [P] [US3] Implement UtilityBrain component in sim-ai-player (actions, hysteresis, evaluation interval)
-- [ ] T048 [US3] Implement perception/sensing system in sim-ai-player (spatial hash, nearby entity detection)
-- [ ] T049 [US3] Implement player consideration scoring in sim-ai-player (stamina factor, tactical importance, passing options)
-- [ ] T050 [US3] Implement geometric-mean aggregator in sim-ai-core for multi-factor trade-offs
-- [ ] T051 [US3] Implement player decision system in sim-ai-player (perception → intent pipeline)
-- [ ] T052 [US3] Implement player action execution in sim-physics (intent → steering forces)
-- [ ] T053 [US3] Add stamina-based decision test: low stamina player conserves energy appropriately
-- [ ] T054 [US3] Add passing option test: player considers teammates in better positions
-- [ ] T055 [US3] Add defender tackle test: defender attempts tackle when attacker shoots
+- [X] T045 [P] [US3] Implement PerceptionSnapshot in sim-ai-core per data-model.md (nearby_teammates, nearby_opponents, ball_position, goal_position, pitch_bounds)
+- [X] T046 [P] [US3] Implement Intent enum in sim-components per data-model.md (MoveTo, PassTo, Shoot, Tackle, Intercept, Press, HoldPosition, SupportAttack, TrackBack)
+- [X] T047 [P] [US3] Implement UtilityBrain component in sim-ai-player (actions, hysteresis, evaluation interval)
+- [X] T048 [US3] Implement perception/sensing system in sim-ai-player (spatial hash, nearby entity detection)
+- [X] T049 [US3] Implement player consideration scoring in sim-ai-player (stamina factor, tactical importance, passing options)
+- [X] T050 [US3] Implement geometric-mean aggregator in sim-ai-core for multi-factor trade-offs
+- [X] T051 [US3] Implement player decision system in sim-ai-player (perception → intent pipeline)
+- [X] T052 [US3] Implement player action execution in sim-physics (intent → steering forces)
+- [X] T053 [US3] Add stamina-based decision test: low stamina player conserves energy appropriately
+- [X] T054 [US3] Add passing option test: player considers teammates in better positions
+- [X] T055 [US3] Add defender tackle test: defender attempts tackle when attacker shoots
 
 **Checkpoint**: Player AI complete - intelligent decisions based on match context
 
@@ -134,16 +134,16 @@
 
 ### Implementation for User Story 4
 
-- [ ] T056 [P] [US4] Implement WeightedDecisionTable in sim-ai-manager per data-model.md (factor weights for decisions)
-- [ ] T057 [P] [US4] Implement Manager component in sim-components per data-model.md (decision_table, last_decision_tick, decision_cooldown)
-- [ ] T058 [US4] Implement manager decision factors in sim-ai-manager (score difference, time remaining, stamina levels, momentum, tactical matchup)
-- [ ] T059 [US4] Implement manager evaluation system in sim-ai-manager (weighted scoring with momentum)
-- [ ] T060 [US4] Implement formation change logic in sim-ai-manager (validate against available players)
-- [ ] T061 [US4] Implement substitution logic in sim-ai-manager (low stamina detection, substitute selection)
-- [ ] T062 [US4] Implement mentality shift logic in sim-ai-manager (score-based, time-based)
-- [ ] T063 [US4] Add manager decision test: team losing by 2 goals considers aggressive tactics
-- [ ] T064 [US4] Add substitution test: low stamina player substituted when window opens
-- [ ] T065 [US4] Add mentality test: team leading late shifts to defensive mentality
+- [X] T056 [P] [US4] Implement WeightedDecisionTable in sim-ai-manager per data-model.md (factor weights for decisions)
+- [X] T057 [P] [US4] Implement Manager component in sim-components per data-model.md (decision_table, last_decision_tick, decision_cooldown)
+- [X] T058 [US4] Implement manager decision factors in sim-ai-manager (score difference, time remaining, stamina levels, momentum, tactical matchup)
+- [X] T059 [US4] Implement manager evaluation system in sim-ai-manager (weighted scoring with momentum)
+- [X] T060 [US4] Implement formation change logic in sim-ai-manager (validate against available players)
+- [X] T061 [US4] Implement substitution logic in sim-ai-manager (low stamina detection, substitute selection)
+- [X] T062 [US4] Implement mentality shift logic in sim-ai-manager (score-based, time-based)
+- [X] T063 [US4] Add manager decision test: team losing by 2 goals considers aggressive tactics
+- [X] T064 [US4] Add substitution test: low stamina player substituted when window opens
+- [X] T065 [US4] Add mentality test: team leading late shifts to defensive mentality
 
 **Checkpoint**: Manager AI complete - strategic decisions adapt to match circumstances
 
@@ -157,14 +157,14 @@
 
 ### Implementation for User Story 5
 
-- [ ] T066 [P] [US5] Implement TimedCommand struct in sim-replay (tick, command)
-- [ ] T067 [P] [US5] Implement ReplaySession struct in sim-replay (seed, commands, current_tick, state_hash_history)
-- [ ] T068 [US5] Implement Simulation::replay() in sim-core per contracts/simulation-api.md
-- [ ] T069 [US5] Implement event recording in sim-replay (goal, foul, card, substitution events)
-- [ ] T070 [US5] Implement divergence detection in sim-replay (hash mismatch logging)
-- [ ] T071 [US5] Implement debug logging for decision-making processes in sim-ai-core
-- [ ] T072 [US5] Add replay determinism test: same seed produces identical event sequence
-- [ ] T073 [US5] Add divergence detection test: modified input produces logged divergence point
+- [X] T066 [P] [US5] Implement TimedCommand struct in sim-replay (tick, command)
+- [X] T067 [P] [US5] Implement ReplaySession struct in sim-replay (seed, commands, current_tick, state_hash_history)
+- [X] T068 [US5] Implement Simulation::replay() in sim-core per contracts/simulation-api.md
+- [X] T069 [US5] Implement event recording in sim-replay (goal, foul, card, substitution events)
+- [X] T070 [US5] Implement divergence detection in sim-replay (hash mismatch logging)
+- [X] T071 [US5] Implement debug logging for decision-making processes in sim-ai-core
+- [X] T072 [US5] Add replay determinism test: same seed produces identical event sequence
+- [X] T073 [US5] Add divergence detection test: modified input produces logged divergence point
 
 **Checkpoint**: Replay capability complete - deterministic debugging and regression testing
 
@@ -176,16 +176,16 @@
 
 ### Implementation
 
-- [ ] T074 [P] Implement offside detection in sim-rules (Law 11)
-- [ ] T075 [P] Implement out-of-bounds detection in sim-rules (Law 9)
-- [ ] T076 [P] Implement goal detection in sim-rules (Law 10)
-- [ ] T077 [P] Implement foul detection and card system in sim-rules (Law 12)
-- [ ] T078 Implement referee advantage decision in sim-referee
-- [ ] T079 Implement added time calculation in sim-referee (Law 7)
-- [ ] T080 Implement match duration enforcement in sim-referee (90 minutes + added time)
-- [ ] T081 Implement minimum player count enforcement in sim-referee (Law 3: minimum 7 players)
-- [ ] T082 [P] Implement possession resolution in sim-rules (first contact wins; skill difference > 0.1 wins contested)
-- [ ] T083 Integrate referee system into sim-core schedule (after physics, before next tick)
+- [X] T074 [P] Implement offside detection in sim-rules (Law 11)
+- [X] T075 [P] Implement out-of-bounds detection in sim-rules (Law 9)
+- [X] T076 [P] Implement goal detection in sim-rules (Law 10)
+- [X] T077 [P] Implement foul detection and card system in sim-rules (Law 12)
+- [X] T078 Implement referee advantage decision in sim-referee
+- [X] T079 Implement added time calculation in sim-referee (Law 7)
+- [X] T080 Implement match duration enforcement in sim-referee (90 minutes + added time)
+- [X] T081 Implement minimum player count enforcement in sim-referee (Law 3: minimum 7 players)
+- [X] T082 [P] Implement possession resolution in sim-rules (first contact wins; skill difference > 0.1 wins contested)
+- [X] T083 Integrate referee system into sim-core schedule (after physics, before next tick)
 
 ---
 
@@ -195,13 +195,13 @@
 
 ### Implementation
 
-- [ ] T084 [P] Implement MatchSnapshot serialization in sim-replay per contracts/state-snapshot.md
-- [ ] T085 [P] Implement BallSnapshot serialization in sim-replay per contracts/state-snapshot.md
-- [ ] T086 [P] Implement PlayerSnapshot serialization in sim-replay per contracts/state-snapshot.md
-- [ ] T087 Implement snapshot saving at configurable intervals (default: 100 ticks) in sim-replay
-- [ ] T088 Implement snapshot loading and state restoration in sim-replay
-- [ ] T089 Implement state hash verification on recovery in sim-replay
-- [ ] T090 Add recovery test: restore from snapshot within 5 seconds of last saved state
+- [X] T084 [P] Implement MatchSnapshot serialization in sim-replay per contracts/state-snapshot.md
+- [X] T085 [P] Implement BallSnapshot serialization in sim-replay per contracts/state-snapshot.md
+- [X] T086 [P] Implement PlayerSnapshot serialization in sim-replay per contracts/state-snapshot.md
+- [X] T087 Implement snapshot saving at configurable intervals (default: 100 ticks) in sim-replay
+- [X] T088 Implement snapshot loading and state restoration in sim-replay
+- [X] T089 Implement state hash verification on recovery in sim-replay
+- [X] T090 Add recovery test: restore from snapshot within 5 seconds of last saved state
 
 ---
 
@@ -211,13 +211,13 @@
 
 ### Implementation
 
-- [ ] T091 Implement CLI binary in sim-server with simulate, replay, recover subcommands
-- [ ] T092 Implement simulate subcommand (seed, ticks, full-match, output options)
-- [ ] T093 Implement replay subcommand (seed, commands file, output options)
-- [ ] T094 Implement recover subcommand (match-id, snapshot file)
-- [ ] T095 Implement benchmark subcommand (seed, ticks, duration measurement)
-- [ ] T096 Add end-to-end match test: full 90-minute simulation with valid lifecycle
-- [ ] T097 Run quickstart.md validation scenarios
+- [X] T091 Implement CLI binary in sim-server with simulate, replay, recover subcommands
+- [X] T092 Implement simulate subcommand (seed, ticks, full-match, output options)
+- [X] T093 Implement replay subcommand (seed, commands file, output options)
+- [X] T094 Implement recover subcommand (match-id, snapshot file)
+- [X] T095 Implement benchmark subcommand (seed, ticks, duration measurement)
+- [X] T096 Add end-to-end match test: full 90-minute simulation with valid lifecycle
+- [X] T097 Run quickstart.md validation scenarios
 
 ---
 
@@ -225,13 +225,13 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T098 [P] Add comprehensive documentation for public API types
-- [ ] T099 [P] Add error handling for all public functions
-- [ ] T100 [P] Add performance benchmarks for tick execution
-- [ ] T101 Code cleanup and clippy warnings resolution
-- [ ] T102 [P] Add determinism lint/test for RNG-consuming queries (stable EntityId sorting)
-- [ ] T103 Run full test suite and verify all success criteria
-- [ ] T104 [P] Add same-tick pipeline isolation validation test: verify no system observes uncommitted writes from another system in the same pipeline stage (per FR-005, Constitution Principle III)
+- [X] T098 [P] Add comprehensive documentation for public API types
+- [X] T099 [P] Add error handling for all public functions
+- [X] T100 [P] Add performance benchmarks for tick execution
+- [X] T101 Code cleanup and clippy warnings resolution
+- [X] T102 [P] Add determinism lint/test for RNG-consuming queries (stable EntityId sorting)
+- [X] T103 Run full test suite and verify all success criteria
+- [X] T104 [P] Add same-tick pipeline isolation validation test: verify no system observes uncommitted writes from another system in the same pipeline stage (per FR-005, Constitution Principle III)
 
 ---
 

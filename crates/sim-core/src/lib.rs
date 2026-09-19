@@ -1,6 +1,7 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Match, MatchClock, MatchState};
-use sim_math::{DeterministicRng, Vec2};
+use sim_components::{Match, MatchState, ManagerCommand};
+use sim_math::DeterministicRng;
+use serde::{Serialize, Deserialize};
 
 pub const FIXED_TIMESTEP: f32 = 1.0 / 60.0;
 pub const MAX_ACCUMULATOR: f32 = 0.25;
@@ -115,6 +116,7 @@ impl Simulation {
                 role: sim_components::Role::CentralMidfielder,
                 skill: 0.7,
                 intent: None,
+                perception: None,
             });
             self.world.entity_mut(player_entity).insert(Position(Vec2::new(10.0 + (i as f32 * 8.0), 34.0)));
             self.world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
@@ -145,6 +147,7 @@ impl Simulation {
                 role: sim_components::Role::CentralMidfielder,
                 skill: 0.7,
                 intent: None,
+                perception: None,
             });
             self.world.entity_mut(player_entity).insert(Position(Vec2::new(95.0 - (i as f32 * 8.0), 34.0)));
             self.world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
@@ -179,6 +182,178 @@ impl Simulation {
         
         match_entity
     }
+
+    pub fn apply_command(&mut self, match_id: Entity, command: ManagerCommand) -> Result<(), String> {
+        // Get match component
+        let match_component = self.world.entity(match_id).get::<Match>().ok_or("Match entity not found")?;
+        
+        // Validate command based on current state
+        match &command {
+            ManagerCommand::ChangeFormation(formation) => {
+                // Validate formation change is allowed in current state
+                if match_component.state != MatchState::InPlay && 
+                   match_component.state != MatchState::Stoppage {
+                    return Err(format!("Invalid state for formation change: {:?}", match_component.state));
+                }
+            }
+            ManagerCommand::Substitute { out, substitute } => {
+                // Validate substitution is allowed in current state
+                if match_component.state != MatchState::Stoppage &&
+                   match_component.state != MatchState::HalfTime {
+                    return Err(format!("Invalid state for substitution: {:?}", match_component.state));
+                }
+            }
+            ManagerCommand::ChangeMentality(mentality) => {
+                // Validate mentality change is allowed in current state
+                if match_component.state != MatchState::InPlay &&
+                   match_component.state != MatchState::Stoppage {
+                    return Err(format!("Invalid state for mentality change: {:?}", match_component.state));
+                }
+            }
+            ManagerCommand::SetTactic(tactic) => {
+                // Validate tactic change is allowed in current state
+                if match_component.state != MatchState::InPlay &&
+                   match_component.state != MatchState::Stoppage {
+                    return Err(format!("Invalid state for tactic change: {:?}", match_component.state));
+                }
+            }
+        }
+        
+        // Apply command
+        match command {
+            ManagerCommand::ChangeFormation(formation) => {
+                // Update team formation
+                let home_team = match_component.home_team;
+                if let Some(mut team) = self.world.entity_mut(home_team).get_mut::<sim_components::Team>() {
+                    team.formation = formation;
+                }
+            }
+            ManagerCommand::Substitute { out, substitute } => {
+                // Implement substitution logic
+                // For now, just log it
+                println!("Substitution: {:?} -> {:?}", out, substitute);
+            }
+            ManagerCommand::ChangeMentality(mentality) => {
+                // Update team mentality
+                let home_team = match_component.home_team;
+                if let Some(mut team) = self.world.entity_mut(home_team).get_mut::<sim_components::Team>() {
+                    team.mentality = mentality;
+                }
+            }
+            ManagerCommand::SetTactic(tactic) => {
+                // Store tactic somewhere (for now, just log)
+                println!("Tactic set: {:?}", tactic);
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn get_state(&self, match_id: Entity) -> Result<MatchSnapshot, String> {
+        // Get match component
+        let match_component = self.world.entity(match_id).get::<Match>().ok_or("Match entity not found")?;
+        
+        // Get ball entity
+        let mut ball_view = BallView {
+            position: [0.0, 0.0],
+            velocity: [0.0, 0.0],
+            spin: 0.0,
+            state: sim_components::BallState::Free,
+            possessor: None,
+        };
+        
+        // Find ball entity
+        for entity in self.world.iter_entities() {
+            if let Some(ball) = entity.get::<sim_components::Ball>() {
+                ball_view = BallView {
+                    position: [ball.position.x, ball.position.y],
+                    velocity: [ball.velocity.x, ball.velocity.y],
+                    spin: ball.spin,
+                    state: ball.state,
+                    possessor: ball.possessor.map(|e| e.to_bits()),
+                };
+                break;
+            }
+        }
+        
+        // Get player views
+        let mut player_views = Vec::new();
+        for entity in self.world.iter_entities() {
+            if let Some(player) = entity.get::<sim_components::Player>() {
+                player_views.push(PlayerView {
+                    entity_id: entity.id().to_bits(),
+                    team_id: player.team_id,
+                    position: [player.position.x, player.position.y],
+                    velocity: [player.velocity.x, player.velocity.y],
+                    stamina: player.stamina,
+                    role: player.role,
+                    skill: player.skill,
+                });
+            }
+        }
+        
+        // Get clock view
+        let clock_view = ClockView {
+            elapsed: match_component.clock.elapsed,
+            half: match_component.clock.half,
+            added_time: match_component.clock.added_time,
+            is_running: match_component.clock.is_running,
+        };
+        
+        Ok(MatchSnapshot {
+            tick: self.tick,
+            match_state: MatchStateView { state: match_component.state },
+            ball: ball_view,
+            players: player_views,
+            score: match_component.score,
+            clock: clock_view,
+            state_hash: self.get_state_hash(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchSnapshot {
+    pub tick: u64,
+    pub match_state: MatchStateView,
+    pub ball: BallView,
+    pub players: Vec<PlayerView>,
+    pub score: (u8, u8),
+    pub clock: ClockView,
+    pub state_hash: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchStateView {
+    pub state: MatchState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BallView {
+    pub position: [f32; 2],
+    pub velocity: [f32; 2],
+    pub spin: f32,
+    pub state: sim_components::BallState,
+    pub possessor: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayerView {
+    pub entity_id: u64,
+    pub team_id: sim_components::TeamId,
+    pub position: [f32; 2],
+    pub velocity: [f32; 2],
+    pub stamina: f32,
+    pub role: sim_components::Role,
+    pub skill: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClockView {
+    pub elapsed: f32,
+    pub half: u8,
+    pub added_time: f32,
+    pub is_running: bool,
 }
 
 pub struct WorldWrapper {
@@ -214,5 +389,47 @@ mod tests {
         let sim = Simulation::new(12345);
         assert_eq!(sim.tick, 0);
         assert_eq!(sim.accumulator, 0.0);
+    }
+
+    #[test]
+    fn test_per_tick_determinism() {
+        let seed = 42u64;
+        let mut sim1 = Simulation::new(seed);
+        let mut sim2 = Simulation::new(seed);
+
+        sim1.create_match(seed);
+        sim2.create_match(seed);
+
+        let delta = 1.0 / 60.0;
+
+        for _ in 0..1000 {
+            sim1.tick(delta);
+            sim2.tick(delta);
+
+            assert_eq!(
+                sim1.get_state_hash(),
+                sim2.get_state_hash(),
+                "Determinism violated at tick {}",
+                sim1.tick
+            );
+        }
+    }
+
+    #[test]
+    fn test_pipeline_isolation_single_tick() {
+        let mut sim = Simulation::new(42);
+        let match_entity = sim.create_match(42);
+
+        sim.tick(1.0 / 60.0);
+
+        let snapshot = sim.get_state(match_entity).expect("get_state failed");
+
+        assert_ne!(snapshot.state_hash, 0, "State hash is zero — systems did not run");
+        assert_eq!(snapshot.players.len(), 22, "Expected 22 players");
+
+        let bx = snapshot.ball.position[0];
+        let by = snapshot.ball.position[1];
+        assert!(bx >= 0.0 && bx <= 105.0, "Ball x {} out of pitch", bx);
+        assert!(by >= 0.0 && by <= 68.0, "Ball y {} out of pitch", by);
     }
 }

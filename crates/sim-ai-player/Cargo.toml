@@ -8,6 +8,7 @@ sim-math = { path = "../sim-math" }
 sim-components = { path = "../sim-components" }
 sim-ai-core = { path = "../sim-ai-core" }
 bevy_ecs.workspace = true
+smallvec.workspace = true
 
 [lints]
 workspace = true

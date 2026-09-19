@@ -18,20 +18,20 @@
 
 **Purpose**: Project initialization and workspace structure
 
-- [ ] T001 Convert single crate to 11-crate Cargo workspace with crates/ directory structure
-- [ ] T002 Create sim-math crate with Vec2 type, basic operations, and Mulberry32 PRNG implementation
-- [ ] T003 Create sim-components crate with Position, Velocity, TeamId, Role, Stamina, BallState, Skill components
-- [ ] T004 [P] Create sim-physics crate with basic vector math and integration stubs
-- [ ] T005 [P] Create sim-ai-core crate with Consideration, ResponseCurve, geometric-mean aggregator types
-- [ ] T006 [P] Create sim-ai-player crate with player consideration and action stubs
-- [ ] T007 [P] Create sim-ai-manager crate with weighted decision table type
-- [ ] T008 [P] Create sim-rules crate with rule engine stubs
-- [ ] T009 [P] Create sim-referee crate with referee type stubs
-- [ ] T010 Create sim-core crate with World wrapper, Schedule, and explicit system ordering
-- [ ] T011 [P] Create sim-replay crate with replay harness and state-hash stubs
-- [ ] T012 Create sim-server crate with server-authoritative loop stub
-- [ ] T013 [P] Configure workspace-level Cargo.toml with shared dependencies (bevy_ecs, smallvec)
-- [ ] T014 [P] Add workspace-level linting configuration (clippy, rustfmt)
+- [X] T001 Convert single crate to 11-crate Cargo workspace with crates/ directory structure
+- [X] T002 Create sim-math crate with Vec2 type, basic operations, and Mulberry32 PRNG implementation
+- [X] T003 Create sim-components crate with Position, Velocity, TeamId, Role, Stamina, BallState, Skill components
+- [X] T004 [P] Create sim-physics crate with basic vector math and integration stubs
+- [X] T005 [P] Create sim-ai-core crate with Consideration, ResponseCurve, geometric-mean aggregator types
+- [X] T006 [P] Create sim-ai-player crate with player consideration and action stubs
+- [X] T007 [P] Create sim-ai-manager crate with weighted decision table type
+- [X] T008 [P] Create sim-rules crate with rule engine stubs
+- [X] T009 [P] Create sim-referee crate with referee type stubs
+- [X] T010 Create sim-core crate with World wrapper, Schedule, and explicit system ordering
+- [X] T011 [P] Create sim-replay crate with replay harness and state-hash stubs
+- [X] T012 Create sim-server crate with server-authoritative loop stub
+- [X] T013 [P] Configure workspace-level Cargo.toml with shared dependencies (bevy_ecs, smallvec)
+- [X] T014 [P] Add workspace-level linting configuration (clippy, rustfmt)
 
 ---
 
@@ -41,13 +41,13 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T015 Implement DeterministicRng in sim-math with clone_for_entity() method per data-model.md
-- [ ] T016 Implement fixed-timestep accumulator in sim-core with 60 Hz (1/60 second) default step
-- [ ] T017 Implement Schedule in sim-core with explicit system chaining (perception → decision → intent → execution)
-- [ ] T018 Implement PitchDimensions in sim-math with standard field measurements (105m x 68m)
-- [ ] T019 Create base MatchState enum in sim-components per data-model.md (PreMatch, Kickoff, InPlay, Stoppage, HalfTime, FullTime, PenaltyShootout)
-- [ ] T020 Create base BallState enum in sim-components per data-model.md (Free, Possessed, InFlight, OutOfPlay, Dead)
-- [ ] T021 Implement state hash computation in sim-core for determinism verification (include positions, velocities, stamina, ball state, score, clock; exclude timing)
+- [X] T015 Implement DeterministicRng in sim-math with clone_for_entity() method per data-model.md
+- [X] T016 Implement fixed-timestep accumulator in sim-core with 60 Hz (1/60 second) default step
+- [X] T017 Implement Schedule in sim-core with explicit system chaining (perception → decision → intent → execution)
+- [X] T018 Implement PitchDimensions in sim-math with standard field measurements (105m x 68m)
+- [X] T019 Create base MatchState enum in sim-components per data-model.md (PreMatch, Kickoff, InPlay, Stoppage, HalfTime, FullTime, PenaltyShootout)
+- [X] T020 Create base BallState enum in sim-components per data-model.md (Free, Possessed, InFlight, OutOfPlay, Dead)
+- [X] T021 Implement state hash computation in sim-core for determinism verification (include positions, velocities, stamina, ball state, score, clock; exclude timing)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -61,20 +61,20 @@
 
 ### Implementation for User Story 1
 
-- [ ] T022 [P] [US1] Implement Ball component with position, velocity, spin, state, possessor fields per data-model.md
-- [ ] T023 [P] [US1] Implement Player component with team_id, position, velocity, stamina, role, skill, perception, intent, active_action per data-model.md
-- [ ] T024 [P] [US1] Implement Team component with id, name, formation, mentality, manager, players, substitutes, tactics per data-model.md
-- [ ] T025 [P] [US1] Implement Match component with id, home_team, away_team, score, clock, state, seed per data-model.md
-- [ ] T026 [P] [US1] Implement MatchClock component with elapsed, half, added_time, is_running per data-model.md
-- [ ] T027 [US1] Implement basic ball physics system in sim-physics (velocity integration, boundary clamping)
-- [ ] T028 [US1] Implement player movement system in sim-physics (velocity integration, sprint speed clamp at ~10 m/s)
-- [ ] T029 [US1] Create Simulation struct in sim-core with world, schedule, rng, tick, accumulator fields
-- [ ] T030 [US1] Implement Simulation::new() with seed initialization in sim-core
-- [ ] T031 [US1] Implement Simulation::tick() with deterministic fixed-timestep update in sim-core
-- [ ] T032 [US1] Implement Simulation::get_state_hash() for determinism verification in sim-core
-- [ ] T033 [US1] Implement Simulation::create_match() with default team setup in sim-server
-- [ ] T034 [US1] Add determinism verification test: run 1000 ticks twice with same seed, verify hashes match
-- [ ] T035 [US1] Add per-tick state hash logging for divergence detection
+- [X] T022 [P] [US1] Implement Ball component with position, velocity, spin, state, possessor fields per data-model.md
+- [X] T023 [P] [US1] Implement Player component with team_id, position, velocity, stamina, role, skill, perception, intent, active_action per data-model.md
+- [X] T024 [P] [US1] Implement Team component with id, name, formation, mentality, manager, players, substitutes, tactics per data-model.md
+- [X] T025 [P] [US1] Implement Match component with id, home_team, away_team, score, clock, state, seed per data-model.md
+- [X] T026 [P] [US1] Implement MatchClock component with elapsed, half, added_time, is_running per data-model.md
+- [X] T027 [US1] Implement basic ball physics system in sim-physics (velocity integration, boundary clamping)
+- [X] T028 [US1] Implement player movement system in sim-physics (velocity integration, sprint speed clamp at ~10 m/s)
+- [X] T029 [US1] Create Simulation struct in sim-core with world, schedule, rng, tick, accumulator fields
+- [X] T030 [US1] Implement Simulation::new() with seed initialization in sim-core
+- [X] T031 [US1] Implement Simulation::tick() with deterministic fixed-timestep update in sim-core
+- [X] T032 [US1] Implement Simulation::get_state_hash() for determinism verification in sim-core
+- [X] T033 [US1] Implement Simulation::create_match() with default team setup in sim-server
+- [X] T034 [US1] Add determinism verification test: run 1000 ticks twice with same seed, verify hashes match
+- [X] T035 [US1] Add per-tick state hash logging for divergence detection
 
 **Checkpoint**: Deterministic simulation substrate proven - can run identical matches with same seed
 

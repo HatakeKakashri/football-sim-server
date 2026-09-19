@@ -1,0 +1,12 @@
+[package]
+name = "sim-rules"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sim-math = { path = "../sim-math" }
+sim-components = { path = "../sim-components" }
+bevy_ecs.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "sim-ai-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sim-math = { path = "../sim-math" }
+
+[lints]
+workspace = true

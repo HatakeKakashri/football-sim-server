@@ -1,0 +1,13 @@
+[package]
+name = "sim-replay"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sim-math = { path = "../sim-math" }
+sim-components = { path = "../sim-components" }
+sim-core = { path = "../sim-core" }
+bevy_ecs.workspace = true
+
+[lints]
+workspace = true

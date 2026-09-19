@@ -1,0 +1,15 @@
+[package]
+name = "sim-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sim-math = { path = "../sim-math" }
+sim-components = { path = "../sim-components" }
+sim-physics = { path = "../sim-physics" }
+sim-rules = { path = "../sim-rules" }
+sim-referee = { path = "../sim-referee" }
+bevy_ecs.workspace = true
+
+[lints]
+workspace = true

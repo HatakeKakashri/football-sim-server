@@ -1,6 +1,31 @@
-[package]
-name = "football-sim-server"
+[workspace]
+resolver = "2"
+members = [
+    "crates/sim-math",
+    "crates/sim-components",
+    "crates/sim-physics",
+    "crates/sim-ai-core",
+    "crates/sim-ai-player",
+    "crates/sim-ai-manager",
+    "crates/sim-rules",
+    "crates/sim-referee",
+    "crates/sim-core",
+    "crates/sim-replay",
+    "crates/sim-server",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace.dependencies]
+bevy_ecs = { version = "0.14", default-features = false }
+smallvec = "1.13"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

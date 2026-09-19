@@ -1,0 +1,13 @@
+[package]
+name = "sim-referee"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sim-math = { path = "../sim-math" }
+sim-components = { path = "../sim-components" }
+sim-rules = { path = "../sim-rules" }
+bevy_ecs.workspace = true
+
+[lints]
+workspace = true

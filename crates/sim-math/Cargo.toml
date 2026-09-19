@@ -1,0 +1,10 @@
+[package]
+name = "sim-math"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy_ecs.workspace = true
+
+[lints]
+workspace = true

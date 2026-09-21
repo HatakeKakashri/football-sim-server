@@ -39,6 +39,7 @@ Build a server-authoritative football match simulation engine using Rust with be
 | III. Strict Pipeline Separation | ✅ PASS | 5-stage pipeline with explicit ordering |
 | IV. Purpose-Driven AI | ✅ PASS | Utility AI only for multi-factor trade-offs; physics/rules for the rest |
 | V. Determinism Discipline | ✅ PASS | PRNG: Mulberry32; stable EntityId sorting for RNG-consuming queries |
+| VI. Smallest deterministic slice first | ✅ PASS | AI is added only after the deterministic substrate is proven reproducible (authoritative spec §1 principle 6, §12) |
 
 **Technology Stack Compliance**:
 - ✅ Rust edition 2024

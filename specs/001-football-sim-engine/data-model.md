@@ -50,7 +50,7 @@ Individual player with position, velocity, stamina, role, and decision-making ca
 | velocity | `Vec2` | Current velocity |
 | stamina | `f32` | 0.0 (exhausted) to 1.0 (full) |
 | role | `Role` | Positional role |
-| skill | `f32` | Overall skill rating 0.0-1.0 |
+| skill | `f32` | Overall skill rating 0.0-1.0 (v1 simplification added to support FR-018 / product resolution of authoritative Open item #17; may be replaced by per-consideration skill factors later) |
 | perception | `PerceptionSnapshot` | Local spatial perception |
 | intent | `Option<Intent>` | Current decision output |
 | active_action | `Option<ActiveAction>` | Currently executing action |
@@ -160,6 +160,32 @@ Seeded pseudo-random number generator for deterministic simulation.
 | goal_area | `Rect` | 6-yard box bounds |
 | center_circle | `Circle` | Center circle |
 
+### PitchControlGrid
+
+Coarse 2D grid over the pitch providing per-cell attacker/defender time-to-reach values and a sigmoid dominance score, used to evaluate which team controls each area of the pitch.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| width | `usize` | Grid column count (illustrative: 16) |
+| height | `usize` | Grid row count (illustrative: 12) |
+| cell_size | `Vec2` | World-space size of one cell, derived from pitch dimensions |
+| t_att | `Vec<f32>` | Per-cell attacker time-to-reach (flattened row-major) |
+| t_def | `Vec<f32>` | Per-cell defender time-to-reach (flattened row-major) |
+| p_control | `Vec<f32>` | Per-cell dominance score, recomputed from `t_att`/`t_def` (flattened row-major) |
+| k | `f32` | Sigmoid steepness for dominance score |
+| last_recompute_tick | `u64` | Tick of most recent recompute (decision-cadence, not physics tick) |
+| version | `u64` | Monotonic version, incremented each recompute |
+
+**Sigmoid dominance score** (per cell, where `x` is the cell index):
+
+```
+P_control(x) = 1 / (1 + exp(-k * (t_def(x) - t_att(x))))
+```
+
+**Recompute cadence**: on the decoupled decision cadence — never every 60 Hz physics tick. Both teams evaluate against the same freshly-computed grid in the same tick window; the grid is **never** team-staggered (no "team A evaluates on ticks 0/6/12, team B on ticks 3/9/15" pattern).
+
+**Grid resolution status**: Provisional — illustrative `16 × 12` cells; the exact cell count is subject to Phase-5(-equivalent) profiling.
+
 ### PerceptionSnapshot
 
 Local spatial perception built once per decision cycle.
@@ -183,7 +209,6 @@ enum MatchState {
     Stoppage,
     HalfTime,
     FullTime,
-    PenaltyShootout,
 }
 ```
 

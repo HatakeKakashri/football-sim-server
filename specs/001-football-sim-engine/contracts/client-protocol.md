@@ -2,6 +2,8 @@
 
 **Interface**: Server ↔ Client
 
+> **PROVISIONAL — pending Phase 7 design.** The authoritative specification (spec/football-sim-server-spec.md §8, §13 decision #20, §14) defers the network/wire protocol entirely until the core simulation (Phases 0–6) exists. Every message shape, field, transmission rule, and security choice in this document is a placeholder and may change without notice. Do not build clients against this document.
+
 ## Purpose
 Defines the message protocol between the server-authoritative simulation and rendering clients. Clients receive snapshots and send validated commands.
 
@@ -57,7 +59,6 @@ enum MatchEvent {
     Substitution(SubstitutionEvent),
     HalfTime { score: (u8, u8) },
     FullTime { score: (u8, u8) },
-    Penalty { team: TeamId },
 }
 ```
 

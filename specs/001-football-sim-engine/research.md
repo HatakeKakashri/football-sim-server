@@ -38,7 +38,7 @@
 
 **Decision**: Serialize simulation state snapshots at configurable intervals (default: every 100 ticks / ~1.67 seconds).
 
-**Rationale**: Spec requires recovery within 5 seconds of last saved state. At 60 Hz, 300 ticks = 5 seconds. Saving every 100 ticks provides ~3.3 second granularity, well within the 5-second requirement while keeping serialization overhead manageable.
+**Rationale**: Crash-recovery SLA (5 seconds) formally adopted by the product team as a product addition beyond the authoritative spec's replay-only scope. At 60 Hz, 300 ticks = 5 seconds. Saving every 100 ticks provides ~3.3 second granularity, well within the 5-second requirement while keeping serialization overhead manageable.
 
 **Alternatives Considered**:
 - Save every tick: High I/O overhead for minimal gain
@@ -58,7 +58,7 @@
 
 **Decision**: First contact wins; higher skill wins unless difference is within tolerance threshold.
 
-**Rationale**: Spec clarifies that possession is determined by first contact. For simultaneous claims, skill difference determines winner unless within tolerance (within ~0.1 skill points). This avoids deterministic ambiguity in edge cases.
+**Rationale**: Spec clarifies that possession is determined by first contact. For simultaneous claims, skill difference determines winner unless within tolerance (within ~0.1 skill points). This avoids deterministic ambiguity in edge cases. *(Product decision resolving authoritative-spec Open item #17 — 50/50 physical contention — made by the product team: deterministic geometry + skill scalar with 0.1 tolerance. Not derived from the authoritative specification.)*
 
 **Alternatives Considered**:
 - Pure first-contact: Too random; skill should matter
@@ -78,7 +78,7 @@
 
 **Decision**: 0.1 skill point tolerance (on a 0.0-1.0 scale).
 
-**Rationale**: Within 0.1 skill points, the outcome is considered effectively equal and first-contact determines possession. Above 0.1 difference, the higher-skill player wins contested situations. This threshold is configurable for tuning.
+**Rationale**: Within 0.1 skill points, the outcome is considered effectively equal and first-contact determines possession. Above 0.1 difference, the higher-skill player wins contested situations. This threshold is configurable for tuning. *(Product decision resolving authoritative-spec Open item #17 — 50/50 physical contention — made by the product team: deterministic geometry + skill scalar with 0.1 tolerance. Not derived from the authoritative specification.)*
 
 **Alternatives Considered**:
 - 0.05 tolerance: Too narrow; skill differences too granular

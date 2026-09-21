@@ -67,8 +67,6 @@ pub fn player_movement_system(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_physics_plugin() {
         // Placeholder test

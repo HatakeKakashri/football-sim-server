@@ -42,7 +42,7 @@ pub fn manager_decision_system(
 }
 
 pub fn formation_change_system(mut query: Query<(&mut Team,)>) {
-    for (mut team,) in query.iter_mut() {
+    for (team,) in query.iter_mut() {
         let _required_players = match team.formation {
             sim_components::Formation::FourFourTwo => 11,
             sim_components::Formation::FourThreeThree => 11,

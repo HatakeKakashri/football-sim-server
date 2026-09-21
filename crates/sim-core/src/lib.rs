@@ -27,7 +27,7 @@ pub struct Simulation {
 
 impl Simulation {
     pub fn new(seed: u64) -> Self {
-        let mut world = World::new();
+        let world = World::new();
         let mut schedule = Schedule::default();
         let rng = DeterministicRng::new(seed);
         
@@ -189,28 +189,28 @@ impl Simulation {
         
         // Validate command based on current state
         match &command {
-            ManagerCommand::ChangeFormation(formation) => {
+            ManagerCommand::ChangeFormation(_) => {
                 // Validate formation change is allowed in current state
-                if match_component.state != MatchState::InPlay && 
+                if match_component.state != MatchState::InPlay &&
                    match_component.state != MatchState::Stoppage {
                     return Err(format!("Invalid state for formation change: {:?}", match_component.state));
                 }
             }
-            ManagerCommand::Substitute { out, substitute } => {
+            ManagerCommand::Substitute { out: _, substitute: _ } => {
                 // Validate substitution is allowed in current state
                 if match_component.state != MatchState::Stoppage &&
                    match_component.state != MatchState::HalfTime {
                     return Err(format!("Invalid state for substitution: {:?}", match_component.state));
                 }
             }
-            ManagerCommand::ChangeMentality(mentality) => {
+            ManagerCommand::ChangeMentality(_) => {
                 // Validate mentality change is allowed in current state
                 if match_component.state != MatchState::InPlay &&
                    match_component.state != MatchState::Stoppage {
                     return Err(format!("Invalid state for mentality change: {:?}", match_component.state));
                 }
             }
-            ManagerCommand::SetTactic(tactic) => {
+            ManagerCommand::SetTactic(_) => {
                 // Validate tactic change is allowed in current state
                 if match_component.state != MatchState::InPlay &&
                    match_component.state != MatchState::Stoppage {

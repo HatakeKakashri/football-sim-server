@@ -12,7 +12,7 @@ This directory contains interface contracts for the Football Match Simulation En
 Core simulation API contract between `sim-server` and `sim-core`. Defines how the server loop interacts with the simulation engine.
 
 ### 2. [client-protocol.md](./client-protocol.md)
-Client-server message protocol. Defines what data clients receive (snapshots) and what commands they can send.
+Client-server message protocol. Defines what data clients receive (snapshots) and what commands they can send. (PROVISIONAL — pending Phase 7; see file header)
 
 ### 3. [state-snapshot.md](./state-snapshot.md)
 State persistence format for replay and recovery. Defines the serialized snapshot structure.

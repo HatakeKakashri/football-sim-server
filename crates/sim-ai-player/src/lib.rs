@@ -94,10 +94,10 @@ pub fn consideration_scoring_system(mut query: Query<(&mut Player, &Stamina, &Sk
     // Score considerations for each player
     for (mut player, stamina, skill) in query.iter_mut() {
         // Calculate stamina factor (lower stamina = more conservative)
-        let stamina_factor = stamina.0;
-        
+        let _stamina_factor = stamina.0;
+
         // Calculate skill factor
-        let skill_factor = skill.0;
+        let _skill_factor = skill.0;
         
         // Update player's intent based on considerations
         // For now, just set a default intent
@@ -112,14 +112,14 @@ pub fn player_decision_system(mut query: Query<(&mut Player, &UtilityBrain)>) {
     // Make decisions for each player based on utility brain
     for (mut player, utility_brain) in query.iter_mut() {
         // Get player's perception
-        if let Some(perception) = &player.perception {
+        if let Some(_perception) = &player.perception {
             // Evaluate each action in the utility brain
             let mut best_action: Option<&sim_components::Intent> = None;
             let mut best_score = f32::MIN;
             
             for action in &utility_brain.actions {
                 // Calculate score for this action
-                let mut score = 1.0; // Base score
+                let score = 1.0; // Base score
                 
                 // Apply considerations (simplified)
                 // In a real implementation, we would evaluate each consideration

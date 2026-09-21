@@ -41,7 +41,6 @@ pub enum MatchState {
     Stoppage,
     HalfTime,
     FullTime,
-    PenaltyShootout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

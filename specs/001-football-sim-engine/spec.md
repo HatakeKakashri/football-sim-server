@@ -103,7 +103,7 @@ As a QA engineer, I want to replay matches from recorded seeds to reproduce and 
 - Match duration: Runs exactly 90 minutes of simulation time plus referee-determined added time based on FIFA/IFAB Law 7
 - Invalid manager commands: Only valid commands are allowed based on current match state and rules
 - All players red-carded: Match may not continue if either team has fewer than 7 players (FIFA/IFAB Law 3)
-- Simultaneous possession claims: Free ball goes to first player to arrive; tackles/dribbles won by first to act unless opponent has significantly better skill
+- Simultaneous possession claims: Free ball goes to first player to arrive; tackles/dribbles won by first to act unless opponent has significantly better skill *(Product decision resolving authoritative-spec Open item #17 — 50/50 physical contention — made by the product team: deterministic geometry + skill scalar with 0.1 tolerance. Not derived from the authoritative specification.)*
 - Simulation interruption: Game resumes from last known state using state persistence
 
 ## Requirements *(mandatory)*
@@ -127,8 +127,9 @@ As a QA engineer, I want to replay matches from recorded seeds to reproduce and 
 - **FR-015**: System MUST provide deterministic replay capability from recorded seeds
 - **FR-016**: System MUST run matches for exactly 90 minutes simulation time plus referee-determined added time
 - **FR-017**: System MUST enforce FIFA/IFAB Laws of the Game for match duration, player counts, and restarts
-- **FR-018**: System MUST implement possession resolution where higher skill player wins contested tackles/dribbles unless skill difference is within tolerance threshold
-- **FR-019**: System MUST persist simulation state at regular intervals to enable recovery within 5 seconds of last saved state
+- **FR-018**: System MUST implement possession resolution where higher skill player wins contested tackles/dribbles unless skill difference is within tolerance threshold *(Product decision resolving authoritative-spec Open item #17 — 50/50 physical contention — made by the product team: deterministic geometry + skill scalar with 0.1 tolerance. Not derived from the authoritative specification.)*
+- **FR-019**: System MUST persist simulation state at regular intervals to enable recovery within 5 seconds of last saved state *(Product addition beyond the authoritative specification's scope — the authoritative spec scopes sim-replay as a replay/record harness only; this crash-recovery SLA was formally adopted by the product team.)*
+- **FR-020**: System MUST maintain a pitch-control grid (coarse grid + sigmoid dominance scoring) recomputed on the decoupled decision cadence, with both teams evaluating against the same freshly-computed grid (never team-staggered).
 
 ### Key Entities
 
@@ -146,14 +147,14 @@ As a QA engineer, I want to replay matches from recorded seeds to reproduce and 
 ### Measurable Outcomes
 
 - **SC-001**: Simulation produces identical results across 100 consecutive runs with the same seed
-- **SC-002**: Simulation maintains 60 Hz (±5%) update rate under 80% CPU utilization
-- **SC-003**: Player decisions complete within 2ms per tick at 60 Hz
+- **SC-002**: Simulation maintains 60 Hz (±5%) update rate *(Deferred target projection per authoritative spec §10 / decision #21 — not an acceptance gate for Phases 0–4; to be validated by Phase-5-equivalent benchmarking.)*
+- **SC-003**: Player decisions complete within 2ms per tick at 60 Hz *(Deferred target projection per authoritative spec §10 / decision #21 — not an acceptance gate for Phases 0–4; to be validated by Phase-5-equivalent benchmarking.)*
 - **SC-004**: Manager decisions occur at appropriate match moments (goals, red cards, stamina thresholds)
 - **SC-005**: Replay of recorded matches reproduces identical sequences of events
 - **SC-006**: System handles full match simulation in reasonable real time
 - **SC-007**: Deterministic behavior holds across different hardware with same build
 - **SC-008**: Match duration follows FIFA/IFAB Laws of the Game
-- **SC-009**: System recovers from interruptions within 5 seconds of last saved state
+- **SC-009**: System recovers from interruptions within 5 seconds of last saved state *(Product addition beyond the authoritative specification's scope — the authoritative spec scopes sim-replay as a replay/record harness only; this crash-recovery SLA was formally adopted by the product team.)*
 
 ## Assumptions
 

@@ -61,7 +61,7 @@ pub fn replay(seed: u64, commands: Vec<TimedCommand>) -> Result<ReplayResult, St
     
     // Track state hash history
     let mut state_hash_history = Vec::new();
-    let mut event_log = Vec::new();
+    let event_log = Vec::new();
     let mut divergence_point = None;
     
     // Get total ticks to run (run for 90 minutes at 60 Hz = 324000 ticks)
@@ -155,21 +155,21 @@ pub struct PlayerSnapshot {
 }
 
 pub fn event_recording_system(
-    match_query: Query<&Match>,
-    ball_query: Query<&Ball>,
-    player_query: Query<&Player>,
+    _match_query: Query<&Match>,
+    _ball_query: Query<&Ball>,
+    _player_query: Query<&Player>,
 ) {
     // Placeholder for event recording
 }
 
 pub fn divergence_detection_system(
-    replay_session: Res<ReplaySession>,
+    _replay_session: Res<ReplaySession>,
 ) {
     // Placeholder for divergence detection
 }
 
 pub fn debug_logging_system(
-    query: Query<&Player>,
+    _query: Query<&Player>,
 ) {
     // Placeholder for debug logging
 }

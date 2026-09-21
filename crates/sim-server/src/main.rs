@@ -214,7 +214,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let mut sim = Simulation::new(seed);
-            let match_entity = sim.create_match(seed);
+            let _match_entity = sim.create_match(seed);
 
             println!("Benchmarking simulation with seed {}, {} ticks...", seed, ticks);
             let start = Instant::now();

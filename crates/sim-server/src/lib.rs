@@ -42,20 +42,20 @@ impl ServerSimulation {
         
         // Validate command based on current state
         match &command {
-            ManagerCommand::ChangeFormation(formation) => {
+            ManagerCommand::ChangeFormation(_) => {
                 // Validate formation change is allowed in current state
-                if match_component.state != sim_components::MatchState::InPlay && 
+                if match_component.state != sim_components::MatchState::InPlay &&
                    match_component.state != sim_components::MatchState::Stoppage {
                     return Err(CommandError::InvalidForState {
                         current_state: match_component.state,
                         required_state: sim_components::MatchState::InPlay,
                     });
                 }
-                
+
                 // Validate formation is valid
                 // For now, all formations are considered valid
             }
-            ManagerCommand::Substitute { out, substitute } => {
+            ManagerCommand::Substitute { out: _, substitute: _ } => {
                 // Validate substitution is allowed in current state
                 if match_component.state != sim_components::MatchState::Stoppage &&
                    match_component.state != sim_components::MatchState::HalfTime {
@@ -64,11 +64,11 @@ impl ServerSimulation {
                         required_state: sim_components::MatchState::Stoppage,
                     });
                 }
-                
+
                 // Validate players exist and are in correct positions
                 // For now, skip detailed validation
             }
-            ManagerCommand::ChangeMentality(mentality) => {
+            ManagerCommand::ChangeMentality(_) => {
                 // Validate mentality change is allowed in current state
                 if match_component.state != sim_components::MatchState::InPlay &&
                    match_component.state != sim_components::MatchState::Stoppage {
@@ -78,7 +78,7 @@ impl ServerSimulation {
                     });
                 }
             }
-            ManagerCommand::SetTactic(tactic) => {
+            ManagerCommand::SetTactic(_) => {
                 // Validate tactic change is allowed in current state
                 if match_component.state != sim_components::MatchState::InPlay &&
                    match_component.state != sim_components::MatchState::Stoppage {
@@ -160,9 +160,9 @@ pub struct CommandQueue {
     pub commands: Vec<QueuedCommand>,
 }
 
-struct QueuedCommand {
-    command: ManagerCommand,
-    tick: u64,
+pub struct QueuedCommand {
+    pub command: ManagerCommand,
+    pub tick: u64,
 }
 
 impl CommandQueue {

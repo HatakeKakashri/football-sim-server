@@ -45,7 +45,7 @@
 - [X] T016 Implement fixed-timestep accumulator in sim-core with 60 Hz (1/60 second) default step
 - [X] T017 Implement Schedule in sim-core with explicit system chaining (perception → decision → intent → execution)
 - [X] T018 Implement PitchDimensions in sim-math with standard field measurements (105m x 68m)
-- [X] T019 Create base MatchState enum in sim-components per data-model.md (PreMatch, Kickoff, InPlay, Stoppage, HalfTime, FullTime, PenaltyShootout)
+- [X] T019 Create base MatchState enum in sim-components per data-model.md (PreMatch, Kickoff, InPlay, Stoppage, HalfTime, FullTime)
 - [X] T020 Create base BallState enum in sim-components per data-model.md (Free, Possessed, InFlight, OutOfPlay, Dead)
 - [X] T021 Implement state hash computation in sim-core for determinism verification (include positions, velocities, stamina, ball state, score, clock; exclude timing)
 
@@ -59,22 +59,31 @@
 
 **Independent Test**: Run same simulation twice with identical seeds and verify output hashes match across 100 consecutive runs
 
-### Implementation for User Story 1
+### Phase 3a — Deterministic Substrate (US1a)
+
+*Substrate-only per authoritative spec §12 Phase 0 (no football, no AI.)*
 
 - [X] T022 [P] [US1] Implement Ball component with position, velocity, spin, state, possessor fields per data-model.md
-- [X] T023 [P] [US1] Implement Player component with team_id, position, velocity, stamina, role, skill, perception, intent, active_action per data-model.md
-- [X] T024 [P] [US1] Implement Team component with id, name, formation, mentality, manager, players, substitutes, tactics per data-model.md
-- [X] T025 [P] [US1] Implement Match component with id, home_team, away_team, score, clock, state, seed per data-model.md
 - [X] T026 [P] [US1] Implement MatchClock component with elapsed, half, added_time, is_running per data-model.md
 - [X] T027 [US1] Implement basic ball physics system in sim-physics (velocity integration, boundary clamping)
-- [X] T028 [US1] Implement player movement system in sim-physics (velocity integration, sprint speed clamp at ~10 m/s)
 - [X] T029 [US1] Create Simulation struct in sim-core with world, schedule, rng, tick, accumulator fields
 - [X] T030 [US1] Implement Simulation::new() with seed initialization in sim-core
 - [X] T031 [US1] Implement Simulation::tick() with deterministic fixed-timestep update in sim-core
 - [X] T032 [US1] Implement Simulation::get_state_hash() for determinism verification in sim-core
-- [X] T033 [US1] Implement Simulation::create_match() with default team setup in sim-server
 - [X] T034 [US1] Add determinism verification test: run 1000 ticks twice with same seed, verify hashes match
 - [X] T035 [US1] Add per-tick state hash logging for divergence detection
+
+### Phase 3b — Football Components (US1b)
+
+*Football components introduced after substrate, per authoritative spec §12 Phase 1.*
+
+- [X] T023 [P] [US1] Implement Player component with team_id, position, velocity, stamina, role, skill, perception, intent, active_action per data-model.md
+- [X] T024 [P] [US1] Implement Team component with id, name, formation, mentality, manager, players, substitutes, tactics per data-model.md
+- [X] T025 [P] [US1] Implement Match component with id, home_team, away_team, score, clock, state, seed per data-model.md
+- [X] T028 [US1] Implement player movement system in sim-physics (velocity integration, sprint speed clamp at ~10 m/s)
+- [X] T033 [US1] Implement Simulation::create_match() with default team setup in sim-server
+
+*(Phase numbering adjusted: former Phase 3 split into 3a/3b; later phase numbers unchanged.)*
 
 **Checkpoint**: Deterministic simulation substrate proven - can run identical matches with same seed
 
@@ -184,7 +193,7 @@
 - [X] T079 Implement added time calculation in sim-referee (Law 7)
 - [X] T080 Implement match duration enforcement in sim-referee (90 minutes + added time)
 - [X] T081 Implement minimum player count enforcement in sim-referee (Law 3: minimum 7 players)
-- [X] T082 [P] Implement possession resolution in sim-rules (first contact wins; skill difference > 0.1 wins contested)
+- [X] T082 [P] Implement possession resolution in sim-rules (first contact wins; skill difference > 0.1 wins contested) (implements product-team resolution of authoritative Open item #17)
 - [X] T083 Integrate referee system into sim-core schedule (after physics, before next tick)
 
 ---
@@ -232,6 +241,9 @@
 - [X] T102 [P] Add determinism lint/test for RNG-consuming queries (stable EntityId sorting)
 - [X] T103 Run full test suite and verify all success criteria
 - [X] T104 [P] Add same-tick pipeline isolation validation test: verify no system observes uncommitted writes from another system in the same pipeline stage (per FR-005, Constitution Principle III)
+- [ ] T105 Implement PitchControlGrid resource + sigmoid dominance scoring (per data-model.md; authoritative spec §6, decision #14)
+- [ ] T106 Integrate pitch-control recompute into the decoupled decision cadence (not the 60 Hz physics tick)
+- [ ] T107 Regression test: both teams evaluate against the same freshly-computed grid in the same tick window (no team-partitioned staggering)
 
 ---
 

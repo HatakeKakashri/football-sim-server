@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, Player, Position, Skill, TeamId, TeamIdComponent, Match, BallState, Referee};
+use sim_components::{Ball, Position, Skill, TeamIdComponent, Match, BallState, Referee};
 use sim_math::Vec2;
 
 pub const PITCH_LENGTH: f32 = 105.0;
@@ -150,6 +150,7 @@ pub fn minimum_player_count_system(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sim_components::{Player, TeamId};
 
     #[test]
     fn test_out_of_bounds_detection() {

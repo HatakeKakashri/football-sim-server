@@ -814,7 +814,7 @@ server-authoritative boundary.
 | 14 | Pitch-control model | Coarse grid + sigmoid dominance, on decision cadence, synchronized across both teams (not team-staggered) | B's mechanic, A's cadence-decoupling principle, B's own bug-fix applied | B (corrected) | Locked (shape); grid resolution Provisional |
 | 15 | Decision-tick rate / time-slicing | Default N=6 (~10 Hz); per-player roster-wide stagger | Needs profiling before being final | A, B | Provisional |
 | 16 | Softmax/Boltzmann selection | Optional, off by default; numerically-stable max-subtraction formula | B's Bug 1 fixed; not adopted as originally shipped | B (corrected) | Provisional |
-| 17 | 50/50 physical contention | Hidden-RNG-roll vs. pure geometry | Genuine game-design call, not resolved by either report | A | Open |
+| 17 | 50/50 physical contention | Hidden-RNG-roll vs. pure geometry | Genuine game-design call, not resolved by either report | A | Resolved (product decision): deterministic geometry + skill scalar, 0.1 tolerance — recorded in specs/001-football-sim-engine FR-018/T082 |
 | 18 | Ball possession representation | Single enum tag | Simpler; revisit only if simultaneous partial possession is needed | A | Locked (default) |
 | 19 | Crate structure | 11-crate workspace (§11) | A's boundary discipline + B's crate contents merged | A, B | Locked |
 | 20 | Network protocol | Deferred entirely | Both reports agree it's premature before core sim exists | A, B | Open |
@@ -835,12 +835,7 @@ formation change vs. mentality shift) and the momentum window's tuning parameter
 many minutes back, which raw events feed it) remain implementation-time detail to fill in
 during Phase 6, not architectural questions. What's genuinely still open:
 
-- **50/50 physical contention resolution (#17).** Hidden-RNG-roll vs. pure deterministic
-  geometry for contested loose-ball situations. Neither report resolves this, and it
-  wasn't part of the six items you closed out — it's a genuine game-design call (how much
-  visible randomness the football model should have), not an architecture question this
-  document can settle. Risk of leaving unresolved: low near-term (it doesn't block Phases
-  0–4), but it touches player-tackle considerations directly once Phase 4/5 need it.
-
 - **Network/snapshot protocol (#20).** Confirmed correct to defer. No change — still
   needs Phases 0–6 to exist first before it can be designed against anything real.
+
+**Resolved since this section was written.** **(#17) 50/50 physical contention** was resolved by a product-team decision (deterministic geometry + skill scalar with 0.1 tolerance). Recorded in `specs/001-football-sim-engine` FR-018 / T082 and reflected in §13 row #17.

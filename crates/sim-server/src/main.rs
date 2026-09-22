@@ -114,6 +114,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 file.write_all(json.as_bytes())?;
                 println!("Final state written to {}", output_path);
             }
+
+            // Phase 0 CLI contract: a deterministic run is reproducible iff
+            // two runs with the same seed print the same final state hash.
+            // The hash is also available in any JSON snapshot produced above,
+            // but printing it on stdout makes the contract literal.
+            println!("final_state_hash: {}", sim.get_state_hash());
         }
 
         Commands::Replay {

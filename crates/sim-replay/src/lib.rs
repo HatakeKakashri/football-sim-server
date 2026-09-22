@@ -242,20 +242,31 @@ mod tests {
 
     #[test]
     fn test_divergence_detection() {
+        // Under the new Phase-0 world-state hash, `ChangeFormation` modifies
+        // `Team.formation`, which is intentionally NOT in the hash (the spec
+        // only includes `Team.id`). So replaying with vs without a formation
+        // command should produce identical state-hash histories. The previous
+        // placeholder hash (`rng.state + tick`) happened to differ per tick
+        // and made the old assertion vacuously true; the real test of
+        // divergence detection now lives in `sim-core`'s
+        // `test_hash_detects_state_change`. This test now verifies the
+        // cross-replay determinism contract: same seed + same commands ⇒
+        // identical state hashes per tick, regardless of formation tweaks.
         let seed = 12345;
-        
-        let _result1 = replay(seed, Vec::new()).unwrap();
-        
+
+        let result1 = replay(seed, Vec::new()).unwrap();
+
         let mut commands = Vec::new();
         commands.push(TimedCommand {
             tick: 1000,
             command: ManagerCommand::ChangeFormation(sim_components::Formation::FourThreeThree),
         });
         let result2 = replay(seed, commands).unwrap();
-        
-        assert!(result2.divergence_point.is_some());
-        let divergence_tick = result2.divergence_point.unwrap();
-        println!("Divergence detected at tick {}", divergence_tick);
+
+        assert_eq!(
+            result1.state_hash_history, result2.state_hash_history,
+            "state-hash histories diverged despite same seed and formation-only command"
+        );
     }
 
     #[test]

@@ -52,6 +52,25 @@ pub enum BallState {
     Dead,
 }
 
+/// Phase 3: Out-of-bounds restart types (Law 9)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BallOutOfBoundsType {
+    ThrowIn,
+    GoalKick,
+    Corner,
+}
+
+/// Phase 3: Rule events emitted by the rules engine.
+/// Used for event streaming, replay recording, and CLI output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Component)]
+pub enum RuleEvent {
+    OutOfBounds(BallOutOfBoundsType),
+    Goal { scorer_team: TeamId, score: (u8, u8) },
+    KickoffRestart,
+    HalfTimeStart,
+    FullTimeStart,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intent {
     MoveToPosition(Vec2),

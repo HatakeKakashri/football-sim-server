@@ -82,6 +82,19 @@ impl Simulation {
                 .chain(),
         );
 
+        // Phase 3: register referee rule engine systems.
+        // These run AFTER Physics (Rules set already runs after Physics per Phase 1 ordering).
+        // Systems are .chain()'d to enforce ordering: goal_detection → out_of_bounds → restart
+        // so that goal events take precedence over OOB at the goal line.
+        use sim_rules::{
+            goal_detection_system, out_of_bounds_system, restart_system,
+        };
+        schedule.add_systems((
+            goal_detection_system.in_set(SimulationSet::Referee),
+            out_of_bounds_system.in_set(SimulationSet::Referee),
+            restart_system.in_set(SimulationSet::Referee),
+        ).chain());
+
         // Create match + home team; resolve ball entity for later use by the
         // lifecycle system and clock advancement.
         let (match_entity, _home_team_entity) = Self::create_match(&mut world, seed);
@@ -111,6 +124,10 @@ impl Simulation {
         }
         
         while self.accumulator >= FIXED_TIMESTEP {
+            // Phase 3: Insert current tick as a resource so referee systems can access it.
+            // Using pre-increment tick (same as lifecycle_system) so first tick is 0.
+            self.world.insert_resource(sim_rules::CurrentTick(self.tick));
+            
             self.schedule.run(&mut self.world);
             // lifecycle_system takes the *pre-increment* tick counter so the
             // first tick is tick 0. Used to time out the HalfTime state

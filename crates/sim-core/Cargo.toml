@@ -9,8 +9,10 @@ sim-components = { path = "../sim-components" }
 sim-physics = { path = "../sim-physics" }
 sim-rules = { path = "../sim-rules" }
 sim-referee = { path = "../sim-referee" }
+sim-ai-player = { path = "../sim-ai-player" }
 bevy_ecs.workspace = true
 serde.workspace = true
+smallvec.workspace = true
 
 [lints]
 workspace = true

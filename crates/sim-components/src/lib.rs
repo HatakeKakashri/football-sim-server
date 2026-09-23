@@ -54,14 +54,16 @@ pub enum BallState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intent {
-    MoveTo(Vec2),
+    MoveToPosition(Vec2),
     PassTo(Entity),
-    Shoot(Vec2),
+    ShootAtGoal(Vec2),
     Tackle(Entity),
+    ChaseBall,
+    MarkOpponent(Entity),
     Intercept,
-    Press,
+    Press(Entity),
     HoldPosition,
-    SupportAttack,
+    SupportRun,
     TrackBack,
 }
 

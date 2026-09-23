@@ -1,6 +1,6 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Match, MatchState, ManagerCommand};
-use sim_math::{DeterministicRng, PitchDimensions};
+use sim_components::{Intent, Match, MatchClock, MatchState, ManagerCommand, PerceptionSnapshot, PitchBounds, Player, Position, Velocity};
+use sim_math::{DeterministicRng, PitchDimensions, Vec2};
 use sim_physics::ball_physics_system;
 use serde::{Serialize, Deserialize};
 
@@ -24,6 +24,8 @@ pub struct Simulation {
     pub rng: DeterministicRng,
     pub tick: u64,
     pub accumulator: f32,
+    pub match_entity: Entity,
+    pub ball_entity: Entity,
 }
 
 impl Simulation {
@@ -56,12 +58,43 @@ impl Simulation {
         // those belong to later phases.
         schedule.add_systems(ball_physics_system.in_set(SimulationSet::Physics));
 
+        // Phase 1: register the perception → decision → execution → player
+        // movement chain alongside the existing ball physics. These run in the
+        // schedule so each tick advances all read/write-separation systems in
+        // order. Lifecycle runs *outside* the schedule (after `schedule.run`)
+        // because it mutates match state and needs the schedule to have already
+        // executed this tick.
+        use sim_ai_player::{
+            perception_system, player_action_execution_system, player_decision_system,
+        };
+        use sim_physics::player_movement_system;
+        schedule.add_systems(
+            (
+                perception_system.in_set(SimulationSet::Perception),
+                player_decision_system.in_set(SimulationSet::Decision),
+                player_action_execution_system.in_set(SimulationSet::Execution),
+                player_movement_system.in_set(SimulationSet::Physics),
+            )
+                .chain(),
+        );
+
+        // Create match + home team; resolve ball entity for later use by the
+        // lifecycle system and clock advancement.
+        let (match_entity, _home_team_entity) = Self::create_match(&mut world, seed);
+        let ball_entity = world
+            .iter_entities()
+            .map(|e| e.id())
+            .find(|e| world.entity(*e).get::<sim_components::Ball>().is_some())
+            .expect("Ball entity must exist after create_match");
+
         Self {
             world,
             schedule,
             rng,
             tick: 0,
             accumulator: 0.0,
+            match_entity,
+            ball_entity,
         }
     }
 
@@ -75,8 +108,43 @@ impl Simulation {
         
         while self.accumulator >= FIXED_TIMESTEP {
             self.schedule.run(&mut self.world);
+            // lifecycle_system takes the *pre-increment* tick counter so the
+            // first tick is tick 0. Used to time out the HalfTime state
+            // independent of the paused match clock.
+            let pre_tick = self.tick;
+            lifecycle_system(self.match_entity, self.ball_entity, pre_tick, &mut self.world);
+            self.tick_clock();
             self.tick += 1;
             self.accumulator -= FIXED_TIMESTEP;
+        }
+    }
+
+    /// Advance the match clock by `FIXED_TIMESTEP` if the clock is running.
+    /// Clock advancement runs after `schedule.run()` and `lifecycle_system()`
+    /// so that any state transitions (e.g. `InPlay → HalfTime`) have already
+    /// been applied and `is_running` reflects the new state.
+    ///
+    /// Mirrors the updated component value into `Match.clock` so the snapshot
+    /// hash (which reads from the inner field) sees the same value.
+    fn tick_clock(&mut self) {
+        let new_elapsed = if let Some(mut clock) = self
+            .world
+            .entity_mut(self.match_entity)
+            .get_mut::<MatchClock>()
+        {
+            if clock.is_running {
+                clock.elapsed += FIXED_TIMESTEP;
+                Some(clock.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(clock) = new_elapsed {
+            if let Some(mut m) = self.world.entity_mut(self.match_entity).get_mut::<Match>() {
+                m.clock = clock;
+            }
         }
     }
 
@@ -165,13 +233,13 @@ impl Simulation {
         h
     }
 
-    pub fn create_match(&mut self, seed: u64) -> Entity {
+    pub fn create_match(world: &mut World, seed: u64) -> (Entity, Entity) {
         use sim_components::{Ball, Match, MatchClock, MatchState, Player, Position, Team, TeamId, Velocity};
         use sim_math::Vec2;
-        
+
         // Create ball entity
-        let ball_entity = self.world.spawn(()).id();
-        self.world.entity_mut(ball_entity).insert(Ball {
+        let ball_entity = world.spawn(()).id();
+        world.entity_mut(ball_entity).insert(Ball {
             position: Vec2::new(52.5, 34.0), // Center of pitch
             velocity: Vec2::zero(),
             spin: 0.0,
@@ -181,32 +249,49 @@ impl Simulation {
         // Ball also carries Position + Velocity components so the registered
         // ball_physics_system query (`Position, Velocity, Ball`) matches it.
         // The Ball struct fields stay as the snapshot/diagnostic copy.
-        self.world.entity_mut(ball_entity).insert(Position(Vec2::new(52.5, 34.0)));
-        self.world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
-        
+        world.entity_mut(ball_entity).insert(Position(Vec2::new(52.5, 34.0)));
+        world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+
         // Create home team
-        let home_team_entity = self.world.spawn(()).id();
+        let home_team_entity = world.spawn(()).id();
         let mut home_players = Vec::new();
-        
+
         // Create 11 home players
         for i in 0..11 {
-            let player_entity = self.world.spawn(()).id();
-            self.world.entity_mut(player_entity).insert(Player {
+            let player_entity = world.spawn(()).id();
+            let pos = Vec2::new(10.0 + (i as f32 * 8.0), 34.0);
+            // Phase 1: seed each player with a default empty PerceptionSnapshot
+            // stored in the existing `Player.perception` field so downstream
+            // readers always have a valid snapshot without needing it to also
+            // be a Component (which is out of scope for Phase 1).
+            let default_snapshot = PerceptionSnapshot {
+                nearby_teammates: smallvec::SmallVec::new(),
+                nearby_opponents: smallvec::SmallVec::new(),
+                ball_position: Vec2::new(52.5, 34.0),
+                goal_position: Vec2::new(105.0, 34.0),
+                pitch_bounds: PitchBounds {
+                    distance_to_left: pos.x,
+                    distance_to_right: 105.0 - pos.x,
+                    distance_to_top: pos.y,
+                    distance_to_bottom: 68.0 - pos.y,
+                },
+            };
+            world.entity_mut(player_entity).insert(Player {
                 team_id: TeamId(0),
-                position: Vec2::new(10.0 + (i as f32 * 8.0), 34.0),
+                position: pos,
                 velocity: Vec2::zero(),
                 stamina: 1.0,
                 role: sim_components::Role::CentralMidfielder,
                 skill: 0.7,
                 intent: None,
-                perception: None,
+                perception: Some(default_snapshot),
             });
-            self.world.entity_mut(player_entity).insert(Position(Vec2::new(10.0 + (i as f32 * 8.0), 34.0)));
-            self.world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
+            world.entity_mut(player_entity).insert(Position(pos));
+            world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
             home_players.push(player_entity);
         }
-        
-        self.world.entity_mut(home_team_entity).insert(Team {
+
+        world.entity_mut(home_team_entity).insert(Team {
             id: TeamId(0),
             name: "Home".to_string(),
             formation: sim_components::Formation::FourFourTwo,
@@ -214,30 +299,43 @@ impl Simulation {
             players: home_players,
             substitutes: Vec::new(),
         });
-        
+
         // Create away team
-        let away_team_entity = self.world.spawn(()).id();
+        let away_team_entity = world.spawn(()).id();
         let mut away_players = Vec::new();
-        
+
         // Create 11 away players
         for i in 0..11 {
-            let player_entity = self.world.spawn(()).id();
-            self.world.entity_mut(player_entity).insert(Player {
+            let player_entity = world.spawn(()).id();
+            let pos = Vec2::new(95.0 - (i as f32 * 8.0), 34.0);
+            let default_snapshot = PerceptionSnapshot {
+                nearby_teammates: smallvec::SmallVec::new(),
+                nearby_opponents: smallvec::SmallVec::new(),
+                ball_position: Vec2::new(52.5, 34.0),
+                goal_position: Vec2::new(105.0, 34.0),
+                pitch_bounds: PitchBounds {
+                    distance_to_left: pos.x,
+                    distance_to_right: 105.0 - pos.x,
+                    distance_to_top: pos.y,
+                    distance_to_bottom: 68.0 - pos.y,
+                },
+            };
+            world.entity_mut(player_entity).insert(Player {
                 team_id: TeamId(1),
-                position: Vec2::new(95.0 - (i as f32 * 8.0), 34.0),
+                position: pos,
                 velocity: Vec2::zero(),
                 stamina: 1.0,
                 role: sim_components::Role::CentralMidfielder,
                 skill: 0.7,
                 intent: None,
-                perception: None,
+                perception: Some(default_snapshot),
             });
-            self.world.entity_mut(player_entity).insert(Position(Vec2::new(95.0 - (i as f32 * 8.0), 34.0)));
-            self.world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
+            world.entity_mut(player_entity).insert(Position(pos));
+            world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
             away_players.push(player_entity);
         }
-        
-        self.world.entity_mut(away_team_entity).insert(Team {
+
+        world.entity_mut(away_team_entity).insert(Team {
             id: TeamId(1),
             name: "Away".to_string(),
             formation: sim_components::Formation::FourFourTwo,
@@ -245,25 +343,32 @@ impl Simulation {
             players: away_players,
             substitutes: Vec::new(),
         });
-        
+
         // Create match entity
-        let match_entity = self.world.spawn(()).id();
-        self.world.entity_mut(match_entity).insert(Match {
+        let match_entity = world.spawn(()).id();
+        let initial_clock = MatchClock {
+            elapsed: 0.0,
+            half: 1,
+            added_time: 0.0,
+            is_running: true,
+        };
+        world.entity_mut(match_entity).insert(Match {
             id: 1,
             home_team: home_team_entity,
             away_team: away_team_entity,
             score: (0, 0),
-            clock: MatchClock {
-                elapsed: 0.0,
-                half: 1,
-                added_time: 0.0,
-                is_running: true,
-            },
+            clock: initial_clock.clone(),
             state: MatchState::PreMatch,
             seed,
         });
-        
-        match_entity
+        // Phase 1: also expose the clock as its own Component so the
+        // `tick_clock` and `lifecycle_system` functions can mutate it via
+        // `get_mut::<MatchClock>()`. The inner `Match.clock` field remains
+        // the snapshot used by the state hash; both views are kept in sync
+        // by every site that mutates the component.
+        world.entity_mut(match_entity).insert(initial_clock);
+
+        (match_entity, home_team_entity)
     }
 
     pub fn apply_command(&mut self, match_id: Entity, command: ManagerCommand) -> Result<(), String> {
@@ -503,6 +608,290 @@ fn role_discriminant(r: sim_components::Role) -> u64 {
     }
 }
 
+/// Match state machine driver. Runs once per tick after `schedule.run()`
+/// (and before `tick_clock`). Owns PreMatch → Kickoff → InPlay → HalfTime →
+/// Kickoff(2nd half) → InPlay → FullTime. Also responsible for placing the
+/// ball at the center spot, zeroing ball velocity, applying the kickoff
+/// impulse, and resetting the 4-4-2 formation at every kickoff transition.
+///
+/// Phase 1 deliberately hardcodes formation slots and intent — proving the
+/// read/write-separation pipeline and perception-snapshot shape before any
+/// utility-AI variable comes online.
+///
+/// Phase 1 implementation note: the PreMatch → Kickoff → InPlay chain is
+/// instantaneous (all three states settle on tick 1), so the driver loops
+/// through the state machine until the state stabilises. Without this,
+/// `PreMatch` would only advance one step per tick and the kickoff impulse
+/// wouldn't apply until tick 2 (clobbering anything else that ran in
+/// between).
+fn lifecycle_system(
+    match_entity: Entity,
+    ball_entity: Entity,
+    sim_tick: u64,
+    world: &mut World,
+) {
+    const HALFTIME_BREAK_TICKS: u64 = 18;
+    const MAX_TRANSITIONS_PER_TICK: usize = 8;
+
+    for _iteration in 0..MAX_TRANSITIONS_PER_TICK {
+        let current_state = world
+            .entity(match_entity)
+            .get::<Match>()
+            .map(|m| m.state);
+        let Some(current_state) = current_state else {
+            return;
+        };
+
+        let mut next_state = current_state;
+        let mut new_clock: Option<MatchClock> = None;
+        let mut place_ball_center = false;
+        let mut apply_kickoff_impulse = false;
+
+        match current_state {
+            MatchState::PreMatch => {
+                next_state = MatchState::Kickoff;
+                place_ball_center = true;
+            }
+            MatchState::Kickoff => {
+                next_state = MatchState::InPlay;
+                apply_kickoff_impulse = true;
+                place_ball_center = true;
+            }
+            MatchState::InPlay => {
+                let clock = world.entity(match_entity).get::<MatchClock>().cloned();
+                if let Some(c) = clock {
+                    let in_play_threshold = if c.half == 1 {
+                        45.0 + c.added_time
+                    } else {
+                        90.0 + c.added_time
+                    };
+                    let is_final_half = c.half >= 2;
+                    if c.elapsed >= in_play_threshold {
+                        if is_final_half {
+                            next_state = MatchState::FullTime;
+                        } else {
+                            next_state = MatchState::HalfTime;
+                        }
+                        let mut updated = c;
+                        updated.is_running = false;
+                        new_clock = Some(updated);
+                    }
+                }
+            }
+            MatchState::HalfTime => {
+                let clock = world.entity(match_entity).get::<MatchClock>().cloned();
+                let mut entry = world
+                    .get_resource::<HalfTimeEntryTick>()
+                    .copied()
+                    .unwrap_or_default();
+                if entry.tick.is_none() {
+                    entry.tick = Some(sim_tick);
+                    world.insert_resource(entry);
+                }
+                let entry_tick = entry.tick.unwrap_or(sim_tick);
+                let in_halftime_for = sim_tick.saturating_sub(entry_tick);
+                if in_halftime_for >= HALFTIME_BREAK_TICKS {
+                    next_state = MatchState::Kickoff;
+                    if let Some(c) = clock {
+                        new_clock = Some(MatchClock {
+                            elapsed: 0.0,
+                            half: 2,
+                            added_time: c.added_time,
+                            is_running: true,
+                        });
+                    }
+                    place_ball_center = true;
+                    world.insert_resource(HalfTimeEntryTick { tick: None });
+                }
+            }
+            MatchState::FullTime | MatchState::Stoppage => {}
+        }
+
+        // Apply clock mutation.
+        if let Some(clock) = new_clock {
+            let clock_for_match = clock.clone();
+            world.entity_mut(match_entity).insert(clock);
+            if let Some(mut m) = world.entity_mut(match_entity).get_mut::<Match>() {
+                m.clock = clock_for_match;
+            }
+        }
+
+        // Apply ball placement / kickoff impulse.
+        if place_ball_center {
+            if let Some(mut pos) = world.entity_mut(ball_entity).get_mut::<Position>() {
+                pos.0 = Vec2::new(52.5, 34.0);
+            }
+            if let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>() {
+                vel.0 = Vec2::zero();
+            }
+            if let Some(mut ball) = world.entity_mut(ball_entity).get_mut::<sim_components::Ball>() {
+                ball.position = Vec2::new(52.5, 34.0);
+                ball.velocity = Vec2::zero();
+            }
+        }
+        if apply_kickoff_impulse {
+            if let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>() {
+                vel.0 = Vec2::new(2.0, 0.0);
+            }
+            if let Some(mut ball) = world.entity_mut(ball_entity).get_mut::<sim_components::Ball>() {
+                ball.velocity = Vec2::new(2.0, 0.0);
+            }
+        }
+
+        // Phase 1: keep the Ball struct snapshot fields in sync with the
+        // Position/Velocity components. Without this, the snapshot returned
+        // by `Simulation::get_state` (which reads from `Ball.position` /
+        // `Ball.velocity` rather than the Position/Velocity components)
+        // would always report the kickoff centre regardless of physics.
+        // ball_physics_system (in sim-physics) is the canonical owner of
+        // physics integration but does not touch the Ball struct snapshot
+        // fields; we sync them here once per tick to keep the snapshot
+        // honest without requiring a sim-physics change (out of Phase 1
+        // scope).
+        let snapshot_pos = world.entity(ball_entity).get::<Position>().map(|p| p.0);
+        let snapshot_vel = world.entity(ball_entity).get::<Velocity>().map(|v| v.0);
+        if let (Some(p), Some(v)) = (snapshot_pos, snapshot_vel) {
+            if let Some(mut ball) = world.entity_mut(ball_entity).get_mut::<sim_components::Ball>() {
+                ball.position = p;
+                ball.velocity = v;
+            }
+        }
+
+        // Reset 4-4-2 formation whenever we enter Kickoff.
+        if next_state == MatchState::Kickoff && current_state != MatchState::Kickoff {
+            reset_formation_to_4_4_2(world);
+        }
+
+        // Commit state mutation.
+        if next_state != current_state {
+            if let Some(mut m) = world.entity_mut(match_entity).get_mut::<Match>() {
+                m.state = next_state;
+            }
+        } else {
+            // No further transitions this tick; stop iterating.
+            return;
+        }
+    }
+}
+
+/// Tracks the simulation tick at which the match entered the `HalfTime`
+/// state. `None` means we are not currently in HalfTime. Used to time out
+/// the half-time break using the sim-tick counter rather than the paused
+/// match clock (which doesn't accumulate `elapsed` while frozen).
+#[derive(Resource, Debug, Clone, Copy, Default)]
+struct HalfTimeEntryTick {
+    tick: Option<u64>,
+}
+
+/// Phase 1 hardcoded 4-4-2 formation. Sorts players on each team by current
+/// x-coordinate and assigns slot positions from the spec table:
+///   home (team_id == 0) — GK x=5, defenders y=20 at x={20,35,50,65},
+///     midfielders y=34 at x={25,40,55,70}, forwards y=34 at x={80,88}.
+///   away (team_id == 1) — GK x=100, defenders y=48 at x={20,35,50,65},
+///     midfielders y=34 at x={35,50,65,80}, forwards y=34 at x={17,25}.
+/// Velocities are zeroed; intents reset to `HoldPosition`.
+fn reset_formation_to_4_4_2(world: &mut World) {
+    // Home formation targets — index 0 = GK, 1..=4 = defenders (sorted by x),
+    // 5..=8 = midfielders (sorted by x), 9..=10 = forwards (sorted by x).
+    let home_targets: [Vec2; 11] = [
+        Vec2::new(5.0, 34.0),    // GK
+        Vec2::new(20.0, 20.0),   // Defender 1
+        Vec2::new(35.0, 20.0),   // Defender 2
+        Vec2::new(50.0, 20.0),   // Defender 3
+        Vec2::new(65.0, 20.0),   // Defender 4
+        Vec2::new(25.0, 34.0),   // Midfielder 1
+        Vec2::new(40.0, 34.0),   // Midfielder 2
+        Vec2::new(55.0, 34.0),   // Midfielder 3
+        Vec2::new(70.0, 34.0),   // Midfielder 4
+        Vec2::new(80.0, 34.0),   // Forward 1
+        Vec2::new(88.0, 34.0),   // Forward 2
+    ];
+    // Away formation targets — mirrored about pitch centre (52.5, 34).
+    let away_targets: [Vec2; 11] = [
+        Vec2::new(100.0, 34.0),  // GK
+        Vec2::new(20.0, 48.0),   // Defender 1 (y mirrored from 20 → 48)
+        Vec2::new(35.0, 48.0),   // Defender 2
+        Vec2::new(50.0, 48.0),   // Defender 3
+        Vec2::new(65.0, 48.0),   // Defender 4
+        Vec2::new(35.0, 34.0),   // Midfielder 1 (x mirrored: 70 → 35)
+        Vec2::new(50.0, 34.0),   // Midfielder 2 (x mirrored: 55 → 50)
+        Vec2::new(65.0, 34.0),   // Midfielder 3 (x mirrored: 40 → 65)
+        Vec2::new(80.0, 34.0),   // Midfielder 4 (x mirrored: 25 → 80)
+        Vec2::new(17.0, 34.0),   // Forward 1 (x mirrored: 88 → 17)
+        Vec2::new(25.0, 34.0),   // Forward 2 (x mirrored: 80 → 25)
+    ];
+
+    let mut home_players: Vec<Entity> = Vec::new();
+    let mut away_players: Vec<Entity> = Vec::new();
+    for entity in world.iter_entities() {
+        let id = entity.id();
+        if let Some(p) = world.entity(id).get::<Player>() {
+            if p.team_id.0 == 0 {
+                home_players.push(id);
+            } else if p.team_id.0 == 1 {
+                away_players.push(id);
+            }
+        }
+    }
+    // Sort by current x to make slot assignment deterministic regardless of
+    // entity spawn order.
+    home_players.sort_by(|a, b| {
+        let ax = world
+            .entity(*a)
+            .get::<Position>()
+            .map(|p| p.0.x)
+            .unwrap_or(0.0);
+        let bx = world
+            .entity(*b)
+            .get::<Position>()
+            .map(|p| p.0.x)
+            .unwrap_or(0.0);
+        ax.partial_cmp(&bx).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    away_players.sort_by(|a, b| {
+        let ax = world
+            .entity(*a)
+            .get::<Position>()
+            .map(|p| p.0.x)
+            .unwrap_or(0.0);
+        let bx = world
+            .entity(*b)
+            .get::<Position>()
+            .map(|p| p.0.x)
+            .unwrap_or(0.0);
+        // Away sorts descending so that the goalkeeper (rightmost) gets index 0.
+        bx.partial_cmp(&ax).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for (i, entity) in home_players.iter().enumerate() {
+        if let Some(target) = home_targets.get(i) {
+            apply_player_slot(world, *entity, *target);
+        }
+    }
+    for (i, entity) in away_players.iter().enumerate() {
+        if let Some(target) = away_targets.get(i) {
+            apply_player_slot(world, *entity, *target);
+        }
+    }
+}
+
+/// Place a single player at `target`, zero velocity, reset intent to
+/// `HoldPosition`. Mirrors the Position into Player.position so any system
+/// that reads the player component sees the same value.
+fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2) {
+    if let Some(mut pos) = world.entity_mut(player_entity).get_mut::<Position>() {
+        pos.0 = target;
+    }
+    if let Some(mut vel) = world.entity_mut(player_entity).get_mut::<Velocity>() {
+        vel.0 = Vec2::zero();
+    }
+    if let Some(mut p) = world.entity_mut(player_entity).get_mut::<Player>() {
+        p.position = target;
+        p.velocity = Vec2::zero();
+        p.intent = Some(Intent::HoldPosition);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,9 +912,6 @@ mod tests {
         let seed = 42u64;
         let mut sim1 = Simulation::new(seed);
         let mut sim2 = Simulation::new(seed);
-
-        sim1.create_match(seed);
-        sim2.create_match(seed);
 
         let delta = 1.0 / 60.0;
         let mut hashes1 = Vec::with_capacity(1000);
@@ -555,8 +941,6 @@ mod tests {
         let seed = 0xCAFE_BABE_DEAD_BEEFu64;
         let mut a = Simulation::new(seed);
         let mut b = Simulation::new(seed);
-        a.create_match(seed);
-        b.create_match(seed);
         let n = 50u64;
         for _ in 0..n {
             a.tick(1.0 / 60.0);
@@ -568,7 +952,7 @@ mod tests {
     #[test]
     fn test_pipeline_isolation_single_tick() {
         let mut sim = Simulation::new(42);
-        let match_entity = sim.create_match(42);
+        let match_entity = sim.match_entity;
 
         sim.tick(1.0 / 60.0);
 
@@ -590,8 +974,7 @@ mod tests {
     #[test]
     fn test_state_hash_is_stable() {
         let seed = 0x1234_5678u64;
-        let mut sim = Simulation::new(seed);
-        sim.create_match(seed);
+        let sim = Simulation::new(seed);
         let h1 = sim.get_state_hash();
         let h2 = sim.get_state_hash();
         assert_eq!(h1, h2, "Hash changed between identical reads");
@@ -601,6 +984,12 @@ mod tests {
     /// The ball must actually move when given a non-zero velocity. Find the
     /// ball entity (the one with both `Ball` and `Position`/`Velocity`
     /// components) and verify the Position changes after a tick.
+    ///
+    /// Phase 1 update: lifecycle_system kicks the ball at Kickoff→InPlay with
+    /// a velocity of (2.0, 0.0) on the first tick, which would clobber any
+    /// velocity the test sets *before* the first tick. We instead let the
+    /// first tick complete (so the kickoff settles), then perturb velocity
+    /// and verify motion on tick 2.
     #[test]
     fn test_ball_moves_under_physics() {
         use sim_components::Position as PosComp;
@@ -608,19 +997,11 @@ mod tests {
         use sim_math::Vec2;
 
         let mut sim = Simulation::new(7);
-        sim.create_match(7);
+        let ball_entity = sim.ball_entity;
 
-        // Find the ball entity by its Ball component.
-        let ball_entity = {
-            let mut found = None;
-            for entity in sim.world.iter_entities() {
-                if entity.get::<sim_components::Ball>().is_some() {
-                    found = Some(entity.id());
-                    break;
-                }
-            }
-            found.expect("ball entity must exist after create_match")
-        };
+        // Let the kickoff settle so the lifecycle no longer overwrites
+        // velocity on each tick.
+        sim.tick(1.0 / 60.0);
 
         // Set a non-zero velocity directly via world mutation.
         {
@@ -666,8 +1047,6 @@ mod tests {
         let seed = 0xABCD_EF01_2345_6789u64;
         let mut a = Simulation::new(seed);
         let mut b = Simulation::new(seed);
-        a.create_match(seed);
-        b.create_match(seed);
 
         for _ in 0..10 {
             a.tick(1.0 / 60.0);
@@ -680,17 +1059,8 @@ mod tests {
             "Identically-constructed simulations diverged before perturbation"
         );
 
-        // Find ball entity on sim a and perturb ONLY its x Position.
-        let ball_a = {
-            let mut found = None;
-            for entity in a.world.iter_entities() {
-                if entity.get::<sim_components::Ball>().is_some() {
-                    found = Some(entity.id());
-                    break;
-                }
-            }
-            found.expect("ball on sim a")
-        };
+        // Perturb ball on sim a.
+        let ball_a = a.ball_entity;
         {
             let mut em = a.world.entity_mut(ball_a);
             let mut p = em.get_mut::<PosComp>().expect("ball has Position");
@@ -702,6 +1072,110 @@ mod tests {
         assert_ne!(
             hash_after_a, hash_after_b,
             "Hash failed to detect +1.0 perturbation on ball x"
+        );
+    }
+
+    /// Phase 1 verification: after 60 ticks (≈ 1 s of sim time) the match
+    /// clock's `elapsed` should be ~1.0. Asserts the read/write-separation
+    /// pipeline carries the `MatchClock` component forward without losing
+    /// updates.
+    #[test]
+    fn test_clock_advances() {
+        let mut sim = Simulation::new(42);
+        let me = sim.match_entity;
+        for _ in 0..60 {
+            sim.tick(1.0 / 60.0);
+        }
+        let elapsed = sim
+            .world
+            .entity(me)
+            .get::<MatchClock>()
+            .expect("match entity has MatchClock component")
+            .elapsed;
+        assert!(
+            (elapsed - 1.0).abs() < 0.01,
+            "clock should be ~1.0s, got {}",
+            elapsed
+        );
+    }
+
+    /// Phase 1 verification: a full match (≤ 10 000 ticks ≈ 2.7 min of sim
+    /// time, well past the simulated 90-minute threshold) eventually drives
+    /// `state` to `FullTime`, transitions through `half == 2`, and the clock
+    /// pauses/resets at half-time.
+    #[test]
+    fn test_full_match_reaches_full_time() {
+        let mut sim = Simulation::new(7);
+        let me = sim.match_entity;
+        let mut saw_half_2 = false;
+        let mut clock_paused_after_half = false;
+
+        let final_state = {
+            let mut state = MatchState::PreMatch;
+            for tick_index in 0..10_000u64 {
+                sim.tick(1.0 / 60.0);
+                let clock = sim
+                    .world
+                    .entity(me)
+                    .get::<MatchClock>()
+                    .cloned()
+                    .expect("match clock");
+                if clock.half == 2 && (2700..5400).contains(&tick_index) {
+                    saw_half_2 = true;
+                }
+                // After we first observe half == 2 (i.e. 2nd half in progress),
+                // check that the clock was reset toward 0 after half-time.
+                if clock.half == 2 && !clock.is_running {
+                    clock_paused_after_half = true;
+                }
+                state = sim
+                    .world
+                    .entity(me)
+                    .get::<Match>()
+                    .map(|m| m.state)
+                    .expect("match");
+                if state == MatchState::FullTime {
+                    break;
+                }
+            }
+            state
+        };
+
+        assert_eq!(
+            final_state,
+            MatchState::FullTime,
+            "match never reached FullTime within 10_000 ticks"
+        );
+        assert!(
+            saw_half_2,
+            "clock.half never observed as 2 between tick 2700 and 5400"
+        );
+        assert!(
+            clock_paused_after_half,
+            "clock.is_running was never false while half==2 (expected pause at HalfTime)"
+        );
+
+        // The 2nd-half clock should have reset toward 0 at the HalfTime→Kickoff
+        // boundary (and the HalfTime phase paused the clock for ~0.3 s). After
+        // FullTime we expect elapsed to have moved past 90 (or whatever the
+        // 2nd-half total was) — but importantly, after half-time was reset,
+        // elapsed should be small again at some point. Verify we observed at
+        // least one tick where half==2 and elapsed < 1.0 (i.e. clock was
+        // restarted cleanly).
+        let mut observed_low_elapsed_in_half_2 = false;
+        let mut sim2 = Simulation::new(7);
+        let me2 = sim2.match_entity;
+        for _ in 0..10_000u64 {
+            sim2.tick(1.0 / 60.0);
+            let c = sim2.world.entity(me2).get::<MatchClock>().cloned().unwrap();
+            if c.half == 2 && c.elapsed < 1.0 {
+                observed_low_elapsed_in_half_2 = true;
+                break;
+            }
+        }
+        assert!(
+            observed_low_elapsed_in_half_2,
+            "clock did not reset toward 0 after half-time"
         );
     }
 }

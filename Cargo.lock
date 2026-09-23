@@ -582,11 +582,13 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "serde",
+ "sim-ai-player",
  "sim-components",
  "sim-math",
  "sim-physics",
  "sim-referee",
  "sim-rules",
+ "smallvec",
 ]
 
 [[package]]

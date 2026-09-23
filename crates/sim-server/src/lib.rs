@@ -206,12 +206,11 @@ mod tests {
     #[test]
     fn test_validation_invalid_command_rejected() {
         let mut server = ServerSimulation::new(12345);
-        server.simulation.create_match(12345);
-        
+
         // Try to change formation during PreMatch state (should fail)
         let result = server.apply_command(ManagerCommand::ChangeFormation(sim_components::Formation::FourThreeThree));
         assert!(result.is_err());
-        
+
         match result {
             Err(CommandError::InvalidForState { current_state, required_state }) => {
                 assert_eq!(current_state, sim_components::MatchState::PreMatch);
@@ -224,13 +223,13 @@ mod tests {
     #[test]
     fn test_validation_valid_command_accepted() {
         let mut server = ServerSimulation::new(12345);
-        let match_entity = server.simulation.create_match(12345);
-        
+        let match_entity = server.simulation.match_entity;
+
         // Set match state to InPlay
         if let Some(mut match_component) = server.simulation.world.entity_mut(match_entity).get_mut::<sim_components::Match>() {
             match_component.state = sim_components::MatchState::InPlay;
         }
-        
+
         // Try to change formation during InPlay state (should succeed)
         let result = server.apply_command(ManagerCommand::ChangeFormation(sim_components::Formation::FourThreeThree));
         assert!(result.is_ok());
@@ -238,19 +237,18 @@ mod tests {
 
     #[test]
     fn test_state_query_all_state_from_server() {
-        let mut server = ServerSimulation::new(12345);
-        server.simulation.create_match(12345);
-        
+        let server = ServerSimulation::new(12345);
+
         // Get state snapshot
         let state = server.get_state();
-        
+
         // Verify state contains expected fields
         assert_eq!(state.tick, 0);
         assert!(state.match_state.state == sim_components::MatchState::PreMatch);
         assert_eq!(state.score, (0, 0));
         assert!(state.clock.is_running);
         assert!(state.state_hash > 0);
-        
+
         // Verify players are present (22 players total)
         assert_eq!(state.players.len(), 22);
     }
@@ -258,7 +256,7 @@ mod tests {
     #[test]
     fn test_end_to_end_full_match_simulation() {
         let mut server = ServerSimulation::new(42);
-        let match_entity = server.simulation.create_match(42);
+        let match_entity = server.simulation.match_entity;
 
         {
             let mut match_component = server.simulation.world.entity_mut(match_entity);
@@ -280,12 +278,10 @@ mod tests {
     #[test]
     fn test_determinism_two_seeds_differ() {
         let mut s1 = ServerSimulation::new(111);
-        s1.simulation.create_match(111);
         for _ in 0..1000 { s1.tick(1.0 / 60.0); }
         let h1 = s1.get_state().state_hash;
 
         let mut s2 = ServerSimulation::new(222);
-        s2.simulation.create_match(222);
         for _ in 0..1000 { s2.tick(1.0 / 60.0); }
         let h2 = s2.get_state().state_hash;
 

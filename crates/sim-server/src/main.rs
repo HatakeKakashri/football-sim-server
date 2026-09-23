@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let mut sim = Simulation::new(seed);
-            let match_entity = sim.create_match(seed);
+            let match_entity = sim.match_entity;
 
             let effective_ticks = if full_match { 324000 } else { ticks };
 
@@ -128,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let mut sim = Simulation::new(seed);
-            let match_entity = sim.create_match(seed);
+            let match_entity = sim.match_entity;
 
             // Load commands from JSON file
             let mut file = File::open(commands)?;
@@ -190,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // We don't have a way to reconstruct the entire Simulation from the snapshot yet.
             // We'll create a new simulation and set it to the snapshot state (TODO).
             let mut sim = Simulation::new(snapshot_data.state_hash); // Use state_hash as seed for now (not correct)
-            let match_entity = sim.create_match(1); // Use match_id as seed for now
+            let match_entity = sim.match_entity;
 
             println!(
                 "Recovered from snapshot at tick {}. Running {} additional ticks...",
@@ -220,7 +220,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let mut sim = Simulation::new(seed);
-            let _match_entity = sim.create_match(seed);
+            let _match_entity = sim.match_entity;
 
             println!("Benchmarking simulation with seed {}, {} ticks...", seed, ticks);
             let start = Instant::now();

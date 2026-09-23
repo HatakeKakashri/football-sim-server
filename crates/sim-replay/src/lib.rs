@@ -57,7 +57,7 @@ pub fn replay(seed: u64, commands: Vec<TimedCommand>) -> Result<ReplayResult, St
     let mut simulation = Simulation::new(seed);
     
     // Create a match
-    let match_entity = simulation.create_match(seed);
+    let (match_entity, _home_team_entity) = Simulation::create_match(&mut simulation.world, seed);
     
     // Track state hash history
     let mut state_hash_history = Vec::new();

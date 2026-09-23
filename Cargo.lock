@@ -563,6 +563,7 @@ dependencies = [
  "sim-ai-core",
  "sim-components",
  "sim-math",
+ "sim-physics",
  "smallvec",
 ]
 
@@ -582,6 +583,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "serde",
+ "sim-ai-core",
  "sim-ai-player",
  "sim-components",
  "sim-math",

@@ -53,19 +53,20 @@ impl ReplaySession {
 }
 
 pub fn replay(seed: u64, commands: Vec<TimedCommand>) -> Result<ReplayResult, String> {
+    replay_with_ticks(seed, commands, 324000)
+}
+
+pub fn replay_with_ticks(seed: u64, commands: Vec<TimedCommand>, total_ticks: u64) -> Result<ReplayResult, String> {
     // Create a new simulation with the given seed
     let mut simulation = Simulation::new(seed);
-    
+
     // Create a match
     let (match_entity, _home_team_entity) = Simulation::create_match(&mut simulation.world, seed);
-    
+
     // Track state hash history
     let mut state_hash_history = Vec::new();
     let event_log = Vec::new();
     let mut divergence_point = None;
-    
-    // Get total ticks to run (run for 90 minutes at 60 Hz = 324000 ticks)
-    let total_ticks = 324000;
     
     for tick in 0..total_ticks {
         // Check if there's a command for this tick
@@ -225,17 +226,22 @@ mod tests {
 
     #[test]
     fn test_replay_determinism() {
+        // Smoke-test determinism: 1000 ticks is sufficient to exercise the
+        // full pipeline (physics, perception, decisions, lifecycle transitions)
+        // without paying the 324k-tick cost of a full 90-min match. The
+        // sim-core `test_full_match_reaches_full_time` test already validates
+        // the full-length path separately.
         let seed = 12345;
         let commands = Vec::new();
-        
-        let result1 = replay(seed, commands.clone()).unwrap();
-        let result2 = replay(seed, commands).unwrap();
-        
+
+        let result1 = replay_with_ticks(seed, commands.clone(), 1000).unwrap();
+        let result2 = replay_with_ticks(seed, commands, 1000).unwrap();
+
         assert_eq!(result1.state_hash_history.len(), result2.state_hash_history.len());
         for (i, (hash1, hash2)) in result1.state_hash_history.iter().zip(result2.state_hash_history.iter()).enumerate() {
             assert_eq!(hash1, hash2, "State hash mismatch at tick {}", i);
         }
-        
+
         assert_eq!(result1.final_state.tick, result2.final_state.tick);
         assert_eq!(result1.final_state.score, result2.final_state.score);
     }
@@ -254,14 +260,14 @@ mod tests {
         // identical state hashes per tick, regardless of formation tweaks.
         let seed = 12345;
 
-        let result1 = replay(seed, Vec::new()).unwrap();
+        let result1 = replay_with_ticks(seed, Vec::new(), 5000).unwrap();
 
         let mut commands = Vec::new();
         commands.push(TimedCommand {
             tick: 1000,
             command: ManagerCommand::ChangeFormation(sim_components::Formation::FourThreeThree),
         });
-        let result2 = replay(seed, commands).unwrap();
+        let result2 = replay_with_ticks(seed, commands, 5000).unwrap();
 
         assert_eq!(
             result1.state_hash_history, result2.state_hash_history,

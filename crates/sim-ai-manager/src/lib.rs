@@ -216,6 +216,10 @@ mod tests {
             skill: 0.8,
             intent: None,
             perception: None,
+            score_differential: 0,
+            time_remaining: 90.0,
+            team_possession: 0.5,
+            mentality_modifier: 0.0,
         });
         world.entity_mut(low_stamina_player).insert(Stamina(0.2));
 
@@ -228,6 +232,10 @@ mod tests {
             skill: 0.7,
             intent: None,
             perception: None,
+            score_differential: 0,
+            time_remaining: 90.0,
+            team_possession: 0.5,
+            mentality_modifier: 0.0,
         });
         world.entity_mut(substitute_player).insert(Stamina(0.9));
 

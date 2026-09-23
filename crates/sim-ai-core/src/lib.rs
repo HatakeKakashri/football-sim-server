@@ -42,7 +42,7 @@ pub fn geometric_mean(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    let product: f32 = values.iter().product();
+    let product: f32 = values.iter().map(|v| v.max(1e-4)).product();
     product.powf(1.0 / values.len() as f32)
 }
 

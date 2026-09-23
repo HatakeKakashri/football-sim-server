@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Intent, Match, MatchClock, MatchState, ManagerCommand, PerceptionSnapshot, PitchBounds, Player, Position, Velocity};
+use sim_components::{Match, MatchClock, MatchState, ManagerCommand, PerceptionSnapshot, PitchBounds, Player, Position, Velocity};
 use sim_math::{DeterministicRng, PitchDimensions, Vec2};
 use sim_physics::ball_physics_system;
 use serde::{Serialize, Deserialize};
@@ -35,6 +35,9 @@ impl Simulation {
         // pitch as a resource so the registered ball physics system can resolve
         // its `Res<PitchDimensions>` parameter.
         world.insert_resource(PitchDimensions::standard());
+        // Phase 2: insert the pitch control grid resource so the
+        // pitch_control_system (registered below) can mutate it in place.
+        world.insert_resource(sim_physics::PitchControlGrid::build_standard());
 
         let mut schedule = Schedule::default();
         let rng = DeterministicRng::new(seed);
@@ -67,10 +70,11 @@ impl Simulation {
         use sim_ai_player::{
             perception_system, player_action_execution_system, player_decision_system,
         };
-        use sim_physics::player_movement_system;
+        use sim_physics::{pitch_control_system, player_movement_system};
         schedule.add_systems(
             (
                 perception_system.in_set(SimulationSet::Perception),
+                pitch_control_system.in_set(SimulationSet::Perception),
                 player_decision_system.in_set(SimulationSet::Decision),
                 player_action_execution_system.in_set(SimulationSet::Execution),
                 player_movement_system.in_set(SimulationSet::Physics),
@@ -265,6 +269,7 @@ impl Simulation {
             // readers always have a valid snapshot without needing it to also
             // be a Component (which is out of scope for Phase 1).
             let default_snapshot = PerceptionSnapshot {
+                self_position: pos,
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
                 ball_position: Vec2::new(52.5, 34.0),
@@ -285,9 +290,14 @@ impl Simulation {
                 skill: 0.7,
                 intent: None,
                 perception: Some(default_snapshot),
+                score_differential: 0,
+                time_remaining: 90.0,
+                team_possession: 0.5,
+                mentality_modifier: 0.0,
             });
             world.entity_mut(player_entity).insert(Position(pos));
             world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
+            world.entity_mut(player_entity).insert(default_utility_brain());
             home_players.push(player_entity);
         }
 
@@ -309,6 +319,7 @@ impl Simulation {
             let player_entity = world.spawn(()).id();
             let pos = Vec2::new(95.0 - (i as f32 * 8.0), 34.0);
             let default_snapshot = PerceptionSnapshot {
+                self_position: pos,
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
                 ball_position: Vec2::new(52.5, 34.0),
@@ -329,9 +340,14 @@ impl Simulation {
                 skill: 0.7,
                 intent: None,
                 perception: Some(default_snapshot),
+                score_differential: 0,
+                time_remaining: 90.0,
+                team_possession: 0.5,
+                mentality_modifier: 0.0,
             });
             world.entity_mut(player_entity).insert(Position(pos));
             world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
+            world.entity_mut(player_entity).insert(default_utility_brain());
             away_players.push(player_entity);
         }
 
@@ -468,6 +484,11 @@ impl Simulation {
         let mut player_views = Vec::new();
         for entity in self.world.iter_entities() {
             if let Some(player) = entity.get::<sim_components::Player>() {
+                let bp = player
+                    .perception
+                    .as_ref()
+                    .map(|p| [p.ball_position.x, p.ball_position.y])
+                    .unwrap_or([0.0, 0.0]);
                 player_views.push(PlayerView {
                     entity_id: entity.id().to_bits(),
                     team_id: player.team_id,
@@ -476,6 +497,7 @@ impl Simulation {
                     stamina: player.stamina,
                     role: player.role,
                     skill: player.skill,
+                    perception_ball_position: bp,
                 });
             }
         }
@@ -534,6 +556,10 @@ pub struct PlayerView {
     pub stamina: f32,
     pub role: sim_components::Role,
     pub skill: f32,
+    /// Phase 2: ball position as observed by this player's perception
+    /// snapshot. Used by external observers / replays to verify the
+    /// perception system is populating per-player ball position correctly.
+    pub perception_ball_position: [f32; 2],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -783,6 +809,210 @@ struct HalfTimeEntryTick {
     tick: Option<u64>,
 }
 
+/// Phase 2: build the default UtilityBrain used by every player at match
+/// start. Mirrors the §4a consideration list — MoveToPosition, ChaseBall,
+/// PassTo, ShootAtGoal, Tackle, MarkOpponent, Press, SupportRun,
+/// HoldPosition. Curves are tuned for the standard 105×68 pitch (midpoints
+/// are real metres, not normalised). evaluation_interval = 6 (per spec §13
+/// decision #15: ~10 Hz decision cadence). Hysteresis bonus = 0.1.
+fn default_utility_brain() -> sim_ai_player::UtilityBrain {
+    use sim_ai_core::ResponseCurve;
+    use sim_ai_player::{PlayerAction, PlayerConsideration};
+    use sim_components::Intent;
+
+    fn lin(min: f32, max: f32) -> ResponseCurve {
+        ResponseCurve::Linear { min, max }
+    }
+    fn log(mid: f32, steep: f32) -> ResponseCurve {
+        ResponseCurve::Logistic {
+            midpoint: mid,
+            steepness: steep,
+        }
+    }
+    fn step(threshold: f32, below: f32, above: f32) -> ResponseCurve {
+        ResponseCurve::Step {
+            threshold,
+            below,
+            above,
+        }
+    }
+
+    let actions = vec![
+        // MoveToPosition — distance_to_target: closer = better.
+        PlayerAction {
+            intent: Intent::MoveToPosition(Vec2::new(52.5, 34.0)),
+            considerations: vec![PlayerConsideration {
+                name: "distance_to_target".to_string(),
+                weight: 1.0,
+                curve: lin(0.0, 30.0),
+            }],
+        },
+        // ChaseBall — distance_to_ball, stamina, pitch control at ball.
+        PlayerAction {
+            intent: Intent::ChaseBall,
+            considerations: vec![
+                PlayerConsideration {
+                    name: "distance_to_ball".to_string(),
+                    weight: 0.6,
+                    // Step: score 0.8 if within 35 m (chasable range),
+                    // 0.2 beyond. Far players still find ChaseBall
+                    // marginally attractive (so they don't lock into
+                    // HoldPosition purely because they're far from the ball).
+                    curve: ResponseCurve::Step {
+                        threshold: 35.0,
+                        below: 0.8,
+                        above: 0.2,
+                    },
+                },
+                PlayerConsideration {
+                    name: "stamina".to_string(),
+                    weight: 0.4,
+                    curve: lin(0.0, 1.0),
+                },
+                PlayerConsideration {
+                    name: "pitch_control_at_ball".to_string(),
+                    weight: 0.2,
+                    curve: lin(0.0, 100.0),
+                },
+            ],
+        },
+        // PassTo — open passing lane, reasonable teammate distance, space.
+        PlayerAction {
+            intent: Intent::PassTo(Entity::PLACEHOLDER),
+            considerations: vec![
+                PlayerConsideration {
+                    name: "pass_angle_clear".to_string(),
+                    weight: 0.5,
+                    curve: lin(0.0, 1.0),
+                },
+                PlayerConsideration {
+                    name: "teammate_distance".to_string(),
+                    weight: 0.3,
+                    curve: lin(0.0, 30.0),
+                },
+                PlayerConsideration {
+                    name: "teammate_space".to_string(),
+                    weight: 0.2,
+                    curve: lin(0.0, 20.0),
+                },
+            ],
+        },
+        // ShootAtGoal — distance sweet-spot, angle, low pressure.
+        PlayerAction {
+            intent: Intent::ShootAtGoal(Vec2::new(105.0, 34.0)),
+            considerations: vec![
+                PlayerConsideration {
+                    name: "distance_to_goal".to_string(),
+                    weight: 0.5,
+                    // Closer is better — feed (35 - distance) so Linear gives
+                    // 1.0 inside the box, 0.0 at 35 m+.
+                    curve: lin(0.0, 35.0),
+                },
+                PlayerConsideration {
+                    name: "goal_angle".to_string(),
+                    weight: 0.3,
+                    curve: lin(-1.0, 1.0),
+                },
+                PlayerConsideration {
+                    name: "defender_pressure".to_string(),
+                    weight: 0.2,
+                    curve: ResponseCurve::Step {
+                        threshold: 1.0,
+                        below: 1.0,
+                        above: 0.2,
+                    },
+                },
+            ],
+        },
+        // Tackle — close + skill advantage.
+        PlayerAction {
+            intent: Intent::Tackle(Entity::PLACEHOLDER),
+            considerations: vec![
+                PlayerConsideration {
+                    name: "distance_to_opponent".to_string(),
+                    weight: 0.6,
+                    curve: log(2.0, 1.5),
+                },
+                PlayerConsideration {
+                    name: "skill_diff".to_string(),
+                    weight: 0.4,
+                    curve: lin(-1.0, 1.0),
+                },
+            ],
+        },
+        // MarkOpponent — close to marked, between opponent and own goal.
+        PlayerAction {
+            intent: Intent::MarkOpponent(Entity::PLACEHOLDER),
+            considerations: vec![
+                PlayerConsideration {
+                    name: "distance_to_marked".to_string(),
+                    weight: 0.5,
+                    curve: lin(0.0, 10.0),
+                },
+                PlayerConsideration {
+                    name: "defensive_position".to_string(),
+                    weight: 0.5,
+                    curve: step(0.5, 0.0, 1.0),
+                },
+            ],
+        },
+        // Press — close-range press + stamina.
+        PlayerAction {
+            intent: Intent::Press(Entity::PLACEHOLDER),
+            considerations: vec![
+                PlayerConsideration {
+                    name: "distance_to_press".to_string(),
+                    weight: 0.6,
+                    curve: log(8.0, 0.4),
+                },
+                PlayerConsideration {
+                    name: "stamina".to_string(),
+                    weight: 0.4,
+                    curve: lin(0.0, 1.0),
+                },
+            ],
+        },
+        // SupportRun — open space ahead + teammate on the ball.
+        PlayerAction {
+            intent: Intent::SupportRun,
+            considerations: vec![
+                PlayerConsideration {
+                    name: "space_ahead".to_string(),
+                    weight: 0.6,
+                    curve: lin(0.0, 15.0),
+                },
+                PlayerConsideration {
+                    name: "teammate_ball".to_string(),
+                    weight: 0.4,
+                    curve: step(0.5, 0.0, 1.0),
+                },
+            ],
+        },
+        // HoldPosition — formation discipline baseline. The score is intentionally
+        // below the cap so it only wins when no other action has strong
+        // positive signal — i.e. when the player has nothing better to do.
+        PlayerAction {
+            intent: Intent::HoldPosition,
+            considerations: vec![PlayerConsideration {
+                name: "formation_discipline".to_string(),
+                weight: 1.0,
+                // Step: 0.5 always (a "default" score, not a "best").
+                curve: ResponseCurve::Step {
+                    threshold: -1.0,
+                    below: 0.5,
+                    above: 0.5,
+                },
+            }],
+        },
+    ];
+
+    sim_ai_player::UtilityBrain {
+        actions,
+        hysteresis: 0.05,
+        evaluation_interval: 6,
+    }
+}
+
 /// Phase 1 hardcoded 4-4-2 formation. Sorts players on each team by current
 /// x-coordinate and assigns slot positions from the spec table:
 ///   home (team_id == 0) — GK x=5, defenders y=20 at x={20,35,50,65},
@@ -878,6 +1108,11 @@ fn reset_formation_to_4_4_2(world: &mut World) {
 /// Place a single player at `target`, zero velocity, reset intent to
 /// `HoldPosition`. Mirrors the Position into Player.position so any system
 /// that reads the player component sees the same value.
+///
+/// Phase 2: leave intent as `None` so the player's first decision cycle
+/// isn't dominated by a hysteresis bonus on HoldPosition. The
+/// `player_decision_system` will set the first real intent on its cadence
+/// tick.
 fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2) {
     if let Some(mut pos) = world.entity_mut(player_entity).get_mut::<Position>() {
         pos.0 = target;
@@ -888,7 +1123,7 @@ fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2) {
     if let Some(mut p) = world.entity_mut(player_entity).get_mut::<Player>() {
         p.position = target;
         p.velocity = Vec2::zero();
-        p.intent = Some(Intent::HoldPosition);
+        p.intent = None;
     }
 }
 

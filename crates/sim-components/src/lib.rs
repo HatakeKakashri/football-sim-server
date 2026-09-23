@@ -69,6 +69,7 @@ pub enum Intent {
 
 #[derive(Debug, Clone)]
 pub struct PerceptionSnapshot {
+    pub self_position: Vec2,
     pub nearby_teammates: smallvec::SmallVec<[NearbyEntity; 8]>,
     pub nearby_opponents: smallvec::SmallVec<[NearbyEntity; 8]>,
     pub ball_position: Vec2,
@@ -142,6 +143,32 @@ pub struct Player {
     pub skill: f32,
     pub intent: Option<Intent>,
     pub perception: Option<PerceptionSnapshot>,
+    // Phase 2: match-context fields written by the perception system each
+    // tick so that downstream decisions can reason about score state, clock,
+    // possession share, and tactical mentality without re-querying the world.
+    pub score_differential: i8,
+    pub time_remaining: f32,
+    pub team_possession: f32,
+    pub mentality_modifier: f32,
+}
+
+impl Default for Player {
+    fn default() -> Self {
+        Self {
+            team_id: TeamId(0),
+            position: Vec2::zero(),
+            velocity: Vec2::zero(),
+            stamina: 1.0,
+            role: Role::CentralMidfielder,
+            skill: 0.5,
+            intent: None,
+            perception: None,
+            score_differential: 0,
+            time_remaining: 90.0,
+            team_possession: 0.5,
+            mentality_modifier: 0.0,
+        }
+    }
 }
 
 #[derive(Component, Debug, Clone)]

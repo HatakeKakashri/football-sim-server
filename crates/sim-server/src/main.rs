@@ -95,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let effective_ticks = if full_match { 324000 } else { ticks };
 
-            println!("Running simulation with seed {}, {} ticks...", seed, effective_ticks);
+            println!("Running simulation with seed {seed}, {effective_ticks} ticks...");
             let start = Instant::now();
             for _ in 0..effective_ticks {
                 sim.tick(1.0 / 60.0);
@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let json = serde_json::to_string_pretty(&state)?;
                 let mut file = File::create(&output_path)?;
                 file.write_all(json.as_bytes())?;
-                println!("Final state written to {}", output_path);
+                println!("Final state written to {output_path}");
             }
 
             // Phase 0 CLI contract: a deterministic run is reproducible iff
@@ -150,7 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (cmd_tick, cmd) = &sorted_commands[next_command_index];
                     if *cmd_tick == tick {
                         if let Err(e) = sim.apply_command(match_entity, cmd.clone()) {
-                            eprintln!("Warning: command at tick {} failed: {}", tick, e);
+                            eprintln!("Warning: command at tick {tick} failed: {e}");
                         }
                         next_command_index += 1;
                     } else {
@@ -171,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let json = serde_json::to_string_pretty(&state)?;
                 let mut file = File::create(&output_path)?;
                 file.write_all(json.as_bytes())?;
-                println!("Final state written to {}", output_path);
+                println!("Final state written to {output_path}");
             }
         }
 
@@ -209,9 +209,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Output the final state
             let state = sim.get_state(match_entity)?;
             let json = serde_json::to_string_pretty(&state)?;
-            let mut output_file = File::create(format!("recovered_{}.json", match_id))?;
+            let mut output_file = File::create(format!("recovered_{match_id}.json"))?;
             output_file.write_all(json.as_bytes())?;
-            println!("Recovered state written to recovered_{}.json", match_id);
+            println!("Recovered state written to recovered_{match_id}.json");
         }
 
         Commands::Benchmark {
@@ -222,7 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut sim = Simulation::new(seed);
             let _match_entity = sim.match_entity;
 
-            println!("Benchmarking simulation with seed {}, {} ticks...", seed, ticks);
+            println!("Benchmarking simulation with seed {seed}, {ticks} ticks...");
             let start = Instant::now();
             for _ in 0..ticks {
                 sim.tick(1.0 / 60.0);
@@ -232,8 +232,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ticks_per_sec = ticks as f64 / duration.as_secs_f64();
 
             println!(
-                "Benchmark completed: {:.2}ms per tick, {:.2} ticks/sec",
-                tick_time_ms, ticks_per_sec
+                "Benchmark completed: {tick_time_ms:.2}ms per tick, {ticks_per_sec:.2} ticks/sec"
             );
 
             if let Some(output_path) = output {
@@ -246,7 +245,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
                 let mut file = File::create(&output_path)?;
                 file.write_all(serde_json::to_string_pretty(&benchmark_result)?.as_bytes())?;
-                println!("Benchmark results written to {}", output_path);
+                println!("Benchmark results written to {output_path}");
             }
         }
     }

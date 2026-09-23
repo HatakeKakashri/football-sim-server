@@ -16,6 +16,7 @@ pub struct ServerSimulation {
 }
 
 impl ServerSimulation {
+    #[must_use]
     pub fn new(seed: u64) -> Self {
         Self {
             simulation: Simulation::new(seed),
@@ -112,7 +113,7 @@ impl ServerSimulation {
             ManagerCommand::Substitute { out, substitute } => {
                 // Implement substitution logic
                 // For now, just log it
-                println!("Substitution: {:?} -> {:?}", out, substitute);
+                println!("Substitution: {out:?} -> {substitute:?}");
             }
             ManagerCommand::ChangeMentality(mentality) => {
                 // Update team mentality
@@ -125,7 +126,7 @@ impl ServerSimulation {
             }
             ManagerCommand::SetTactic(tactic) => {
                 // Store tactic somewhere (for now, just log)
-                println!("Tactic set: {:?}", tactic);
+                println!("Tactic set: {tactic:?}");
             }
         }
         
@@ -165,8 +166,15 @@ pub struct QueuedCommand {
     pub tick: u64,
 }
 
+impl Default for CommandQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommandQueue {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             commands: Vec::new(),
         }

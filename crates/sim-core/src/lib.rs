@@ -11,11 +11,11 @@ pub const MAX_ACCUMULATOR: f32 = 0.25;
 pub enum SimulationSet {
     Perception,
     Decision,
-    Intent,
     Execution,
     Physics,
+    Possession,
     Rules,
-    Referee,
+    MatchAdmin,
 }
 
 pub struct Simulation {
@@ -47,11 +47,11 @@ impl Simulation {
             (
                 SimulationSet::Perception,
                 SimulationSet::Decision,
-                SimulationSet::Intent,
                 SimulationSet::Execution,
                 SimulationSet::Physics,
+                SimulationSet::Possession,
                 SimulationSet::Rules,
-                SimulationSet::Referee,
+                SimulationSet::MatchAdmin,
             )
                 .chain(),
         );
@@ -71,35 +71,25 @@ impl Simulation {
             perception_system, player_action_execution_system, player_decision_system,
         };
         use sim_physics::{pitch_control_system, player_movement_system};
-        schedule.add_systems(
-            (
-                perception_system.in_set(SimulationSet::Perception),
-                pitch_control_system.in_set(SimulationSet::Perception),
-                player_decision_system.in_set(SimulationSet::Decision),
-                player_action_execution_system.in_set(SimulationSet::Execution),
-                player_movement_system.in_set(SimulationSet::Physics),
-            )
-                .chain(),
-        );
-
-        // Phase 3: register referee rule engine systems.
-        // These run AFTER Physics (Rules set already runs after Physics per Phase 1 ordering).
-        // Systems are .chain()'d to enforce ordering: goal_detection → out_of_bounds → restart
-        // so that goal events take precedence over OOB at the goal line.
-        //
-        // possession_resolution_system runs in SimulationSet::Rules BEFORE
-        // goal/out-of-bounds so that Ball.possessor is up-to-date when
-        // those systems read it (e.g. for last-touch tracking).
         use sim_rules::{
-            goal_detection_system, out_of_bounds_system, possession_resolution_system,
-            restart_system,
+            added_time_calculation_system, goal_detection_system, minimum_player_count_system,
+            out_of_bounds_system, possession_resolution_system, restart_system,
         };
-        schedule.add_systems((
-            possession_resolution_system.in_set(SimulationSet::Rules),
-            goal_detection_system.in_set(SimulationSet::Rules),
-            out_of_bounds_system.in_set(SimulationSet::Rules),
-            restart_system.in_set(SimulationSet::Rules),
-        ).chain());
+        schedule
+            // Perception
+            .add_systems((pitch_control_system, perception_system).chain().in_set(SimulationSet::Perception))
+            // Decision (no time-slicing)
+            .add_systems(player_decision_system.in_set(SimulationSet::Decision).after(SimulationSet::Perception))
+            // Execution
+            .add_systems(player_action_execution_system.in_set(SimulationSet::Execution).after(SimulationSet::Decision))
+            // Physics
+            .add_systems((ball_physics_system, player_movement_system).chain().in_set(SimulationSet::Physics).after(SimulationSet::Execution))
+            // Possession
+            .add_systems(possession_resolution_system.in_set(SimulationSet::Possession).after(SimulationSet::Physics))
+            // Rules (explicitly chained)
+            .add_systems((out_of_bounds_system, goal_detection_system, restart_system).chain().in_set(SimulationSet::Rules).after(SimulationSet::Possession))
+            // MatchAdmin
+            .add_systems((added_time_calculation_system, minimum_player_count_system).chain().in_set(SimulationSet::MatchAdmin).after(SimulationSet::Rules));
 
         // Create match + home team; resolve ball entity for later use by the
         // lifecycle system and clock advancement.
@@ -813,6 +803,34 @@ fn lifecycle_system(
             }
         }
 
+        // Sync Player.position/velocity from the Position/Velocity components.
+        // player_movement_system (in sim-physics) is the canonical owner of
+        // player physics integration but does not touch the Player struct
+        // snapshot fields; we sync them here once per tick to keep the
+        // snapshot honest, mirroring the Ball sync above.
+        //
+        // Collect (Entity, Vec2, Vec2) triples first so we release the
+        // immutable iter_entities() borrow before taking any mutable borrows.
+        let player_syncs: Vec<(Entity, Vec2, Vec2)> = world
+            .iter_entities()
+            .filter_map(|e| {
+                if e.get::<Player>().is_some() {
+                    let pos = e.get::<Position>().map(|p| p.0);
+                    let vel = e.get::<Velocity>().map(|v| v.0);
+                    if let (Some(pos), Some(vel)) = (pos, vel) {
+                        return Some((e.id(), pos, vel));
+                    }
+                }
+                None
+            })
+            .collect();
+        for (entity_id, pos, vel) in player_syncs {
+            if let Some(mut p) = world.entity_mut(entity_id).get_mut::<Player>() {
+                p.position = pos;
+                p.velocity = vel;
+            }
+        }
+
         // Reset 4-4-2 formation whenever we enter Kickoff.
         if next_state == MatchState::Kickoff && current_state != MatchState::Kickoff {
             reset_formation_to_4_4_2(world);
@@ -1039,7 +1057,6 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
     sim_ai_player::UtilityBrain {
         actions,
         hysteresis: 0.05,
-        evaluation_interval: 6,
     }
 }
 
@@ -1441,6 +1458,58 @@ mod tests {
         assert!(
             observed_low_elapsed_in_half_2,
             "clock did not reset toward 0 after half-time"
+        );
+    }
+
+    /// Regression test: exported player positions via `get_state()` must differ
+    /// from kickoff positions after physics has run for several ticks.
+    ///
+    /// Before the Player-position sync was added to `lifecycle_system`,
+    /// `get_state()` read `Player.position` which was never updated after
+    /// `create_match` — the physics systems only mutates the `Position`
+    /// component. This caused all 22 players to appear frozen at their kickoff
+    /// coordinates in any exported state (JSON snapshot, replay, etc.) while the
+    /// actual simulation physics was running against the `Position` component.
+    #[test]
+    fn test_player_positions_update_in_exported_state() {
+        let mut sim = Simulation::new(99);
+        let me = sim.match_entity;
+
+        // Let the kickoff impulse settle (kickoff → InPlay on tick 0).
+        sim.tick(1.0 / 60.0);
+
+        let kickoff_positions: Vec<[f32; 2]> = sim
+            .get_state(me)
+            .expect("get_state works")
+            .players
+            .iter()
+            .map(|p| p.position)
+            .collect();
+
+        // Advance several ticks so player movement physics accumulates.
+        for _ in 0..120 {
+            sim.tick(1.0 / 60.0);
+        }
+
+        let after_positions: Vec<[f32; 2]> = sim
+            .get_state(me)
+            .expect("get_state works")
+            .players
+            .iter()
+            .map(|p| p.position)
+            .collect();
+
+        // At least one player's exported position must have changed.
+        let any_moved = after_positions
+            .iter()
+            .zip(kickoff_positions.iter())
+            .any(|(after, kickoff)| (after[0] - kickoff[0]).abs() > 0.001 || (after[1] - kickoff[1]).abs() > 0.001);
+
+        assert!(
+            any_moved,
+            "No player's exported position changed after 120 ticks. \
+             Player.position may not be synced from the Position component. \
+             Kickoff positions: {kickoff_positions:?}"
         );
     }
 }

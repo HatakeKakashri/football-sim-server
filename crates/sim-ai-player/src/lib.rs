@@ -8,7 +8,6 @@ use sim_ai_core::{ResponseCurve, geometric_mean};
 pub struct UtilityBrain {
     pub actions: Vec<PlayerAction>,
     pub hysteresis: f32,
-    pub evaluation_interval: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -188,41 +187,17 @@ pub fn consideration_scoring_system(_query: Query<(&mut Player, &Stamina, &Skill
 /// Phase 2: replace the stub with real per-player Utility AI scoring.
 ///
 /// For each player with a `UtilityBrain`:
-/// 1. Apply the per-player time-slicing stagger (`tick % eval_interval !=
-///    entity_bits % eval_interval` skips this player).
-/// 2. For every action in the brain, evaluate each consideration's raw input
+/// 1. For every action in the brain, evaluate each consideration's raw input
 ///    from the player's perception snapshot, feed it through the
 ///    `ResponseCurve`, weight-blend via `geometric_mean`.
-/// 3. Pick the highest-scoring action; add the `hysteresis` bonus if it
+/// 2. Pick the highest-scoring action; add the `hysteresis` bonus if it
 ///    matches the player's currently-active intent.
-/// 4. Commit the new intent to the Player.
+/// 3. Commit the new intent to the Player.
 pub fn player_decision_system(
-    mut query: Query<(&mut Player, &UtilityBrain, Entity)>,
-    match_query: Query<&sim_components::Match>,
+    mut query: Query<(&mut Player, &UtilityBrain)>,
     pitch_control: Option<Res<PitchControlGrid>>,
 ) {
-    // Derive the current tick from the match clock (60 Hz). At tick 0 the
-    // clock is 0.0, which is fine — the stagger formula uses modulo so tick
-    // 0 still resolves to a deterministic bucket.
-    let tick = match_query
-        .iter()
-        .next()
-        .map(|m| (m.clock.elapsed / (1.0 / 60.0)) as u64)
-        .unwrap_or(0);
-
-    for (mut player, utility_brain, entity) in query.iter_mut() {
-        let interval = utility_brain.evaluation_interval.max(1);
-        // Time-slicing stagger: each entity gets evaluated every `interval`
-        // ticks, offset by `entity.to_bits() % interval`. This spreads the
-        // full-roster cost across the cadence.
-        let entity_offset = entity.to_bits() % interval;
-        if tick % interval != entity_offset {
-            // Not this player's evaluation tick — leave the existing intent
-            // alone. We deliberately do NOT set a fallback intent here so
-            // that the first real decision is unhindered by hysteresis.
-            continue;
-        }
-
+    for (mut player, utility_brain) in query.iter_mut() {
         // Need a perception snapshot to score considerations.
         let Some(perception) = player.perception.clone() else {
             // No perception yet (first tick after spawn): keep intent as-is
@@ -662,9 +637,6 @@ mod tests {
                 considerations: vec![],
             }],
             hysteresis: 0.1,
-            // evaluation_interval = 1 → evaluate every tick so the test
-            // doesn't depend on the player's entity id modulo interval.
-            evaluation_interval: 1,
         };
         world.entity_mut(player_entity).insert(utility_brain);
 
@@ -692,7 +664,6 @@ mod tests {
         schedule.add_systems(consideration_scoring_system);
         schedule.add_systems(player_decision_system);
 
-        // Phase 2: decision_system needs a Match entity to compute tick.
         let _match_entity = world.spawn(()).id();
         world.entity_mut(_match_entity).insert(sim_components::Match {
             id: 1,
@@ -765,7 +736,6 @@ mod tests {
                 considerations: vec![],
             }],
             hysteresis: 0.1,
-            evaluation_interval: 1,
         };
         world.entity_mut(player_entity).insert(utility_brain);
 
@@ -873,22 +843,15 @@ mod tests {
         });
         
         // Create utility brain with tackle action. Phase 2 decision cadence is
-        // gated on `tick % evaluation_interval == entity_offset`; with
-        // evaluation_interval = 1 every tick evaluates every player, so
-        // the test doesn't depend on the player's entity id modulo 10.
         let utility_brain = UtilityBrain {
             actions: vec![PlayerAction {
                 intent: sim_components::Intent::Tackle(attacker_entity),
                 considerations: vec![],
             }],
             hysteresis: 0.1,
-            evaluation_interval: 1,
         };
         world.entity_mut(defender_entity).insert(utility_brain);
 
-        // Phase 2: player_decision_system queries for `Match` to derive the
-        // tick counter, so the test needs a match entity for the system to
-        // do anything.
         let _match_entity = world.spawn(()).id();
         world.entity_mut(_match_entity).insert(sim_components::Match {
             id: 1,
@@ -955,7 +918,6 @@ mod tests {
                     }],
                 }],
             hysteresis: 0.1,
-            evaluation_interval: 6,
         };
         world.entity_mut(player_entity).insert(brain);
 

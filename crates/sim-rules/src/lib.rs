@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallOutOfBoundsType, BallState, Match, Position, RuleEvent, Skill, TeamIdComponent, TeamId, Velocity};
+use sim_components::{Ball, BallOutOfBoundsType, BallState, Match, Player, Position, RuleEvent, Skill, TeamIdComponent, TeamId, Velocity};
 use sim_math::Vec2;
 
 /// Phase 3: Tick counter resource for referee systems.
@@ -447,7 +447,7 @@ pub fn foul_detection_system(
 ///   on `BallState::Free`) so that the last toucher is always current.
 pub fn possession_resolution_system(
     mut ball_query: Query<(&Position, &mut Ball)>,
-    player_query: Query<(Entity, &Position, &Skill)>,
+    player_query: Query<(Entity, &Player, &Position, &Skill), With<Player>>,
 ) {
     for (ball_pos, mut ball) in ball_query.iter_mut() {
         // --- Last-touch tracking (Law 11) ---
@@ -455,7 +455,7 @@ pub fn possession_resolution_system(
         // touched it. We update unconditionally so `last_touched_by`
         // always reflects the most recent toucher.
         let mut last_toucher: Option<(Entity, f32)> = None;
-        for (player_entity, player_pos, _skill) in player_query.iter() {
+        for (player_entity, _player, player_pos, _skill) in player_query.iter() {
             let dist = ball_pos.0.distance(player_pos.0);
             if dist <= 1.0 {
                 match last_toucher {
@@ -484,7 +484,7 @@ pub fn possession_resolution_system(
 
         let mut closest_player: Option<(Entity, f32, f32)> = None;
 
-        for (player_entity, player_pos, skill) in player_query.iter() {
+        for (player_entity, _player, player_pos, skill) in player_query.iter() {
             let distance = ball_pos.0.distance(player_pos.0);
             if distance < 1.5 {
                 if let Some((_, best_dist, best_skill)) = closest_player {

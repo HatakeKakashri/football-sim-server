@@ -185,15 +185,15 @@
 
 ### Implementation
 
-- [X] T074 [P] Implement offside detection in sim-rules (Law 11)
+- [ ] T074 [P] Implement offside detection in sim-rules (Law 11) — stub wired but Phase 1 only (active offside, no passive)
 - [X] T075 [P] Implement out-of-bounds detection in sim-rules (Law 9)
 - [X] T076 [P] Implement goal detection in sim-rules (Law 10)
-- [X] T077 [P] Implement foul detection and card system in sim-rules (Law 12)
-- [X] T078 Implement referee advantage decision in sim-referee
-- [X] T079 Implement added time calculation in sim-referee (Law 7)
-- [X] T080 Implement match duration enforcement in sim-referee (90 minutes + added time)
-- [X] T081 Implement minimum player count enforcement in sim-referee (Law 3: minimum 7 players)
-- [X] T082 [P] Implement possession resolution in sim-rules (first contact wins; skill difference > 0.1 wins contested) (implements product-team resolution of authoritative Open item #17)
+- [~] T077 [P] Implement foul detection and card system in sim-rules (Law 12) — Phase 1 basic stub
+- [ ] T078 [P] Implement referee advantage decision in sim-referee — sim-referee crate deleted
+- [ ] T079 [P] Implement added time calculation in sim-rules (Law 7) — moved to sim-rules
+- [ ] T080 [P] Implement match duration enforcement in sim-rules (90 minutes + added time) — moved to sim-rules
+- [ ] T081 [P] Implement minimum player count enforcement in sim-rules (Law 3: minimum 7 players) — moved to sim-rules
+- [~] T082 [P] Implement possession resolution in sim-rules (first contact wins; skill difference > 0.1 wins contested) — Entity::PLACEHOLDER bug in get_target() call
 - [X] T083 Integrate referee system into sim-core schedule (after physics, before next tick)
 
 ---
@@ -205,12 +205,12 @@
 ### Implementation
 
 - [X] T084 [P] Implement MatchSnapshot serialization in sim-replay per contracts/state-snapshot.md
-- [X] T085 [P] Implement BallSnapshot serialization in sim-replay per contracts/state-snapshot.md
+- [~] T085 [P] Implement BallSnapshot serialization in sim-replay per contracts/state-snapshot.md — Entity::PLACEHOLDER bug
 - [X] T086 [P] Implement PlayerSnapshot serialization in sim-replay per contracts/state-snapshot.md
 - [X] T087 Implement snapshot saving at configurable intervals (default: 100 ticks) in sim-replay
-- [X] T088 Implement snapshot loading and state restoration in sim-replay
-- [X] T089 Implement state hash verification on recovery in sim-replay
-- [X] T090 Add recovery test: restore from snapshot within 5 seconds of last saved state
+- [~] T088 Implement snapshot loading and state restoration in sim-replay — Recover command broken
+- [~] T089 Implement state hash verification on recovery in sim-replay — depends on T088 fix
+- [~] T090 Add recovery test: restore from snapshot within 5 seconds of last saved state — depends on T088 fix
 
 ---
 
@@ -241,7 +241,7 @@
 - [X] T102 [P] Add determinism lint/test for RNG-consuming queries (stable EntityId sorting)
 - [X] T103 Run full test suite and verify all success criteria
 - [X] T104 [P] Add same-tick pipeline isolation validation test: verify no system observes uncommitted writes from another system in the same pipeline stage (per FR-005, Constitution Principle III)
-- [ ] T105 Implement PitchControlGrid resource + sigmoid dominance scoring (per data-model.md; authoritative spec §6, decision #14)
+- [X] T105 Implement PitchControlGrid resource + sigmoid dominance scoring (per data-model.md; authoritative spec §6, decision #14)
 - [ ] T106 Integrate pitch-control recompute into the decoupled decision cadence (not the 60 Hz physics tick)
 - [ ] T107 Regression test: both teams evaluate against the same freshly-computed grid in the same tick window (no team-partitioned staggering)
 

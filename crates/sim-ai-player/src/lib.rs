@@ -1,8 +1,9 @@
 use bevy_ecs::prelude::*;
+use rand::Rng;
 use sim_ai_core::{ResponseCurve, geometric_mean};
 use sim_components::{Ball, BallState, Intent, Player, Position, Skill, Stamina, Velocity};
 use sim_math::Vec2;
-use sim_physics::PitchControlGrid;
+use sim_physics::{PitchControlGrid, SimRng};
 
 #[derive(Component, Debug, Clone)]
 pub struct UtilityBrain {
@@ -509,7 +510,10 @@ fn compute_consideration_input(
     }
 }
 
-pub fn player_action_execution_system(mut query: Query<(&mut Player, &mut Velocity)>) {
+pub fn player_action_execution_system(
+    mut query: Query<(&mut Player, &mut Velocity)>,
+    mut rng: ResMut<SimRng>,
+) {
     // Phase 2: real steering for every action. Each arm turns the abstract
     // intent into a constant-velocity steer toward (or away from) the
     // relevant world point. Acceleration is intentionally ignored — Phase 2
@@ -523,15 +527,86 @@ pub fn player_action_execution_system(mut query: Query<(&mut Player, &mut Veloci
     // Also mirrors the new velocity back into `Player.velocity` so the
     // snapshot/PlayerView readers (which read from the Player struct, not
     // the Position/Velocity components) see fresh values.
+    //
+    // Phase 3: stochastic outcomes for tackles, passes, and shots using RNG.
     for (mut player, mut velocity) in query.iter_mut() {
         let Some(intent) = player.intent.clone() else {
             velocity.0 = Vec2::zero();
             player.velocity = Vec2::zero();
             continue;
         };
+
+        // Apply stochastic modifiers based on action type
+        let mut speed_modifier = 1.0;
+        let mut direction_modifier = Vec2::zero();
+
+        match &intent {
+            Intent::Tackle(target) => {
+                // Tackle resolution: higher skill = higher success probability
+                // Roll against skill-based probability
+                let tackle_success_prob = player.skill.clamp(0.3, 0.9);
+                let roll: f32 = rng.0.r#gen();
+                if roll > tackle_success_prob {
+                    // Tackle fails - player stumbles, moves slower
+                    speed_modifier = 0.3;
+                    println!(
+                        "Tackle attempt failed (roll {:.2} > prob {:.2})",
+                        roll, tackle_success_prob
+                    );
+                }
+                // Store target for potential later use
+                let _ = target;
+            }
+            Intent::PassTo(target) => {
+                // Pass completion: probability based on distance and skill
+                let pass_distance = player.position.distance(
+                    player.perception.as_ref()
+                        .and_then(|p| Some(p.nearby_teammates.iter()
+                            .find(|t| t.entity == *target)
+                            .map(|t| t.relative_position + player.position)))
+                        .flatten()
+                        .unwrap_or(player.position)
+                );
+                // Longer passes = lower completion probability
+                let pass_prob = (1.0 - (pass_distance / 50.0).min(0.8)) * player.skill;
+                let roll: f32 = rng.0.r#gen();
+                if roll > pass_prob {
+                    // Pass goes awry - add random deviation
+                    speed_modifier = 0.7;
+                    direction_modifier = Vec2::new(
+                        rng.0.gen_range(-2.0..2.0),
+                        rng.0.gen_range(-2.0..2.0)
+                    );
+                    println!(
+                        "Pass deviation (roll {:.2} > prob {:.2})",
+                        roll, pass_prob
+                    );
+                }
+                let _ = target;
+            }
+            Intent::ShootAtGoal(_) => {
+                // Shot accuracy: skill and stamina affect accuracy
+                let accuracy = player.skill * (0.5 + 0.5 * player.stamina);
+                let roll: f32 = rng.0.r#gen();
+                if roll > accuracy {
+                    // Shot misses - add deviation
+                    speed_modifier = 0.8;
+                    direction_modifier = Vec2::new(
+                        rng.0.gen_range(-3.0..3.0),
+                        rng.0.gen_range(-2.0..2.0)
+                    );
+                    println!(
+                        "Shot miss (roll {:.2} > accuracy {:.2})",
+                        roll, accuracy
+                    );
+                }
+            }
+            _ => {}
+        }
+
         let new_velocity = steer(&player, &intent);
-        velocity.0 = new_velocity;
-        player.velocity = new_velocity;
+        velocity.0 = new_velocity * speed_modifier + direction_modifier;
+        player.velocity = velocity.0;
     }
 }
 

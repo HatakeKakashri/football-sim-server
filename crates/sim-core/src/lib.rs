@@ -43,6 +43,9 @@ impl Simulation {
         // Phase 2: insert the pitch control grid resource so the
         // pitch_control_system (registered below) can mutate it in place.
         world.insert_resource(sim_physics::PitchControlGrid::build_standard());
+        // Phase 3: insert the RNG as a resource for stochastic gameplay outcomes
+        // (tackle resolution, pass completion, shot accuracy).
+        world.insert_resource(sim_physics::SimRng::new(seed));
 
         let mut schedule = Schedule::default();
         let rng = SmallRng::seed_from_u64(seed);
@@ -78,9 +81,11 @@ impl Simulation {
         };
         use sim_physics::{pitch_control_system, player_movement_system};
         use sim_rules::{
-            added_time_calculation_system, goal_detection_system, minimum_player_count_system,
-            out_of_bounds_system, possession_resolution_system, restart_system,
+            added_time_calculation_system, foul_detection_system, goal_detection_system,
+            minimum_player_count_system, offside_detection_system, out_of_bounds_system,
+            possession_resolution_system, restart_system,
         };
+        use sim_ai_manager::{mentality_shift_system, substitution_system};
         schedule
             // Perception
             .add_systems(
@@ -115,14 +120,14 @@ impl Simulation {
             )
             // Rules (explicitly chained)
             .add_systems(
-                (out_of_bounds_system, goal_detection_system, restart_system)
+                (out_of_bounds_system, goal_detection_system, offside_detection_system, foul_detection_system, restart_system)
                     .chain()
                     .in_set(SimulationSet::Rules)
                     .after(SimulationSet::Possession),
             )
             // MatchAdmin
             .add_systems(
-                (added_time_calculation_system, minimum_player_count_system)
+                (added_time_calculation_system, minimum_player_count_system, substitution_system, mentality_shift_system)
                     .chain()
                     .in_set(SimulationSet::MatchAdmin)
                     .after(SimulationSet::Rules),

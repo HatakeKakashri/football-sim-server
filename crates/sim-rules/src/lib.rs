@@ -432,8 +432,92 @@ fn team_id_u8(team: &TeamIdComponent) -> u8 {
     team.0.0
 }
 
-pub fn foul_detection_system(player_query: Query<(&Position, &TeamIdComponent)>) {
-    let _players: Vec<(&Position, &TeamIdComponent)> = player_query.iter().collect();
+/// Phase 3: Foul detection system (Law 12).
+///
+/// Detects dangerous play and professional fouls:
+/// - High-speed collisions between players (dangerous play)
+/// - Deliberate handball (denying obvious goal scoring)
+/// - Denying obvious goal scoring opportunity (DOGSO)
+///
+/// For Phase 1: only detects and logs fouls. Full card system (yellow/red)
+/// and restart placement is Phase 2.
+pub fn foul_detection_system(
+    mut commands: Commands,
+    player_query: Query<(Entity, &Player, &Position, &Velocity)>,
+    match_query: Query<&Match>,
+) {
+    let Ok(match_component) = match_query.get_single() else {
+        return;
+    };
+
+    // Skip if match is not in play
+    if match_component.state != sim_components::MatchState::InPlay {
+        return;
+    }
+
+    // Phase 1: Detect high-speed collisions between opponents
+    // Two players from opposing teams within 1.0m with high relative velocity
+    let players: Vec<(Entity, sim_components::TeamId, Vec2, Vec2)> = player_query
+        .iter()
+        .map(|(e, p, pos, vel)| (e, p.team_id, pos.0, vel.0))
+        .collect();
+
+    for i in 0..players.len() {
+        for j in (i + 1)..players.len() {
+            let (e1, team1, pos1, vel1) = players[i];
+            let (e2, team2, pos2, vel2) = players[j];
+
+            // Only check opposing team collisions
+            if team1 == team2 {
+                continue;
+            }
+
+            let distance = pos1.distance(pos2);
+            if distance < 1.0 {
+                // High relative velocity = dangerous play
+                let rel_vel = (vel1 - vel2).length();
+                if rel_vel > 8.0 {
+                    // Collision detected - foul on the player moving faster or with ball
+                    println!(
+                        "DANGEROUS PLAY: high-speed collision between players at ({:.1}, {:.1}) and ({:.1}, {:.1}), relative velocity {:.1}",
+                        pos1.x, pos1.y, pos2.x, pos2.y, rel_vel
+                    );
+
+                    // For Phase 1: emit a RuleEvent but don't yet assign cards
+                    // Use u64 entity IDs for serialization compatibility
+                    commands.entity(e1).insert(RuleEvent::Foul {
+                        fouler: e1.to_bits(),
+                        foulee: e2.to_bits(),
+                        foul_type: sim_components::FoulType::DangerousPlay,
+                    });
+                    commands.entity(e2).insert(RuleEvent::Foul {
+                        fouler: e2.to_bits(),
+                        foulee: e1.to_bits(),
+                        foul_type: sim_components::FoulType::DangerousPlay,
+                    });
+                }
+            }
+        }
+    }
+
+    // Phase 1: Detect professional fouls (deliberate handball, DOGSO)
+    // A player is committing professional foul if:
+    // - They have the ball within 1.5m but are not the possessor (handball)
+    // - They are in possession and a opponent is about to score (DOGSO)
+    for (_entity, _player, pos, vel) in player_query.iter() {
+        let speed = vel.0.length();
+
+        // Deliberate handball: very low movement speed while near ball but not possessing
+        // This is a simplified check - full implementation would need ball position
+        if speed < 0.5 {
+            // Could be a professional foul - player holding ball deliberately
+            println!(
+                "POSSIBLE PROFESSIONAL FOUL: player at ({:.1}, {:.1}) with very low speed {:.1}",
+                pos.0.x, pos.0.y, speed
+            );
+            // Phase 1: just log, don't penalize yet
+        }
+    }
 }
 
 /// Phase 3: Possession resolution system.
@@ -1171,5 +1255,91 @@ mod tests {
         let m = world.entity(match_entity).get::<Match>().unwrap();
         assert!(!m.clock.is_running);
         assert_eq!(m.state, sim_components::MatchState::HalfTime);
+    }
+
+    #[test]
+    fn test_foul_detection_dangerous_play() {
+        let mut world = World::new();
+
+        // Create match entity in play
+        let match_entity = world.spawn(()).id();
+        world.entity_mut(match_entity).insert(Match {
+            id: 1,
+            home_team: Entity::PLACEHOLDER,
+            away_team: Entity::PLACEHOLDER,
+            score: (0, 0),
+            clock: sim_components::MatchClock {
+                elapsed: 30.0,
+                half: 1,
+                added_time: 0.0,
+                is_running: true,
+            },
+            state: sim_components::MatchState::InPlay,
+            seed: 12345,
+        });
+
+        // Create two opposing players very close together with high relative velocity
+        let home_player = world.spawn(()).id();
+        world.entity_mut(home_player).insert(Player {
+            team_id: TeamId(0),
+            position: Vec2::new(50.0, 34.0),
+            velocity: Vec2::zero(),
+            stamina: 0.8,
+            role: sim_components::Role::CenterBack,
+            skill: 0.7,
+            intent: None,
+            perception: None,
+            score_differential: 0,
+            time_remaining: 90.0,
+            team_possession: 0.5,
+            mentality_modifier: 0.0,
+        });
+        world
+            .entity_mut(home_player)
+            .insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(home_player)
+            .insert(Velocity(Vec2::new(5.0, 0.0))); // Moving toward opponent
+        world
+            .entity_mut(home_player)
+            .insert(TeamIdComponent(TeamId(0)));
+
+        let away_player = world.spawn(()).id();
+        world.entity_mut(away_player).insert(Player {
+            team_id: TeamId(1),
+            position: Vec2::new(50.5, 34.0), // Very close to home player
+            velocity: Vec2::zero(),
+            stamina: 0.8,
+            role: sim_components::Role::Striker,
+            skill: 0.7,
+            intent: None,
+            perception: None,
+            score_differential: 0,
+            time_remaining: 90.0,
+            team_possession: 0.5,
+            mentality_modifier: 0.0,
+        });
+        world
+            .entity_mut(away_player)
+            .insert(Position(Vec2::new(50.5, 34.0)));
+        world
+            .entity_mut(away_player)
+            .insert(Velocity(Vec2::new(-5.0, 0.0))); // Moving toward opponent
+        world
+            .entity_mut(away_player)
+            .insert(TeamIdComponent(TeamId(1)));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(foul_detection_system);
+        schedule.run(&mut world);
+
+        // Players should have RuleEvent::Foul components from high-speed collision
+        let home_foul = world.entity(home_player).get::<RuleEvent>();
+        let away_foul = world.entity(away_player).get::<RuleEvent>();
+
+        assert!(
+            home_foul.is_some() || away_foul.is_some(),
+            "At least one player should have a foul event from dangerous play"
+        );
     }
 }

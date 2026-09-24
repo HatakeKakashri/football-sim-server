@@ -60,6 +60,15 @@ pub enum BallOutOfBoundsType {
     Corner,
 }
 
+/// Phase 3: Foul types (Law 12)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FoulType {
+    DangerousPlay,
+    ProfessionalFoul,
+    Handball,
+    DenyingGoalScoringOpportunity,
+}
+
 /// Phase 3: Rule events emitted by the rules engine.
 /// Used for event streaming, replay recording, and CLI output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Component)]
@@ -72,6 +81,11 @@ pub enum RuleEvent {
     KickoffRestart,
     HalfTimeStart,
     FullTimeStart,
+    Foul {
+        fouler: u64,
+        foulee: u64,
+        foul_type: FoulType,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -264,10 +278,17 @@ pub struct Card {
     pub tick: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CardColor {
     Yellow,
     Red,
+}
+
+/// Team side (home or away) - used to specify which team's manager is acting
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TeamSide {
+    Home,
+    Away,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

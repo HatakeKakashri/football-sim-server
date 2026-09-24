@@ -1,6 +1,19 @@
 use bevy_ecs::prelude::*;
+use rand::{SeedableRng, rngs::SmallRng};
 use sim_components::{Ball, Position, Velocity};
 use sim_math::{PitchDimensions, Vec2};
+
+/// Phase 2: RNG resource wrapper for stochastic gameplay outcomes.
+/// Inserted as a Bevy Resource so systems can access it via `ResMut<SimRng>`.
+/// Wraps SmallRng for speed (Mersenne Twister 19937).
+#[derive(Resource)]
+pub struct SimRng(pub SmallRng);
+
+impl SimRng {
+    pub fn new(seed: u64) -> Self {
+        Self(SmallRng::seed_from_u64(seed))
+    }
+}
 
 pub const MAX_PLAYER_SPEED: f32 = 10.0;
 pub const MAX_BALL_SPEED: f32 = 30.0;

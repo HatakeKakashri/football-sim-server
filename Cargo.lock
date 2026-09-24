@@ -599,6 +599,7 @@ name = "sim-ai-player"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "rand",
  "sim-ai-core",
  "sim-components",
  "sim-math",
@@ -624,6 +625,7 @@ dependencies = [
  "rand",
  "serde",
  "sim-ai-core",
+ "sim-ai-manager",
  "sim-ai-player",
  "sim-components",
  "sim-math",
@@ -644,6 +646,7 @@ name = "sim-physics"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "rand",
  "sim-components",
  "sim-math",
 ]

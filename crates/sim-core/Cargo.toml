@@ -10,6 +10,7 @@ sim-physics = { path = "../sim-physics" }
 sim-rules = { path = "../sim-rules" }
 sim-ai-player = { path = "../sim-ai-player" }
 sim-ai-core = { path = "../sim-ai-core" }
+sim-ai-manager = { path = "../sim-ai-manager" }
 bevy_ecs.workspace = true
 serde.workspace = true
 smallvec.workspace = true

@@ -7,6 +7,7 @@ edition.workspace = true
 sim-math = { path = "../sim-math" }
 sim-components = { path = "../sim-components" }
 bevy_ecs.workspace = true
+rand.workspace = true
 
 [lints]
 workspace = true

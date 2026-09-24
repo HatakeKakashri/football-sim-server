@@ -16,6 +16,8 @@ pub enum CommandError {
 pub struct ServerSimulation {
     pub simulation: Simulation,
     pub command_queue: CommandQueue,
+    /// The team side of the active manager (controls which team receives commands)
+    pub active_manager_side: sim_components::TeamSide,
 }
 
 impl ServerSimulation {
@@ -24,6 +26,7 @@ impl ServerSimulation {
         Self {
             simulation: Simulation::new(seed),
             command_queue: CommandQueue::new(),
+            active_manager_side: sim_components::TeamSide::Home,
         }
     }
 
@@ -115,22 +118,25 @@ impl ServerSimulation {
     fn apply_command_immediately(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
         let match_entity = self.get_match_entity()?;
 
+        let match_component = self
+            .simulation
+            .world
+            .entity(match_entity)
+            .get::<sim_components::Match>()
+            .unwrap();
+
+        // Determine which team to update based on active_manager_side
+        let team_to_update = match self.active_manager_side {
+            sim_components::TeamSide::Home => match_component.home_team,
+            sim_components::TeamSide::Away => match_component.away_team,
+        };
+
         match command {
             ManagerCommand::ChangeFormation(formation) => {
-                // Update team formation
-                let match_component = self
-                    .simulation
-                    .world
-                    .entity(match_entity)
-                    .get::<sim_components::Match>()
-                    .unwrap();
-                let home_team = match_component.home_team;
-
-                // For simplicity, apply to home team
                 if let Some(mut team) = self
                     .simulation
                     .world
-                    .entity_mut(home_team)
+                    .entity_mut(team_to_update)
                     .get_mut::<sim_components::Team>()
                 {
                     team.formation = formation;
@@ -142,19 +148,10 @@ impl ServerSimulation {
                 println!("Substitution: {out:?} -> {substitute:?}");
             }
             ManagerCommand::ChangeMentality(mentality) => {
-                // Update team mentality
-                let match_component = self
-                    .simulation
-                    .world
-                    .entity(match_entity)
-                    .get::<sim_components::Match>()
-                    .unwrap();
-                let home_team = match_component.home_team;
-
                 if let Some(mut team) = self
                     .simulation
                     .world
-                    .entity_mut(home_team)
+                    .entity_mut(team_to_update)
                     .get_mut::<sim_components::Team>()
                 {
                     team.mentality = mentality;

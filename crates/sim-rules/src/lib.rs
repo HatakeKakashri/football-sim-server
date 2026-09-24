@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallOutOfBoundsType, BallState, Match, Position, RuleEvent, Skill, TeamIdComponent, Velocity};
+use sim_components::{Ball, BallOutOfBoundsType, BallState, Match, Position, RuleEvent, Skill, TeamIdComponent, TeamId, Velocity};
 use sim_math::Vec2;
 
 /// Phase 3: Tick counter resource for referee systems.
@@ -308,12 +308,117 @@ fn calculate_oob_restart_position(pos: Vec2, oob_type: BallOutOfBoundsType) -> V
     }
 }
 
+/// Phase 3: Offside detection system (Law 11).
+///
+/// A player is in an offside position if:
+/// - They are in the opponent's half (x > 52.5 for home team, x < 52.5 for away)
+/// - They are nearer to the opponent's goal line than both the ball and the
+///   second-last opponent
+///
+/// This system is a detection stub — it marks the offside position but does
+/// NOT yet penalise (that requires a foul/restart system). The check uses
+/// `Ball.last_touched_by` to determine the moment of the pass: offside is
+/// judged relative to the position of the second-last defender *at the
+/// instant the ball was touched* by a teammate of the potentially-offside
+/// player.
 pub fn offside_detection_system(
-    ball_query: Query<&Position, With<Ball>>,
-    player_query: Query<(&Position, &TeamIdComponent), Without<Ball>>,
+    ball_query: Query<(&Position, &Ball)>,
+    player_query: Query<(Entity, &Position, &TeamIdComponent), Without<Ball>>,
 ) {
-    let _ball_pos = ball_query.single();
-    let _players: Vec<(&Position, &TeamIdComponent)> = player_query.iter().collect();
+    let Ok((ball_pos, ball)) = ball_query.get_single() else {
+        return;
+    };
+
+    let Some(last_toucher) = ball.last_touched_by else {
+        return;
+    };
+
+    let Some(toucher_team_id) = player_query
+        .get(last_toucher)
+        .ok()
+        .map(|(_, _, team)| team_id_u8(&team))
+    else {
+        return;
+    };
+
+    // Resolve attack polarity once — home (team 0) attacks +x, away (team 1) attacks -x.
+    let dir = attacking_direction(TeamId(toucher_team_id));
+
+    // Collect defender x-positions from the opposing team and find the
+    // second-last (Law 11: the second-closest defender to their own goal).
+    let mut defender_xs: Vec<f32> = player_query
+        .iter()
+        .filter(|(_, _, team)| team_id_u8(team) != toucher_team_id)
+        .map(|(_, pos, _)| pos.0.x)
+        .collect();
+    defender_xs.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    // Fallback to own goal line (0.0) if fewer than 2 defenders exist.
+    let second_last_defender_x = defender_xs.get(1).copied().unwrap_or(0.0);
+
+    // Evaluate every player on the attacking team.
+    for (_, pos, team) in player_query.iter() {
+        if team_id_u8(&team) != toucher_team_id {
+            continue;
+        }
+
+        let in_opponent_half = dir.in_opponent_half(pos.0.x);
+        if !in_opponent_half {
+            continue;
+        }
+
+        let closer_than_ball = dir.closer_than(pos.0.x, ball_pos.0.x);
+        let closer_than_defender = dir.closer_than(pos.0.x, second_last_defender_x);
+
+        if closer_than_ball && closer_than_defender {
+            println!(
+                "OFFSIDE position detected: player at ({:.1}, {:.1}), toucher team {}",
+                pos.0.x, pos.0.y, toucher_team_id
+            );
+        }
+    }
+}
+
+/// Attack polarity for a given team. Home (team 0) attacks toward +x
+/// (right goal, x = PITCH_LENGTH); away (team 1) attacks toward -x
+/// (left goal, x = 0).
+#[derive(Debug, Clone, Copy)]
+struct AttackingDirection {
+    /// True if this team attacks in the positive-x direction.
+    attacks_positive_x: bool,
+}
+
+impl AttackingDirection {
+    /// Returns true if `player_x` is in the opponent's half.
+    fn in_opponent_half(self, player_x: f32) -> bool {
+        if self.attacks_positive_x {
+            player_x > PITCH_LENGTH / 2.0
+        } else {
+            player_x < PITCH_LENGTH / 2.0
+        }
+    }
+
+    /// Returns true if `player_x` is nearer to the attacking goal line
+    /// than `reference_x`.  For a team attacking +x, nearer means larger x.
+    fn closer_than(self, player_x: f32, reference_x: f32) -> bool {
+        if self.attacks_positive_x {
+            player_x > reference_x
+        } else {
+            player_x < reference_x
+        }
+    }
+}
+
+/// Returns the `AttackingDirection` for the given team.
+/// Home (team 0) → attacks +x; away (team 1) → attacks -x.
+fn attacking_direction(team: TeamId) -> AttackingDirection {
+    AttackingDirection {
+        attacks_positive_x: team.0 == 0,
+    }
+}
+
+/// Extracts the raw `u8` team-id from a `TeamIdComponent`.
+fn team_id_u8(team: &TeamIdComponent) -> u8 {
+    team.0 .0
 }
 
 pub fn foul_detection_system(
@@ -322,33 +427,88 @@ pub fn foul_detection_system(
     let _players: Vec<(&Position, &TeamIdComponent)> = player_query.iter().collect();
 }
 
+/// Phase 3: Possession resolution system.
+///
+/// Determines which player (if any) has possession of the ball based on
+/// proximity. The source of truth for possession is `Ball.possessor`
+/// (an `Option<Entity>`). `BallState` is a unit variant (`Possessed` or
+/// `Free`) that mirrors the presence/absence of a possessor entity.
+///
+/// Rules:
+/// - Find the player closest to the ball within 1.5 m.
+/// - If multiple players are within range, the one with the higher skill
+///   value wins; ties broken by distance.
+/// - When a player is within range: set `ball.possessor = Some(entity)`
+///   and `ball.state = BallState::Possessed`.
+/// - When no player is within range: set `ball.possessor = None` and
+///   `ball.state = BallState::Free`.
+/// - Track `last_touched_by`: any player within 1.0 m of the ball is
+///   considered to have touched it. Updated unconditionally (not gated
+///   on `BallState::Free`) so that the last toucher is always current.
 pub fn possession_resolution_system(
     mut ball_query: Query<(&Position, &mut Ball)>,
-    player_query: Query<(&Position, &TeamIdComponent, &Skill)>,
+    player_query: Query<(Entity, &Position, &Skill)>,
 ) {
     for (ball_pos, mut ball) in ball_query.iter_mut() {
+        // --- Last-touch tracking (Law 11) ---
+        // Any player within 1.0 m of the ball is considered to have
+        // touched it. We update unconditionally so `last_touched_by`
+        // always reflects the most recent toucher.
+        let mut last_toucher: Option<(Entity, f32)> = None;
+        for (player_entity, player_pos, _skill) in player_query.iter() {
+            let dist = ball_pos.0.distance(player_pos.0);
+            if dist <= 1.0 {
+                match last_toucher {
+                    Some((_, best_dist)) => {
+                        if dist < best_dist {
+                            last_toucher = Some((player_entity, dist));
+                        }
+                    }
+                    None => {
+                        last_toucher = Some((player_entity, dist));
+                    }
+                }
+            }
+        }
+        if let Some((toucher, _)) = last_toucher {
+            ball.last_touched_by = Some(toucher);
+        }
+
+        // --- Possession resolution ---
+        // Only resolve possession when the ball is currently free.
+        // Once possessed, possession is retained until the ball leaves
+        // the 1.5 m radius or another system clears it (e.g. OOB).
         if ball.state != BallState::Free {
             continue;
         }
 
         let mut closest_player: Option<(Entity, f32, f32)> = None;
 
-        for (player_pos, _team_id, skill) in player_query.iter() {
+        for (player_entity, player_pos, skill) in player_query.iter() {
             let distance = ball_pos.0.distance(player_pos.0);
             if distance < 1.5 {
                 if let Some((_, best_dist, best_skill)) = closest_player {
                     let skill_diff = skill.0 - best_skill;
-                    if skill_diff > SKILL_TOLERANCE || (skill_diff <= SKILL_TOLERANCE && distance < best_dist) {
-                        closest_player = Some((Entity::PLACEHOLDER, distance, skill.0));
+                    if skill_diff > SKILL_TOLERANCE
+                        || (skill_diff <= SKILL_TOLERANCE && distance < best_dist)
+                    {
+                        closest_player = Some((player_entity, distance, skill.0));
                     }
                 } else {
-                    closest_player = Some((Entity::PLACEHOLDER, distance, skill.0));
+                    closest_player = Some((player_entity, distance, skill.0));
                 }
             }
         }
 
-        if let Some((_, _, _)) = closest_player {
-            ball.state = BallState::Possessed;
+        match closest_player {
+            Some((entity, _, _)) => {
+                ball.possessor = Some(entity);
+                ball.state = BallState::Possessed;
+            }
+            None => {
+                ball.possessor = None;
+                ball.state = BallState::Free;
+            }
         }
     }
 }
@@ -410,6 +570,19 @@ mod tests {
     use super::*;
     use sim_components::{Player, TeamId};
 
+    /// Produces a test Ball at `pos` with the given `state`.
+    /// All other fields are zeroed; `possessor` and `last_touched_by` are `None`.
+    fn ball_fixture(pos: sim_math::Vec2, state: BallState) -> Ball {
+        Ball {
+            position: pos,
+            velocity: Vec2::zero(),
+            spin: 0.0,
+            state,
+            possessor: None,
+            last_touched_by: None,
+        }
+    }
+
     #[test]
     fn test_out_of_bounds_detection_throw_in() {
         let mut world = World::new();
@@ -417,13 +590,7 @@ mod tests {
         // Ball at bottom touchline (y=0, x=20) with low velocity - physics bounced it back
         // Throw-in: ball crosses touchline (y < 0 or y > PITCH_WIDTH)
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
-            position: Vec2::new(20.0, 0.0),
-            velocity: Vec2::new(0.0, 0.0), // Settled at boundary after physics bounce
-            spin: 0.0,
-            state: BallState::Free,
-            possessor: None,
-        });
+        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(20.0, 0.0), BallState::Free));
         world.entity_mut(ball_entity).insert(Position(Vec2::new(20.0, 0.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::new(0.0, 0.0)));
 
@@ -452,13 +619,7 @@ mod tests {
         // Ball at bottom-left corner (x=0.1, y=0.1) with low velocity
         // Both x and y are at the boundary, so it's a corner
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
-            position: Vec2::new(0.1, 0.1),
-            velocity: Vec2::zero(), // Settled at boundary after physics bounce
-            spin: 0.0,
-            state: BallState::Free,
-            possessor: None,
-        });
+        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(0.1, 0.1), BallState::Free));
         world.entity_mut(ball_entity).insert(Position(Vec2::new(0.1, 0.1)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
@@ -502,13 +663,7 @@ mod tests {
 
         // Create ball entity in home goal (x = 105.5, y = 34)
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
-            position: Vec2::new(105.5, 34.0),
-            velocity: Vec2::zero(),
-            spin: 0.0,
-            state: BallState::Free,
-            possessor: None,
-        });
+        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Free));
         world.entity_mut(ball_entity).insert(Position(Vec2::new(105.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
@@ -553,13 +708,7 @@ mod tests {
 
         // Create ball entity in away goal (x = -0.5, y = 34)
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
-            position: Vec2::new(-0.5, 34.0),
-            velocity: Vec2::zero(),
-            spin: 0.0,
-            state: BallState::Free,
-            possessor: None,
-        });
+        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
         world.entity_mut(ball_entity).insert(Position(Vec2::new(-0.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
@@ -597,13 +746,7 @@ mod tests {
 
         // Create ball entity in home goal with Dead state
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
-            position: Vec2::new(105.5, 34.0),
-            velocity: Vec2::zero(),
-            spin: 0.0,
-            state: BallState::Dead, // Already dead - should NOT score again
-            possessor: None,
-        });
+        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
         world.entity_mut(ball_entity).insert(Position(Vec2::new(105.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
@@ -642,13 +785,7 @@ mod tests {
 
         // Create ball entity in Dead state (after a goal)
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
-            position: Vec2::new(105.5, 34.0), // Was in goal
-            velocity: Vec2::zero(),
-            spin: 0.0,
-            state: BallState::Dead,
-            possessor: None,
-        });
+        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
         world.entity_mut(ball_entity).insert(Position(Vec2::new(105.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
@@ -680,13 +817,7 @@ mod tests {
 
         // Ball in goal area on left side
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
-            position: Vec2::new(-0.5, 34.0), // In goal area
-            velocity: Vec2::zero(),
-            spin: 0.0,
-            state: BallState::Free,
-            possessor: None,
-        });
+        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
         world.entity_mut(ball_entity).insert(Position(Vec2::new(-0.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
@@ -714,6 +845,7 @@ mod tests {
             spin: 0.0,
             state: BallState::Free,
             possessor: None,
+            last_touched_by: None,
         });
         world.entity_mut(ball_entity).insert(Position(Vec2::new(50.0, 34.0)));
 
@@ -741,6 +873,204 @@ mod tests {
         schedule.run(&mut world);
 
         let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        assert_eq!(ball.state, BallState::Possessed);
+    }
+
+    /// Test that possession is resolved to the actual player entity, not
+    /// Entity::PLACEHOLDER.
+    #[test]
+    fn test_possession_resolved_to_real_entity() {
+        let mut world = World::new();
+
+        let ball_entity = world.spawn(()).id();
+        world.entity_mut(ball_entity).insert(Ball {
+            position: Vec2::new(50.0, 34.0),
+            velocity: Vec2::zero(),
+            spin: 0.0,
+            state: BallState::Free,
+            possessor: None,
+            last_touched_by: None,
+        });
+        world.entity_mut(ball_entity).insert(Position(Vec2::new(50.0, 34.0)));
+
+        // Player very close to ball (0.3 m)
+        let player_entity = world.spawn(()).id();
+        world.entity_mut(player_entity).insert(Player {
+            team_id: TeamId(0),
+            position: Vec2::new(50.3, 34.0),
+            velocity: Vec2::zero(),
+            stamina: 0.8,
+            role: sim_components::Role::Striker,
+            skill: 0.8,
+            intent: None,
+            perception: None,
+            score_differential: 0,
+            time_remaining: 90.0,
+            team_possession: 0.5,
+            mentality_modifier: 0.0,
+        });
+        world.entity_mut(player_entity).insert(Position(Vec2::new(50.3, 34.0)));
+        world.entity_mut(player_entity).insert(TeamIdComponent(TeamId(0)));
+        world.entity_mut(player_entity).insert(Skill(0.8));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(possession_resolution_system);
+        schedule.run(&mut world);
+
+        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        assert_eq!(ball.state, BallState::Possessed);
+        assert_eq!(
+            ball.possessor,
+            Some(player_entity),
+            "Ball.possessor must be the real player entity, not PLACEHOLDER"
+        );
+        // last_touched_by should also be set (player is within 1.0 m)
+        assert_eq!(ball.last_touched_by, Some(player_entity));
+    }
+
+    /// Test that possession is cleared when no player is within 1.5 m.
+    #[test]
+    fn test_possession_cleared_when_ball_free() {
+        let mut world = World::new();
+
+        let ball_entity = world.spawn(()).id();
+        world.entity_mut(ball_entity).insert(Ball {
+            position: Vec2::new(50.0, 34.0),
+            velocity: Vec2::zero(),
+            spin: 0.0,
+            state: BallState::Free,
+            possessor: None,
+            last_touched_by: None,
+        });
+        world.entity_mut(ball_entity).insert(Position(Vec2::new(50.0, 34.0)));
+
+        // Player far away from ball (> 1.5 m)
+        let _player_entity = world.spawn(()).id();
+        world.entity_mut(_player_entity).insert(Player {
+            team_id: TeamId(0),
+            position: Vec2::new(55.0, 34.0), // 5 m away
+            velocity: Vec2::zero(),
+            stamina: 0.8,
+            role: sim_components::Role::Striker,
+            skill: 0.8,
+            intent: None,
+            perception: None,
+            score_differential: 0,
+            time_remaining: 90.0,
+            team_possession: 0.5,
+            mentality_modifier: 0.0,
+        });
+        world.entity_mut(_player_entity).insert(Position(Vec2::new(55.0, 34.0)));
+        world.entity_mut(_player_entity).insert(TeamIdComponent(TeamId(0)));
+        world.entity_mut(_player_entity).insert(Skill(0.8));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(possession_resolution_system);
+        schedule.run(&mut world);
+
+        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        assert_eq!(ball.state, BallState::Free);
+        assert_eq!(ball.possessor, None, "Ball should have no possessor when no player is within 1.5 m");
+    }
+
+    /// Test that last_touched_by is updated when a player touches the ball
+    /// (simulates a pass scenario).
+    #[test]
+    fn test_offside_last_touch_tracked() {
+        let mut world = World::new();
+
+        let ball_entity = world.spawn(()).id();
+        world.entity_mut(ball_entity).insert(Ball {
+            position: Vec2::new(50.0, 34.0),
+            velocity: Vec2::zero(),
+            spin: 0.0,
+            state: BallState::Free,
+            possessor: None,
+            last_touched_by: None,
+        });
+        world.entity_mut(ball_entity).insert(Position(Vec2::new(50.0, 34.0)));
+
+        // Player A close to ball (will touch it)
+        let player_a = world.spawn(()).id();
+        world.entity_mut(player_a).insert(Player {
+            team_id: TeamId(0),
+            position: Vec2::new(50.2, 34.0), // 0.2 m from ball
+            velocity: Vec2::zero(),
+            stamina: 0.8,
+            role: sim_components::Role::Striker,
+            skill: 0.8,
+            intent: None,
+            perception: None,
+            score_differential: 0,
+            time_remaining: 90.0,
+            team_possession: 0.5,
+            mentality_modifier: 0.0,
+        });
+        world.entity_mut(player_a).insert(Position(Vec2::new(50.2, 34.0)));
+        world.entity_mut(player_a).insert(TeamIdComponent(TeamId(0)));
+        world.entity_mut(player_a).insert(Skill(0.8));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(possession_resolution_system);
+        schedule.run(&mut world);
+
+        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        assert_eq!(
+            ball.last_touched_by,
+            Some(player_a),
+            "Player A (closest to ball) should be recorded as last toucher"
+        );
+
+        // Now move the ball to player B (simulating a pass)
+        {
+            let mut em = world.entity_mut(ball_entity);
+            let mut pos = em.get_mut::<Position>().unwrap();
+            pos.0 = Vec2::new(80.0, 34.0);
+        }
+        {
+            let mut em = world.entity_mut(ball_entity);
+            let mut ball = em.get_mut::<Ball>().unwrap();
+            ball.position = Vec2::new(80.0, 34.0);
+            ball.state = BallState::Free;
+            ball.possessor = None;
+        }
+
+        // Player B is now close to the new ball position
+        let player_b = world.spawn(()).id();
+        world.entity_mut(player_b).insert(Player {
+            team_id: TeamId(0),
+            position: Vec2::new(80.3, 34.0), // 0.3 m from ball
+            velocity: Vec2::zero(),
+            stamina: 0.9,
+            role: sim_components::Role::CentralMidfielder,
+            skill: 0.7,
+            intent: None,
+            perception: None,
+            score_differential: 0,
+            time_remaining: 90.0,
+            team_possession: 0.5,
+            mentality_modifier: 0.0,
+        });
+        world.entity_mut(player_b).insert(Position(Vec2::new(80.3, 34.0)));
+        world.entity_mut(player_b).insert(TeamIdComponent(TeamId(0)));
+        world.entity_mut(player_b).insert(Skill(0.7));
+
+        // Player A is far from the new ball position
+        {
+            let mut em = world.entity_mut(player_a);
+            let mut pos = em.get_mut::<Position>().unwrap();
+            pos.0 = Vec2::new(50.0, 34.0);
+        }
+
+        schedule.run(&mut world);
+
+        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        assert_eq!(
+            ball.last_touched_by,
+            Some(player_b),
+            "After pass, last_touched_by should be player B (new closest)"
+        );
+        assert_eq!(ball.possessor, Some(player_b));
         assert_eq!(ball.state, BallState::Possessed);
     }
 

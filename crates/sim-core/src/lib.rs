@@ -86,13 +86,19 @@ impl Simulation {
         // These run AFTER Physics (Rules set already runs after Physics per Phase 1 ordering).
         // Systems are .chain()'d to enforce ordering: goal_detection → out_of_bounds → restart
         // so that goal events take precedence over OOB at the goal line.
+        //
+        // possession_resolution_system runs in SimulationSet::Rules BEFORE
+        // goal/out-of-bounds so that Ball.possessor is up-to-date when
+        // those systems read it (e.g. for last-touch tracking).
         use sim_rules::{
-            goal_detection_system, out_of_bounds_system, restart_system,
+            goal_detection_system, out_of_bounds_system, possession_resolution_system,
+            restart_system,
         };
         schedule.add_systems((
-            goal_detection_system.in_set(SimulationSet::Referee),
-            out_of_bounds_system.in_set(SimulationSet::Referee),
-            restart_system.in_set(SimulationSet::Referee),
+            possession_resolution_system.in_set(SimulationSet::Rules),
+            goal_detection_system.in_set(SimulationSet::Rules),
+            out_of_bounds_system.in_set(SimulationSet::Rules),
+            restart_system.in_set(SimulationSet::Rules),
         ).chain());
 
         // Create match + home team; resolve ball entity for later use by the
@@ -228,6 +234,10 @@ impl Simulation {
                     &mut h,
                     b.possessor.map_or(u64::MAX, |e| e.to_bits()),
                 );
+                mix(
+                    &mut h,
+                    b.last_touched_by.map_or(u64::MAX, |e| e.to_bits()),
+                );
             }
             if let Some(p) = er.get::<Player>() {
                 mix(&mut h, u64::from(p.team_id.0));
@@ -266,6 +276,7 @@ impl Simulation {
             spin: 0.0,
             state: sim_components::BallState::Free,
             possessor: None,
+            last_touched_by: None,
         });
         // Ball also carries Position + Velocity components so the registered
         // ball_physics_system query (`Position, Velocity, Ball`) matches it.
@@ -290,6 +301,7 @@ impl Simulation {
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
                 ball_position: Vec2::new(52.5, 34.0),
+                ball_state: sim_components::BallState::Free,
                 goal_position: Vec2::new(105.0, 34.0),
                 pitch_bounds: PitchBounds {
                     distance_to_left: pos.x,
@@ -340,6 +352,7 @@ impl Simulation {
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
                 ball_position: Vec2::new(52.5, 34.0),
+                ball_state: sim_components::BallState::Free,
                 goal_position: Vec2::new(105.0, 34.0),
                 pitch_bounds: PitchBounds {
                     distance_to_left: pos.x,

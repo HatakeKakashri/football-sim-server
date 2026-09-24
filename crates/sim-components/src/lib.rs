@@ -92,6 +92,12 @@ pub struct PerceptionSnapshot {
     pub nearby_teammates: smallvec::SmallVec<[NearbyEntity; 8]>,
     pub nearby_opponents: smallvec::SmallVec<[NearbyEntity; 8]>,
     pub ball_position: Vec2,
+    /// Ball state as observed by the perception system. This is a
+    /// `BallState` enum value (Free / Possessed / etc.), **not** an
+    /// `Entity`.  The actual possessor entity lives on
+    /// `Ball.possessor` and is read by systems that need the real
+    /// entity reference (e.g. offside tracking).
+    pub ball_state: BallState,
     pub goal_position: Vec2,
     pub pitch_bounds: PitchBounds,
 }
@@ -150,6 +156,13 @@ pub struct Ball {
     pub spin: f32,
     pub state: BallState,
     pub possessor: Option<Entity>,
+    /// The entity of the player nearest to the ball (within 1.0 m).
+    /// This is a **proximity predicate**, not a contact event — any player
+    /// within 1.0 m is considered to have "touched" the ball.  Used for
+    /// offside Law 11 enforcement: an offside offence is judged relative to
+    /// the position of the second-to-last defender at the instant this
+    /// player was the nearest to the ball.
+    pub last_touched_by: Option<Entity>,
 }
 
 #[derive(Component, Debug, Clone)]

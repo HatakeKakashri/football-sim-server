@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, Intent, Player, Position, Skill, Stamina, Velocity};
+use sim_components::{Ball, BallState, Intent, Player, Position, Skill, Stamina, Velocity};
 use sim_math::Vec2;
 use sim_physics::PitchControlGrid;
 use sim_ai_core::{ResponseCurve, geometric_mean};
@@ -32,19 +32,22 @@ pub fn perception_system(
     mut queries: ParamSet<(
         Query<(Entity, &mut Player, &Position)>,
         Query<(Entity, &Player, &Position)>,
-        Query<&Position, With<Ball>>,
+        Query<(Entity, &Ball, &Position)>,
         Query<&sim_components::Match>,
         Query<&sim_components::Team>,
     )>,
 ) {
-    // Get ball position via the Ball query — disjointness with the player
-    // queries is enforced by the ParamSet slot, not by Query filtering.
-    let ball_position = {
+    // Get ball position and state via the Ball query — disjointness with
+    // the player queries is enforced by the ParamSet slot, not by Query
+    // filtering. We also read `Ball.possessor` but store only the
+    // `BallState` variant (Free / Possessed) in the snapshot; the real
+    // entity lives on `Ball.possessor`.
+    let (ball_position, ball_state) = {
         let q = queries.p2();
-        if let Ok(pos) = q.get_single() {
-            pos.0
+        if let Ok((_ball_entity, ball, pos)) = q.get_single() {
+            (pos.0, ball.state)
         } else {
-            Vec2::zero()
+            (Vec2::zero(), BallState::Free)
         }
     };
 
@@ -150,6 +153,7 @@ pub fn perception_system(
             nearby_teammates,
             nearby_opponents,
             ball_position,
+            ball_state,
             goal_position,
             pitch_bounds,
         };
@@ -672,6 +676,7 @@ mod tests {
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
                 ball_position: Vec2::new(52.5, 34.0),
+                ball_state: sim_components::BallState::Free,
                 goal_position: Vec2::new(105.0, 34.0),
                 pitch_bounds: sim_components::PitchBounds {
                     distance_to_left: 50.0,
@@ -771,6 +776,7 @@ mod tests {
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
                 ball_position: Vec2::new(52.5, 34.0),
+                ball_state: sim_components::BallState::Free,
                 goal_position: Vec2::new(105.0, 34.0),
                 pitch_bounds: sim_components::PitchBounds {
                     distance_to_left: 50.0,
@@ -851,6 +857,7 @@ mod tests {
                     relative_position: Vec2::new(5.0, 0.0),
                 }],
                 ball_position: Vec2::new(45.0, 34.0),
+                ball_state: sim_components::BallState::Free,
                 goal_position: Vec2::new(105.0, 34.0),
                 pitch_bounds: sim_components::PitchBounds {
                     distance_to_left: 40.0,
@@ -959,6 +966,7 @@ mod tests {
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
                 ball_position: Vec2::new(52.5, 34.0),
+                ball_state: sim_components::BallState::Free,
                 goal_position: Vec2::new(105.0, 34.0),
                 pitch_bounds: sim_components::PitchBounds {
                     distance_to_left: 50.0,

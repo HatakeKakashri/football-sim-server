@@ -1,8 +1,8 @@
 use bevy_ecs::prelude::*;
+use sim_ai_core::{ResponseCurve, geometric_mean};
 use sim_components::{Ball, BallState, Intent, Player, Position, Skill, Stamina, Velocity};
 use sim_math::Vec2;
 use sim_physics::PitchControlGrid;
-use sim_ai_core::{ResponseCurve, geometric_mean};
 
 #[derive(Component, Debug, Clone)]
 pub struct UtilityBrain {
@@ -73,11 +73,20 @@ pub fn perception_system(
             let diff: i8 = (m.score.0 as i16 - m.score.1 as i16) as i8;
             let half_total = if m.clock.half == 1 { 45.0 } else { 90.0 };
             let time_remaining = half_total - m.clock.elapsed;
-            (diff, time_remaining, sim_components::TeamId(0), sim_components::TeamId(1))
+            (
+                diff,
+                time_remaining,
+                sim_components::TeamId(0),
+                sim_components::TeamId(1),
+            )
         })
     };
-    let (score_diff, time_remaining, _home_id, _away_id) =
-        match_info.unwrap_or((0, 90.0, sim_components::TeamId(0), sim_components::TeamId(1)));
+    let (score_diff, time_remaining, _home_id, _away_id) = match_info.unwrap_or((
+        0,
+        90.0,
+        sim_components::TeamId(0),
+        sim_components::TeamId(1),
+    ));
 
     // Snapshot mentalities by team id.
     let mut mentality_by_team: std::collections::HashMap<sim_components::TeamId, f32> =
@@ -110,7 +119,11 @@ pub fn perception_system(
     };
     for entity in entity_ids {
         // Snapshot player_pos + team_id via an immutable get (read-only).
-        let snapshot_info = queries.p0().get(entity).ok().map(|(_, p, pos)| (pos.0, p.team_id));
+        let snapshot_info = queries
+            .p0()
+            .get(entity)
+            .ok()
+            .map(|(_, p, pos)| (pos.0, p.team_id));
         let Some((player_pos, team_id)) = snapshot_info else {
             continue;
         };
@@ -136,8 +149,16 @@ pub fn perception_system(
             }
         }
 
-        nearby_teammates.sort_by(|a: &sim_components::NearbyEntity, b: &sim_components::NearbyEntity| a.distance.partial_cmp(&b.distance).unwrap());
-        nearby_opponents.sort_by(|a: &sim_components::NearbyEntity, b: &sim_components::NearbyEntity| a.distance.partial_cmp(&b.distance).unwrap());
+        nearby_teammates.sort_by(
+            |a: &sim_components::NearbyEntity, b: &sim_components::NearbyEntity| {
+                a.distance.partial_cmp(&b.distance).unwrap()
+            },
+        );
+        nearby_opponents.sort_by(
+            |a: &sim_components::NearbyEntity, b: &sim_components::NearbyEntity| {
+                a.distance.partial_cmp(&b.distance).unwrap()
+            },
+        );
 
         let pitch_bounds = sim_components::PitchBounds {
             distance_to_left: player_pos.x,
@@ -335,11 +356,7 @@ fn compute_consideration_input(
                     let dist = opp.distance;
                     dist < 8.0
                 });
-                if lane_clear {
-                    1.0
-                } else {
-                    0.4
-                }
+                if lane_clear { 1.0 } else { 0.4 }
             } else {
                 0.5
             }
@@ -402,24 +419,28 @@ fn compute_consideration_input(
         // --- Tackle ---
         // Closer opponent = higher score. Feed the inverse so the curve
         // (which rises monotonically) gets bigger values for closer targets.
-        "distance_to_opponent" => 5.0 - perception
-            .nearby_opponents
-            .iter()
-            .map(|o| o.distance)
-            .fold(f32::INFINITY, f32::min)
-            .min(5.0),
+        "distance_to_opponent" => {
+            5.0 - perception
+                .nearby_opponents
+                .iter()
+                .map(|o| o.distance)
+                .fold(f32::INFINITY, f32::min)
+                .min(5.0)
+        }
         "skill_diff" => {
             // Player skill minus an average opponent skill (assume 0.7).
             (player.skill - 0.7).clamp(-1.0, 1.0)
         }
 
         // --- MarkOpponent ---
-        "distance_to_marked" => 10.0 - perception
-            .nearby_opponents
-            .iter()
-            .map(|o| o.distance)
-            .fold(f32::INFINITY, f32::min)
-            .min(10.0),
+        "distance_to_marked" => {
+            10.0 - perception
+                .nearby_opponents
+                .iter()
+                .map(|o| o.distance)
+                .fold(f32::INFINITY, f32::min)
+                .min(10.0)
+        }
         "defensive_position" => {
             // 1.0 if between ball position and own goal line, 0.0 otherwise.
             let own_goal_x = 0.0_f32;
@@ -433,12 +454,14 @@ fn compute_consideration_input(
         }
 
         // --- Press ---
-        "distance_to_press" => 12.0 - perception
-            .nearby_opponents
-            .iter()
-            .map(|o| o.distance)
-            .fold(f32::INFINITY, f32::min)
-            .min(12.0),
+        "distance_to_press" => {
+            12.0 - perception
+                .nearby_opponents
+                .iter()
+                .map(|o| o.distance)
+                .fold(f32::INFINITY, f32::min)
+                .min(12.0)
+        }
 
         // --- SupportRun ---
         "space_ahead" => {
@@ -473,11 +496,7 @@ fn compute_consideration_input(
                     .length();
                 dist_to_ball < 2.0
             });
-            if has {
-                1.0
-            } else {
-                0.0
-            }
+            if has { 1.0 } else { 0.0 }
         }
 
         // --- HoldPosition ---
@@ -610,7 +629,7 @@ mod tests {
     fn test_stamina_based_decision() {
         // Test that low stamina player conserves energy
         let mut world = World::new();
-        
+
         // Create a player with low stamina
         let player_entity = world.spawn(()).id();
         world.entity_mut(player_entity).insert(Player {
@@ -629,7 +648,7 @@ mod tests {
         });
         world.entity_mut(player_entity).insert(Stamina(0.2));
         world.entity_mut(player_entity).insert(Skill(0.8));
-        
+
         // Create utility brain with sprint action
         let utility_brain = UtilityBrain {
             actions: vec![PlayerAction {
@@ -665,20 +684,22 @@ mod tests {
         schedule.add_systems(player_decision_system);
 
         let _match_entity = world.spawn(()).id();
-        world.entity_mut(_match_entity).insert(sim_components::Match {
-            id: 1,
-            home_team: Entity::PLACEHOLDER,
-            away_team: Entity::PLACEHOLDER,
-            score: (0, 0),
-            clock: sim_components::MatchClock {
-                elapsed: 0.0,
-                half: 1,
-                added_time: 0.0,
-                is_running: true,
-            },
-            state: sim_components::MatchState::InPlay,
-            seed: 0,
-        });
+        world
+            .entity_mut(_match_entity)
+            .insert(sim_components::Match {
+                id: 1,
+                home_team: Entity::PLACEHOLDER,
+                away_team: Entity::PLACEHOLDER,
+                score: (0, 0),
+                clock: sim_components::MatchClock {
+                    elapsed: 0.0,
+                    half: 1,
+                    added_time: 0.0,
+                    is_running: true,
+                },
+                state: sim_components::MatchState::InPlay,
+                seed: 0,
+            });
 
         // Run schedule
         schedule.run(&mut world);
@@ -692,7 +713,7 @@ mod tests {
     fn test_passing_option() {
         // Test that player considers teammates in better positions
         let mut world = World::new();
-        
+
         // Create a player
         let player_entity = world.spawn(()).id();
         world.entity_mut(player_entity).insert(Player {
@@ -711,7 +732,7 @@ mod tests {
         });
         world.entity_mut(player_entity).insert(Stamina(0.8));
         world.entity_mut(player_entity).insert(Skill(0.8));
-        
+
         // Create a teammate in better position
         let teammate_entity = world.spawn(()).id();
         world.entity_mut(teammate_entity).insert(Player {
@@ -728,7 +749,7 @@ mod tests {
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
-        
+
         // Create utility brain with pass action
         let utility_brain = UtilityBrain {
             actions: vec![PlayerAction {
@@ -763,20 +784,22 @@ mod tests {
         schedule.add_systems(player_decision_system);
 
         let _match_entity = world.spawn(()).id();
-        world.entity_mut(_match_entity).insert(sim_components::Match {
-            id: 1,
-            home_team: Entity::PLACEHOLDER,
-            away_team: Entity::PLACEHOLDER,
-            score: (0, 0),
-            clock: sim_components::MatchClock {
-                elapsed: 0.0,
-                half: 1,
-                added_time: 0.0,
-                is_running: true,
-            },
-            state: sim_components::MatchState::InPlay,
-            seed: 0,
-        });
+        world
+            .entity_mut(_match_entity)
+            .insert(sim_components::Match {
+                id: 1,
+                home_team: Entity::PLACEHOLDER,
+                away_team: Entity::PLACEHOLDER,
+                score: (0, 0),
+                clock: sim_components::MatchClock {
+                    elapsed: 0.0,
+                    half: 1,
+                    added_time: 0.0,
+                    is_running: true,
+                },
+                state: sim_components::MatchState::InPlay,
+                seed: 0,
+            });
 
         // Run schedule
         schedule.run(&mut world);
@@ -790,7 +813,7 @@ mod tests {
     fn test_defender_tackle() {
         // Test that defender attempts tackle when attacker shoots
         let mut world = World::new();
-        
+
         // Create an attacker with shoot intent
         let attacker_entity = world.spawn(()).id();
         world.entity_mut(attacker_entity).insert(Player {
@@ -841,7 +864,7 @@ mod tests {
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
-        
+
         // Create utility brain with tackle action. Phase 2 decision cadence is
         let utility_brain = UtilityBrain {
             actions: vec![PlayerAction {
@@ -853,20 +876,22 @@ mod tests {
         world.entity_mut(defender_entity).insert(utility_brain);
 
         let _match_entity = world.spawn(()).id();
-        world.entity_mut(_match_entity).insert(sim_components::Match {
-            id: 1,
-            home_team: Entity::PLACEHOLDER,
-            away_team: Entity::PLACEHOLDER,
-            score: (0, 0),
-            clock: sim_components::MatchClock {
-                elapsed: 0.0,
-                half: 1,
-                added_time: 0.0,
-                is_running: true,
-            },
-            state: sim_components::MatchState::InPlay,
-            seed: 0,
-        });
+        world
+            .entity_mut(_match_entity)
+            .insert(sim_components::Match {
+                id: 1,
+                home_team: Entity::PLACEHOLDER,
+                away_team: Entity::PLACEHOLDER,
+                score: (0, 0),
+                clock: sim_components::MatchClock {
+                    elapsed: 0.0,
+                    half: 1,
+                    added_time: 0.0,
+                    is_running: true,
+                },
+                state: sim_components::MatchState::InPlay,
+                seed: 0,
+            });
 
         // Run systems
         let mut schedule = Schedule::default();
@@ -911,12 +936,12 @@ mod tests {
         let brain = UtilityBrain {
             actions: vec![PlayerAction {
                 intent: sim_components::Intent::HoldPosition,
-                    considerations: vec![PlayerConsideration {
-                        name: "formation_discipline".to_string(),
-                        weight: 1.0,
-                        curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
-                    }],
+                considerations: vec![PlayerConsideration {
+                    name: "formation_discipline".to_string(),
+                    weight: 1.0,
+                    curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
                 }],
+            }],
             hysteresis: 0.1,
         };
         world.entity_mut(player_entity).insert(brain);
@@ -941,20 +966,22 @@ mod tests {
 
         // Insert a Match entity so player_decision_system can compute tick.
         let match_entity = world.spawn(()).id();
-        world.entity_mut(match_entity).insert(sim_components::Match {
-            id: 1,
-            home_team: Entity::PLACEHOLDER,
-            away_team: Entity::PLACEHOLDER,
-            score: (0, 0),
-            clock: sim_components::MatchClock {
-                elapsed: 0.0,
-                half: 1,
-                added_time: 0.0,
-                is_running: true,
-            },
-            state: sim_components::MatchState::InPlay,
-            seed: 0,
-        });
+        world
+            .entity_mut(match_entity)
+            .insert(sim_components::Match {
+                id: 1,
+                home_team: Entity::PLACEHOLDER,
+                away_team: Entity::PLACEHOLDER,
+                score: (0, 0),
+                clock: sim_components::MatchClock {
+                    elapsed: 0.0,
+                    half: 1,
+                    added_time: 0.0,
+                    is_running: true,
+                },
+                state: sim_components::MatchState::InPlay,
+                seed: 0,
+            });
 
         let mut schedule = Schedule::default();
         schedule.add_systems(player_decision_system);

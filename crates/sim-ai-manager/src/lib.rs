@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Manager, Team, Match, Stamina, Player};
+use sim_components::{Manager, Match, Player, Stamina, Team};
 
 pub fn manager_decision_system(
     mut query: Query<(&mut Manager, &Team)>,
@@ -19,21 +19,23 @@ pub fn manager_decision_system(
             let mut total_score = 0.0;
             for factor in &manager.decision_table.factors {
                 let factor_score = match factor.name.as_str() {
-                    "score_difference" => {
-                        (score_difference as f32 / 3.0).clamp(-1.0, 1.0)
-                    }
-                    "time_remaining" => {
-                        (time_remaining / 90.0).clamp(0.0, 1.0)
-                    }
+                    "score_difference" => (score_difference as f32 / 3.0).clamp(-1.0, 1.0),
+                    "time_remaining" => (time_remaining / 90.0).clamp(0.0, 1.0),
                     _ => 0.0,
                 };
                 total_score += factor_score * factor.weight;
             }
 
             if total_score > 0.5 {
-                println!("Manager considering aggressive tactics (score: {})", total_score);
+                println!(
+                    "Manager considering aggressive tactics (score: {})",
+                    total_score
+                );
             } else if total_score < -0.5 {
-                println!("Manager considering defensive tactics (score: {})", total_score);
+                println!(
+                    "Manager considering defensive tactics (score: {})",
+                    total_score
+                );
             }
 
             manager.last_decision_tick = current_tick;
@@ -87,10 +89,7 @@ pub fn substitution_system(
     }
 }
 
-pub fn mentality_shift_system(
-    mut query: Query<(&mut Team,)>,
-    match_query: Query<&Match>,
-) {
+pub fn mentality_shift_system(mut query: Query<(&mut Team,)>, match_query: Query<&Match>) {
     for (mut team,) in query.iter_mut() {
         if let Ok(match_entity) = match_query.get_single() {
             let score_difference = match_entity.score.0 as i32 - match_entity.score.1 as i32;
@@ -117,7 +116,10 @@ pub fn mentality_shift_system(
             };
 
             if team.mentality != new_mentality {
-                println!("Mentality changed from {:?} to {:?}", team.mentality, new_mentality);
+                println!(
+                    "Mentality changed from {:?} to {:?}",
+                    team.mentality, new_mentality
+                );
                 team.mentality = new_mentality;
             }
         }
@@ -127,7 +129,10 @@ pub fn mentality_shift_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim_components::{Formation, Mentality, Role, TeamId, MatchClock, MatchState, WeightedDecisionTable, DecisionFactor};
+    use sim_components::{
+        DecisionFactor, Formation, MatchClock, MatchState, Mentality, Role, TeamId,
+        WeightedDecisionTable,
+    };
     use sim_math::Vec2;
 
     #[test]

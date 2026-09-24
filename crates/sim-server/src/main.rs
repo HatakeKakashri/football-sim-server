@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
-use sim_core::{MatchSnapshot, Simulation};
 use sim_components::ManagerCommand;
+use sim_core::Simulation;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::time::Instant;
@@ -47,21 +47,6 @@ enum Commands {
         /// Output file for the event sequence (JSON)
         #[arg(short, long)]
         output: Option<String>,
-    },
-
-    /// Recover from a snapshot and continue simulation
-    Recover {
-        /// Match ID (currently only 1 is supported)
-        #[arg(short, long)]
-        match_id: u32,
-
-        /// Snapshot file to recover from (bincode)
-        #[arg(short, long)]
-        snapshot: String,
-
-        /// Additional ticks to run after recovery (default 0)
-        #[arg(short, long, default_value_t = 0)]
-        ticks: u64,
     },
 
     /// Run a performance benchmark
@@ -140,7 +125,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut sorted_commands = command_list;
             sorted_commands.sort_by_key(|&(tick, _)| tick);
 
-            println!("Replaying simulation with seed {}, {} commands...", seed, sorted_commands.len());
+            println!(
+                "Replaying simulation with seed {}, {} commands...",
+                seed,
+                sorted_commands.len()
+            );
             let start = Instant::now();
             let mut next_command_index = 0;
 
@@ -173,54 +162,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 file.write_all(json.as_bytes())?;
                 println!("Final state written to {output_path}");
             }
-        }
-
-        Commands::Recover {
-            match_id: _,
-            snapshot,
-            ticks: _ticks,
-        } => {
-            // Load snapshot (bincode format from save_snapshot in sim-replay).
-            let mut file = File::open(&snapshot)?;
-            let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer)?;
-            let _snapshot_data: MatchSnapshot = bincode::deserialize(&buffer)
-                .map_err(|e| format!("failed to deserialize snapshot (is it a bincode file from save_snapshot?): {e}"))?;
-
-            // TODO: properly implement state restoration.
-            //
-            // The current implementation does NOT actually restore simulation state.
-            // It creates a NEW simulation seeded from the snapshot's state_hash,
-            // which is a hash digest — not a valid seed — and advances it from
-            // tick 0, not from the snapshot tick. The snapshot tick is printed
-            // below so the mismatch is visible, but the simulation itself is not
-            // recovered to the saved state.
-            //
-            // A correct implementation requires:
-            //  1. A function that restores all ECS component state from a
-            //     MatchSnapshot into a World (player positions, ball, match clock,
-            //     team state, etc.);
-            //  2. Restoring the RNG state (which must be folded into the hash
-            //     so snapshots encode enough information to replay exactly);
-            //  3. A test that saves a snapshot, recovers it, ticks N times,
-            //     saves again, and asserts the two final hashes are equal —
-            //     proving recovery produced the same trajectory as continuing.
-            //
-            // Until that is implemented, we fail loudly rather than silently
-            // producing a plausible-but-wrong result.
-            eprintln!(
-                "error: Recover command is not yet implemented.\n\
-                 \n\
-                 The snapshot at '{}' was captured at tick {} with state_hash {}.\n\
-                 Simulation was NOT resumed from this state (see TODO in main.rs).\n\
-                 \n\
-                 To continue a simulation deterministically, use the same seed\n\
-                 and tick count as the original run, or implement proper recovery.\n",
-                snapshot,
-                _snapshot_data.tick,
-                _snapshot_data.state_hash
-            );
-            return Err("Recover command is not yet implemented".into());
         }
 
         Commands::Benchmark {

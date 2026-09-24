@@ -1,9 +1,12 @@
-use sim_core::{Simulation, MatchSnapshot};
-use sim_components::{ManagerCommand};
+use sim_components::ManagerCommand;
+use sim_core::{MatchSnapshot, Simulation};
 
 #[derive(Debug, Clone)]
 pub enum CommandError {
-    InvalidForState { current_state: sim_components::MatchState, required_state: sim_components::MatchState },
+    InvalidForState {
+        current_state: sim_components::MatchState,
+        required_state: sim_components::MatchState,
+    },
     NoSubstitutesRemaining,
     PlayerNotOnPitch,
     FormationInvalid,
@@ -31,7 +34,7 @@ impl ServerSimulation {
             // Apply command (validation already done when queueing)
             let _ = self.apply_command_immediately(command);
         }
-        
+
         // Advance simulation
         self.simulation.tick(delta_time);
     }
@@ -39,14 +42,20 @@ impl ServerSimulation {
     pub fn apply_command(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
         // Get current match state
         let match_entity = self.get_match_entity()?;
-        let match_component = self.simulation.world.entity(match_entity).get::<sim_components::Match>().unwrap();
-        
+        let match_component = self
+            .simulation
+            .world
+            .entity(match_entity)
+            .get::<sim_components::Match>()
+            .unwrap();
+
         // Validate command based on current state
         match &command {
             ManagerCommand::ChangeFormation(_) => {
                 // Validate formation change is allowed in current state
-                if match_component.state != sim_components::MatchState::InPlay &&
-                   match_component.state != sim_components::MatchState::Stoppage {
+                if match_component.state != sim_components::MatchState::InPlay
+                    && match_component.state != sim_components::MatchState::Stoppage
+                {
                     return Err(CommandError::InvalidForState {
                         current_state: match_component.state,
                         required_state: sim_components::MatchState::InPlay,
@@ -56,10 +65,14 @@ impl ServerSimulation {
                 // Validate formation is valid
                 // For now, all formations are considered valid
             }
-            ManagerCommand::Substitute { out: _, substitute: _ } => {
+            ManagerCommand::Substitute {
+                out: _,
+                substitute: _,
+            } => {
                 // Validate substitution is allowed in current state
-                if match_component.state != sim_components::MatchState::Stoppage &&
-                   match_component.state != sim_components::MatchState::HalfTime {
+                if match_component.state != sim_components::MatchState::Stoppage
+                    && match_component.state != sim_components::MatchState::HalfTime
+                {
                     return Err(CommandError::InvalidForState {
                         current_state: match_component.state,
                         required_state: sim_components::MatchState::Stoppage,
@@ -71,8 +84,9 @@ impl ServerSimulation {
             }
             ManagerCommand::ChangeMentality(_) => {
                 // Validate mentality change is allowed in current state
-                if match_component.state != sim_components::MatchState::InPlay &&
-                   match_component.state != sim_components::MatchState::Stoppage {
+                if match_component.state != sim_components::MatchState::InPlay
+                    && match_component.state != sim_components::MatchState::Stoppage
+                {
                     return Err(CommandError::InvalidForState {
                         current_state: match_component.state,
                         required_state: sim_components::MatchState::InPlay,
@@ -81,8 +95,9 @@ impl ServerSimulation {
             }
             ManagerCommand::SetTactic(_) => {
                 // Validate tactic change is allowed in current state
-                if match_component.state != sim_components::MatchState::InPlay &&
-                   match_component.state != sim_components::MatchState::Stoppage {
+                if match_component.state != sim_components::MatchState::InPlay
+                    && match_component.state != sim_components::MatchState::Stoppage
+                {
                     return Err(CommandError::InvalidForState {
                         current_state: match_component.state,
                         required_state: sim_components::MatchState::InPlay,
@@ -90,23 +105,34 @@ impl ServerSimulation {
                 }
             }
         }
-        
+
         // Queue command for application at next tick boundary
-        self.command_queue.enqueue(command, self.simulation.tick + 1);
+        self.command_queue
+            .enqueue(command, self.simulation.tick + 1);
         Ok(())
     }
-    
+
     fn apply_command_immediately(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
         let match_entity = self.get_match_entity()?;
-        
+
         match command {
             ManagerCommand::ChangeFormation(formation) => {
                 // Update team formation
-                let match_component = self.simulation.world.entity(match_entity).get::<sim_components::Match>().unwrap();
+                let match_component = self
+                    .simulation
+                    .world
+                    .entity(match_entity)
+                    .get::<sim_components::Match>()
+                    .unwrap();
                 let home_team = match_component.home_team;
-                
+
                 // For simplicity, apply to home team
-                if let Some(mut team) = self.simulation.world.entity_mut(home_team).get_mut::<sim_components::Team>() {
+                if let Some(mut team) = self
+                    .simulation
+                    .world
+                    .entity_mut(home_team)
+                    .get_mut::<sim_components::Team>()
+                {
                     team.formation = formation;
                 }
             }
@@ -117,10 +143,20 @@ impl ServerSimulation {
             }
             ManagerCommand::ChangeMentality(mentality) => {
                 // Update team mentality
-                let match_component = self.simulation.world.entity(match_entity).get::<sim_components::Match>().unwrap();
+                let match_component = self
+                    .simulation
+                    .world
+                    .entity(match_entity)
+                    .get::<sim_components::Match>()
+                    .unwrap();
                 let home_team = match_component.home_team;
-                
-                if let Some(mut team) = self.simulation.world.entity_mut(home_team).get_mut::<sim_components::Team>() {
+
+                if let Some(mut team) = self
+                    .simulation
+                    .world
+                    .entity_mut(home_team)
+                    .get_mut::<sim_components::Team>()
+                {
                     team.mentality = mentality;
                 }
             }
@@ -129,10 +165,10 @@ impl ServerSimulation {
                 println!("Tactic set: {tactic:?}");
             }
         }
-        
+
         Ok(())
     }
-    
+
     fn get_match_entity(&self) -> Result<bevy_ecs::prelude::Entity, CommandError> {
         // Find match entity in world
         let mut match_entity = None;
@@ -151,7 +187,7 @@ impl ServerSimulation {
     pub fn get_state(&self) -> MatchSnapshot {
         // Get match entity
         let match_entity = self.get_match_entity().unwrap();
-        
+
         // Use sim-core's get_state method
         self.simulation.get_state(match_entity).unwrap()
     }
@@ -206,7 +242,10 @@ mod tests {
     #[test]
     fn test_command_queue() {
         let mut queue = CommandQueue::new();
-        queue.enqueue(ManagerCommand::ChangeFormation(sim_components::Formation::FourFourTwo), 100);
+        queue.enqueue(
+            ManagerCommand::ChangeFormation(sim_components::Formation::FourFourTwo),
+            100,
+        );
         let commands = queue.apply_at_tick(100);
         assert_eq!(commands.len(), 1);
     }
@@ -216,11 +255,16 @@ mod tests {
         let mut server = ServerSimulation::new(12345);
 
         // Try to change formation during PreMatch state (should fail)
-        let result = server.apply_command(ManagerCommand::ChangeFormation(sim_components::Formation::FourThreeThree));
+        let result = server.apply_command(ManagerCommand::ChangeFormation(
+            sim_components::Formation::FourThreeThree,
+        ));
         assert!(result.is_err());
 
         match result {
-            Err(CommandError::InvalidForState { current_state, required_state }) => {
+            Err(CommandError::InvalidForState {
+                current_state,
+                required_state,
+            }) => {
                 assert_eq!(current_state, sim_components::MatchState::PreMatch);
                 assert_eq!(required_state, sim_components::MatchState::InPlay);
             }
@@ -234,12 +278,19 @@ mod tests {
         let match_entity = server.simulation.match_entity;
 
         // Set match state to InPlay
-        if let Some(mut match_component) = server.simulation.world.entity_mut(match_entity).get_mut::<sim_components::Match>() {
+        if let Some(mut match_component) = server
+            .simulation
+            .world
+            .entity_mut(match_entity)
+            .get_mut::<sim_components::Match>()
+        {
             match_component.state = sim_components::MatchState::InPlay;
         }
 
         // Try to change formation during InPlay state (should succeed)
-        let result = server.apply_command(ManagerCommand::ChangeFormation(sim_components::Formation::FourThreeThree));
+        let result = server.apply_command(ManagerCommand::ChangeFormation(
+            sim_components::Formation::FourThreeThree,
+        ));
         assert!(result.is_ok());
     }
 
@@ -286,11 +337,15 @@ mod tests {
     #[test]
     fn test_determinism_two_seeds_differ() {
         let mut s1 = ServerSimulation::new(111);
-        for _ in 0..1000 { s1.tick(1.0 / 60.0); }
+        for _ in 0..1000 {
+            s1.tick(1.0 / 60.0);
+        }
         let h1 = s1.get_state().state_hash;
 
         let mut s2 = ServerSimulation::new(222);
-        for _ in 0..1000 { s2.tick(1.0 / 60.0); }
+        for _ in 0..1000 {
+            s2.tick(1.0 / 60.0);
+        }
         let h2 = s2.get_state().state_hash;
 
         assert_ne!(h1, h2);

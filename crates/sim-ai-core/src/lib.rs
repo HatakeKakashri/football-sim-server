@@ -1,5 +1,3 @@
-
-
 #[derive(Debug, Clone)]
 pub struct Consideration {
     pub name: String,
@@ -8,18 +6,29 @@ pub struct Consideration {
 
 #[derive(Debug, Clone)]
 pub enum ResponseCurve {
-    Linear { min: f32, max: f32 },
-    Logistic { midpoint: f32, steepness: f32 },
-    Step { threshold: f32, below: f32, above: f32 },
+    Linear {
+        min: f32,
+        max: f32,
+    },
+    Logistic {
+        midpoint: f32,
+        steepness: f32,
+    },
+    Step {
+        threshold: f32,
+        below: f32,
+        above: f32,
+    },
 }
 
 impl ResponseCurve {
     pub fn evaluate(&self, input: f32) -> f32 {
         match self {
-            ResponseCurve::Linear { min, max } => {
-                (input - min) / (max - min).clamp(0.0, 1.0)
-            }
-            ResponseCurve::Logistic { midpoint, steepness } => {
+            ResponseCurve::Linear { min, max } => (input - min) / (max - min).clamp(0.0, 1.0),
+            ResponseCurve::Logistic {
+                midpoint,
+                steepness,
+            } => {
                 let x = steepness * (input - midpoint);
                 1.0 / (1.0 + (-x).exp())
             }
@@ -52,10 +61,7 @@ mod tests {
 
     #[test]
     fn test_response_curves() {
-        let linear = ResponseCurve::Linear {
-            min: 0.0,
-            max: 1.0,
-        };
+        let linear = ResponseCurve::Linear { min: 0.0, max: 1.0 };
         assert_eq!(linear.evaluate(0.5), 0.5);
 
         let logistic = ResponseCurve::Logistic {

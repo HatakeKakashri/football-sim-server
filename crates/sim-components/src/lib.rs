@@ -1,6 +1,6 @@
 use bevy_ecs::prelude::*;
+use serde::{Deserialize, Serialize};
 use sim_math::Vec2;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TeamId(pub u8);
@@ -65,7 +65,10 @@ pub enum BallOutOfBoundsType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Component)]
 pub enum RuleEvent {
     OutOfBounds(BallOutOfBoundsType),
-    Goal { scorer_team: TeamId, score: (u8, u8) },
+    Goal {
+        scorer_team: TeamId,
+        score: (u8, u8),
+    },
     KickoffRestart,
     HalfTimeStart,
     FullTimeStart,

@@ -1,5 +1,8 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallOutOfBoundsType, BallState, Match, Player, Position, RuleEvent, Skill, TeamIdComponent, TeamId, Velocity};
+use sim_components::{
+    Ball, BallOutOfBoundsType, BallState, Match, Player, Position, RuleEvent, Skill, TeamId,
+    TeamIdComponent, Velocity,
+};
 use sim_math::Vec2;
 
 /// Phase 3: Tick counter resource for referee systems.
@@ -29,11 +32,11 @@ pub struct PendingRestart {
 /// Phase 3: Out-of-bounds detection system (Law 9).
 ///
 /// Detects when ball has gone out of pitch boundary and needs a restart.
-/// 
+///
 /// NOTE: Physics (ball_physics_system) clamps positions into [0, 105]×[0, 68] and
 /// bounces balls that would cross. After physics runs, a ball that was "going out"
 /// will be at the boundary with reduced (possibly near-zero) velocity.
-/// 
+///
 /// This system detects OOB by checking if a ball is:
 ///   1. At/near the boundary (within OOB_TOLERANCE)
 ///   2. Has low velocity (not actively moving toward play)
@@ -49,26 +52,26 @@ pub fn out_of_bounds_system(
 ) {
     // Collect entities that are at the boundary and need OOB classification
     let mut oob_events: Vec<(Entity, BallOutOfBoundsType)> = Vec::new();
-    
+
     // Tolerance for "at boundary" detection (physics clamps to boundary)
     const OOB_TOLERANCE: f32 = 0.15;
     // Velocity threshold below which ball is considered "settled"
     const VELOCITY_THRESHOLD: f32 = 0.5;
-    
+
     for (ball_entity, position, velocity, ball) in ball_query.iter() {
         // Skip balls already dead or in flight (unless settling from flight)
         if ball.state == BallState::Dead {
             continue;
         }
-        
+
         let (x, y) = (position.0.x, position.0.y);
         let speed = velocity.0.length();
-        
+
         // Only detect OOB for settled balls
         if speed >= VELOCITY_THRESHOLD {
             continue;
         }
-        
+
         // Check if ball is at/near any boundary
         let at_left = x <= OOB_TOLERANCE;
         let at_right = x >= PITCH_LENGTH - OOB_TOLERANCE;
@@ -76,11 +79,11 @@ pub fn out_of_bounds_system(
         let at_top = y >= PITCH_WIDTH - OOB_TOLERANCE;
         let at_goal_line = at_left || at_right;
         let at_touchline = at_bottom || at_top;
-        
+
         if !at_goal_line && !at_touchline {
             continue; // Not at any boundary
         }
-        
+
         // Corner: ball at intersection of goal line and touchline
         // (both x and y boundaries simultaneously)
         if at_goal_line && at_touchline {
@@ -92,7 +95,7 @@ pub fn out_of_bounds_system(
             }
             continue;
         }
-        
+
         // Goal line (x=0 or x=105): goal area → GoalKick, outside → Corner
         if at_goal_line {
             if y >= GOAL_Y_MIN && y <= GOAL_Y_MAX {
@@ -103,20 +106,22 @@ pub fn out_of_bounds_system(
             }
             continue;
         }
-        
+
         // Touchline (y=0 or y=68): always ThrowIn
         if at_touchline {
             oob_events.push((ball_entity, BallOutOfBoundsType::ThrowIn));
             continue;
         }
     }
-    
+
     // Now apply the state changes (separate pass to avoid borrow conflict)
     for (ball_entity, oob_type) in oob_events {
         if let Ok((_, _, _, mut ball)) = ball_query.get_mut(ball_entity) {
             ball.state = BallState::Dead;
         }
-        commands.entity(ball_entity).insert(RuleEvent::OutOfBounds(oob_type));
+        commands
+            .entity(ball_entity)
+            .insert(RuleEvent::OutOfBounds(oob_type));
     }
 }
 
@@ -135,7 +140,7 @@ pub fn goal_detection_system(
 ) {
     // First pass: collect goal events (avoid borrow conflicts)
     let mut goal_events: Vec<(Entity, sim_components::TeamId, (u8, u8))> = Vec::new();
-    
+
     for (ball_entity, ball_pos, ball) in ball_query.iter() {
         // BUG FIX: Do NOT score if ball is already Dead
         if ball.state == BallState::Dead {
@@ -154,7 +159,10 @@ pub fn goal_detection_system(
                 m.score.1 += 1;
                 let final_score = m.score;
                 goal_events.push((ball_entity, sim_components::TeamId(1), final_score));
-                println!("GOAL scored by away team! Score: {}-{}", final_score.0, final_score.1);
+                println!(
+                    "GOAL scored by away team! Score: {}-{}",
+                    final_score.0, final_score.1
+                );
             }
         }
         // Home goal: ball at x >= PITCH_LENGTH (right goal)
@@ -163,17 +171,20 @@ pub fn goal_detection_system(
                 m.score.0 += 1;
                 let final_score = m.score;
                 goal_events.push((ball_entity, sim_components::TeamId(0), final_score));
-                println!("GOAL scored by home team! Score: {}-{}", final_score.0, final_score.1);
+                println!(
+                    "GOAL scored by home team! Score: {}-{}",
+                    final_score.0, final_score.1
+                );
             }
         }
     }
-    
+
     // Second pass: apply state changes and emit events
     for (ball_entity, scorer_team, final_score) in goal_events {
         if let Ok((_, _, mut ball)) = ball_query.get_mut(ball_entity) {
             ball.state = BallState::Dead;
         }
-        commands.entity(ball_entity).insert(RuleEvent::Goal { 
+        commands.entity(ball_entity).insert(RuleEvent::Goal {
             scorer_team,
             score: final_score,
         });
@@ -221,13 +232,13 @@ pub fn restart_system(
 
     // Handle OutOfBounds restarts by reading RuleEvent from entity
     let mut processed_entities: Vec<Entity> = Vec::new();
-    
+
     for (entity, mut pos, mut vel, mut ball) in ball_query.iter_mut() {
         // Only process Dead balls
         if ball.state != BallState::Dead {
             continue;
         }
-        
+
         // Check if this entity has a RuleEvent
         if let Ok((_, rule_event)) = rule_event_query.get(entity) {
             if let RuleEvent::OutOfBounds(oob_type) = rule_event {
@@ -242,7 +253,7 @@ pub fn restart_system(
             }
         }
     }
-    
+
     // Remove RuleEvent component from processed entities
     for entity in processed_entities {
         commands.entity(entity).remove::<RuleEvent>();
@@ -250,11 +261,11 @@ pub fn restart_system(
 }
 
 /// Calculate restart position for out-of-bounds based on event type and ball position.
-/// 
+///
 /// Coordinate system:
 /// - x-axis (0 to PITCH_LENGTH=105): goal line axis
 /// - y-axis (0 to PITCH_WIDTH=68): touchline axis
-/// 
+///
 /// Law 9:
 /// - Crossing touchline (y<0 or y>68) → Throw-in at point where ball crossed
 /// - Crossing goal line in goal area (y in [26.68, 41.32]) → GoalKick
@@ -288,7 +299,7 @@ fn calculate_oob_restart_position(pos: Vec2, oob_type: BallOutOfBoundsType) -> V
             // Corner: ball crossed goal line outside goal area
             // Place near the appropriate corner arc
             let corner_offset = 1.0; // 1m from corner flag
-            
+
             if pos.x < PITCH_LENGTH / 2.0 {
                 // Left side - check if top or bottom
                 if pos.y < PITCH_WIDTH / 2.0 {
@@ -418,12 +429,10 @@ fn attacking_direction(team: TeamId) -> AttackingDirection {
 
 /// Extracts the raw `u8` team-id from a `TeamIdComponent`.
 fn team_id_u8(team: &TeamIdComponent) -> u8 {
-    team.0 .0
+    team.0.0
 }
 
-pub fn foul_detection_system(
-    player_query: Query<(&Position, &TeamIdComponent)>,
-) {
+pub fn foul_detection_system(player_query: Query<(&Position, &TeamIdComponent)>) {
     let _players: Vec<(&Position, &TeamIdComponent)> = player_query.iter().collect();
 }
 
@@ -513,15 +522,12 @@ pub fn possession_resolution_system(
     }
 }
 
-pub fn referee_advantage_system(
-    _referee_query: Query<&sim_components::Referee>,
-) {
-    // Placeholder for referee advantage system
+pub fn referee_advantage_system(ball_query: Query<&mut Ball>, match_query: Query<&Match>) {
+    // Phase N: real advantage window logic
+    let _ = (ball_query, match_query);
 }
 
-pub fn added_time_calculation_system(
-    mut referee_query: Query<&mut sim_components::Referee>,
-) {
+pub fn added_time_calculation_system(mut referee_query: Query<&mut sim_components::Referee>) {
     for mut referee in referee_query.iter_mut() {
         let added_time: f32 = referee.stoppage_events.len() as f32 * 0.5;
         let added_time = added_time.min(10.0);
@@ -530,9 +536,7 @@ pub fn added_time_calculation_system(
     }
 }
 
-pub fn match_duration_enforcement_system(
-    mut match_query: Query<&mut Match>,
-) {
+pub fn match_duration_enforcement_system(mut match_query: Query<&mut Match>) {
     for mut m in match_query.iter_mut() {
         if !m.clock.is_running {
             continue;
@@ -554,13 +558,14 @@ pub fn match_duration_enforcement_system(
     }
 }
 
-pub fn minimum_player_count_system(
-    team_query: Query<&sim_components::Team>,
-) {
+pub fn minimum_player_count_system(team_query: Query<&sim_components::Team>) {
     for team in team_query.iter() {
         let player_count = team.players.len();
         if player_count < 7 {
-            println!("WARNING: Team {} has only {} players (minimum 7 required)", team.name, player_count);
+            println!(
+                "WARNING: Team {} has only {} players (minimum 7 required)",
+                team.name, player_count
+            );
         }
     }
 }
@@ -590,25 +595,33 @@ mod tests {
         // Ball at bottom touchline (y=0, x=20) with low velocity - physics bounced it back
         // Throw-in: ball crosses touchline (y < 0 or y > PITCH_WIDTH)
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(20.0, 0.0), BallState::Free));
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(20.0, 0.0)));
-        world.entity_mut(ball_entity).insert(Velocity(Vec2::new(0.0, 0.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(ball_fixture(Vec2::new(20.0, 0.0), BallState::Free));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(20.0, 0.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(Velocity(Vec2::new(0.0, 0.0)));
 
         let mut schedule = Schedule::default();
         schedule.add_systems(out_of_bounds_system);
-        
+
         // Run with current_tick = 0
         world.insert_resource(CurrentTick(0));
         schedule.run(&mut world);
 
         let ball = world.entity(ball_entity).get::<Ball>().unwrap();
         assert_eq!(ball.state, BallState::Dead);
-        
+
         let rule_event = world.entity(ball_entity).get::<RuleEvent>();
         assert!(rule_event.is_some(), "RuleEvent should be emitted");
         if let Some(RuleEvent::OutOfBounds(oob_type)) = rule_event {
-            assert!(matches!(oob_type, BallOutOfBoundsType::ThrowIn), 
-                "Ball at y=0 (touchline) should be ThrowIn");
+            assert!(
+                matches!(oob_type, BallOutOfBoundsType::ThrowIn),
+                "Ball at y=0 (touchline) should be ThrowIn"
+            );
         }
     }
 
@@ -619,24 +632,30 @@ mod tests {
         // Ball at bottom-left corner (x=0.1, y=0.1) with low velocity
         // Both x and y are at the boundary, so it's a corner
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(0.1, 0.1), BallState::Free));
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(0.1, 0.1)));
+        world
+            .entity_mut(ball_entity)
+            .insert(ball_fixture(Vec2::new(0.1, 0.1), BallState::Free));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(0.1, 0.1)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
         let mut schedule = Schedule::default();
         schedule.add_systems(out_of_bounds_system);
-        
+
         world.insert_resource(CurrentTick(0));
         schedule.run(&mut world);
 
         let ball = world.entity(ball_entity).get::<Ball>().unwrap();
         assert_eq!(ball.state, BallState::Dead);
-        
+
         let rule_event = world.entity(ball_entity).get::<RuleEvent>();
         assert!(rule_event.is_some());
         if let Some(RuleEvent::OutOfBounds(oob_type)) = rule_event {
-            assert!(matches!(oob_type, BallOutOfBoundsType::Corner), 
-                "Ball at corner position should be Corner");
+            assert!(
+                matches!(oob_type, BallOutOfBoundsType::Corner),
+                "Ball at corner position should be Corner"
+            );
         }
     }
 
@@ -663,13 +682,17 @@ mod tests {
 
         // Create ball entity in home goal (x = 105.5, y = 34)
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Free));
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(105.5, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Free));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(105.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
         let mut schedule = Schedule::default();
         schedule.add_systems(goal_detection_system);
-        
+
         world.insert_resource(CurrentTick(100));
         schedule.run(&mut world);
 
@@ -679,7 +702,7 @@ mod tests {
 
         let ball = world.entity(ball_entity).get::<Ball>().unwrap();
         assert_eq!(ball.state, BallState::Dead);
-        
+
         // Verify KickoffRestart was scheduled
         let pending = world.get_resource::<PendingRestart>();
         assert!(pending.is_some());
@@ -708,13 +731,17 @@ mod tests {
 
         // Create ball entity in away goal (x = -0.5, y = 34)
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(-0.5, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(-0.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
         let mut schedule = Schedule::default();
         schedule.add_systems(goal_detection_system);
-        
+
         world.insert_resource(CurrentTick(100));
         schedule.run(&mut world);
 
@@ -746,13 +773,17 @@ mod tests {
 
         // Create ball entity in home goal with Dead state
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(105.5, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(105.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
         let mut schedule = Schedule::default();
         schedule.add_systems(goal_detection_system);
-        
+
         world.insert_resource(CurrentTick(100));
         schedule.run(&mut world);
 
@@ -785,8 +816,12 @@ mod tests {
 
         // Create ball entity in Dead state (after a goal)
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(105.5, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(105.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
         // Set up pending restart for kickoff
@@ -797,7 +832,7 @@ mod tests {
 
         let mut schedule = Schedule::default();
         schedule.add_systems(restart_system);
-        
+
         // Run at tick 60 - should trigger restart
         world.insert_resource(CurrentTick(60));
         schedule.run(&mut world);
@@ -806,7 +841,7 @@ mod tests {
         assert_eq!(ball.state, BallState::Free);
         assert_eq!(ball.position, Vec2::new(CENTER_SPOT.0, CENTER_SPOT.1));
         assert_eq!(ball.velocity, Vec2::zero());
-        
+
         // PendingRestart should be cleared
         assert!(world.get_resource::<PendingRestart>().is_none());
     }
@@ -817,13 +852,17 @@ mod tests {
 
         // Ball in goal area on left side
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(-0.5, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(-0.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
         let mut schedule = Schedule::default();
         schedule.add_systems(out_of_bounds_system);
-        
+
         world.insert_resource(CurrentTick(0));
         schedule.run(&mut world);
 
@@ -847,7 +886,9 @@ mod tests {
             possessor: None,
             last_touched_by: None,
         });
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(50.0, 34.0)));
 
         let player_entity = world.spawn(()).id();
         world.entity_mut(player_entity).insert(Player {
@@ -864,8 +905,12 @@ mod tests {
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
-        world.entity_mut(player_entity).insert(Position(Vec2::new(50.5, 34.0)));
-        world.entity_mut(player_entity).insert(TeamIdComponent(TeamId(0)));
+        world
+            .entity_mut(player_entity)
+            .insert(Position(Vec2::new(50.5, 34.0)));
+        world
+            .entity_mut(player_entity)
+            .insert(TeamIdComponent(TeamId(0)));
         world.entity_mut(player_entity).insert(Skill(0.8));
 
         let mut schedule = Schedule::default();
@@ -891,7 +936,9 @@ mod tests {
             possessor: None,
             last_touched_by: None,
         });
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(50.0, 34.0)));
 
         // Player very close to ball (0.3 m)
         let player_entity = world.spawn(()).id();
@@ -909,8 +956,12 @@ mod tests {
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
-        world.entity_mut(player_entity).insert(Position(Vec2::new(50.3, 34.0)));
-        world.entity_mut(player_entity).insert(TeamIdComponent(TeamId(0)));
+        world
+            .entity_mut(player_entity)
+            .insert(Position(Vec2::new(50.3, 34.0)));
+        world
+            .entity_mut(player_entity)
+            .insert(TeamIdComponent(TeamId(0)));
         world.entity_mut(player_entity).insert(Skill(0.8));
 
         let mut schedule = Schedule::default();
@@ -942,7 +993,9 @@ mod tests {
             possessor: None,
             last_touched_by: None,
         });
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(50.0, 34.0)));
 
         // Player far away from ball (> 1.5 m)
         let _player_entity = world.spawn(()).id();
@@ -960,8 +1013,12 @@ mod tests {
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
-        world.entity_mut(_player_entity).insert(Position(Vec2::new(55.0, 34.0)));
-        world.entity_mut(_player_entity).insert(TeamIdComponent(TeamId(0)));
+        world
+            .entity_mut(_player_entity)
+            .insert(Position(Vec2::new(55.0, 34.0)));
+        world
+            .entity_mut(_player_entity)
+            .insert(TeamIdComponent(TeamId(0)));
         world.entity_mut(_player_entity).insert(Skill(0.8));
 
         let mut schedule = Schedule::default();
@@ -970,7 +1027,10 @@ mod tests {
 
         let ball = world.entity(ball_entity).get::<Ball>().unwrap();
         assert_eq!(ball.state, BallState::Free);
-        assert_eq!(ball.possessor, None, "Ball should have no possessor when no player is within 1.5 m");
+        assert_eq!(
+            ball.possessor, None,
+            "Ball should have no possessor when no player is within 1.5 m"
+        );
     }
 
     /// Test that last_touched_by is updated when a player touches the ball
@@ -988,7 +1048,9 @@ mod tests {
             possessor: None,
             last_touched_by: None,
         });
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(50.0, 34.0)));
 
         // Player A close to ball (will touch it)
         let player_a = world.spawn(()).id();
@@ -1006,8 +1068,12 @@ mod tests {
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
-        world.entity_mut(player_a).insert(Position(Vec2::new(50.2, 34.0)));
-        world.entity_mut(player_a).insert(TeamIdComponent(TeamId(0)));
+        world
+            .entity_mut(player_a)
+            .insert(Position(Vec2::new(50.2, 34.0)));
+        world
+            .entity_mut(player_a)
+            .insert(TeamIdComponent(TeamId(0)));
         world.entity_mut(player_a).insert(Skill(0.8));
 
         let mut schedule = Schedule::default();
@@ -1051,8 +1117,12 @@ mod tests {
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
-        world.entity_mut(player_b).insert(Position(Vec2::new(80.3, 34.0)));
-        world.entity_mut(player_b).insert(TeamIdComponent(TeamId(0)));
+        world
+            .entity_mut(player_b)
+            .insert(Position(Vec2::new(80.3, 34.0)));
+        world
+            .entity_mut(player_b)
+            .insert(TeamIdComponent(TeamId(0)));
         world.entity_mut(player_b).insert(Skill(0.7));
 
         // Player A is far from the new ball position

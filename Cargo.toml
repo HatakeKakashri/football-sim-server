@@ -8,7 +8,6 @@ members = [
     "crates/sim-ai-player",
     "crates/sim-ai-manager",
     "crates/sim-rules",
-    "crates/sim-referee",
     "crates/sim-core",
     "crates/sim-replay",
     "crates/sim-server",
@@ -23,6 +22,7 @@ bevy_ecs = { version = "0.14", default-features = false }
 smallvec = "1.13"
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3"
+rand = { version = "0.8", features = ["small_rng"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -1,8 +1,12 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Match, MatchClock, MatchState, ManagerCommand, PerceptionSnapshot, PitchBounds, Player, Position, Velocity};
-use sim_math::{DeterministicRng, PitchDimensions, Vec2};
+use rand::{SeedableRng, rngs::SmallRng};
+use serde::{Deserialize, Serialize};
+use sim_components::{
+    ManagerCommand, Match, MatchClock, MatchState, PerceptionSnapshot, PitchBounds, Player,
+    Position, Velocity,
+};
+use sim_math::{PitchDimensions, Vec2};
 use sim_physics::ball_physics_system;
-use serde::{Serialize, Deserialize};
 
 pub const FIXED_TIMESTEP: f32 = 1.0 / 60.0;
 pub const MAX_ACCUMULATOR: f32 = 0.25;
@@ -21,7 +25,8 @@ pub enum SimulationSet {
 pub struct Simulation {
     pub world: World,
     pub schedule: Schedule,
-    pub rng: DeterministicRng,
+    pub rng: SmallRng,
+    pub original_seed: u64,
     pub tick: u64,
     pub accumulator: f32,
     pub match_entity: Entity,
@@ -40,7 +45,8 @@ impl Simulation {
         world.insert_resource(sim_physics::PitchControlGrid::build_standard());
 
         let mut schedule = Schedule::default();
-        let rng = DeterministicRng::new(seed);
+        let rng = SmallRng::seed_from_u64(seed);
+        let original_seed = seed;
 
         // Configure system sets for explicit ordering
         schedule.configure_sets(
@@ -77,19 +83,50 @@ impl Simulation {
         };
         schedule
             // Perception
-            .add_systems((pitch_control_system, perception_system).chain().in_set(SimulationSet::Perception))
+            .add_systems(
+                (pitch_control_system, perception_system)
+                    .chain()
+                    .in_set(SimulationSet::Perception),
+            )
             // Decision (no time-slicing)
-            .add_systems(player_decision_system.in_set(SimulationSet::Decision).after(SimulationSet::Perception))
+            .add_systems(
+                player_decision_system
+                    .in_set(SimulationSet::Decision)
+                    .after(SimulationSet::Perception),
+            )
             // Execution
-            .add_systems(player_action_execution_system.in_set(SimulationSet::Execution).after(SimulationSet::Decision))
+            .add_systems(
+                player_action_execution_system
+                    .in_set(SimulationSet::Execution)
+                    .after(SimulationSet::Decision),
+            )
             // Physics
-            .add_systems((ball_physics_system, player_movement_system).chain().in_set(SimulationSet::Physics).after(SimulationSet::Execution))
+            .add_systems(
+                (ball_physics_system, player_movement_system)
+                    .chain()
+                    .in_set(SimulationSet::Physics)
+                    .after(SimulationSet::Execution),
+            )
             // Possession
-            .add_systems(possession_resolution_system.in_set(SimulationSet::Possession).after(SimulationSet::Physics))
+            .add_systems(
+                possession_resolution_system
+                    .in_set(SimulationSet::Possession)
+                    .after(SimulationSet::Physics),
+            )
             // Rules (explicitly chained)
-            .add_systems((out_of_bounds_system, goal_detection_system, restart_system).chain().in_set(SimulationSet::Rules).after(SimulationSet::Possession))
+            .add_systems(
+                (out_of_bounds_system, goal_detection_system, restart_system)
+                    .chain()
+                    .in_set(SimulationSet::Rules)
+                    .after(SimulationSet::Possession),
+            )
             // MatchAdmin
-            .add_systems((added_time_calculation_system, minimum_player_count_system).chain().in_set(SimulationSet::MatchAdmin).after(SimulationSet::Rules));
+            .add_systems(
+                (added_time_calculation_system, minimum_player_count_system)
+                    .chain()
+                    .in_set(SimulationSet::MatchAdmin)
+                    .after(SimulationSet::Rules),
+            );
 
         // Create match + home team; resolve ball entity for later use by the
         // lifecycle system and clock advancement.
@@ -104,6 +141,7 @@ impl Simulation {
             world,
             schedule,
             rng,
+            original_seed,
             tick: 0,
             accumulator: 0.0,
             match_entity,
@@ -113,23 +151,29 @@ impl Simulation {
 
     pub fn tick(&mut self, delta_time: f32) {
         self.accumulator += delta_time;
-        
+
         // Cap accumulator to prevent spiral of death
         if self.accumulator > MAX_ACCUMULATOR {
             self.accumulator = MAX_ACCUMULATOR;
         }
-        
+
         while self.accumulator >= FIXED_TIMESTEP {
             // Phase 3: Insert current tick as a resource so referee systems can access it.
             // Using pre-increment tick (same as lifecycle_system) so first tick is 0.
-            self.world.insert_resource(sim_rules::CurrentTick(self.tick));
-            
+            self.world
+                .insert_resource(sim_rules::CurrentTick(self.tick));
+
             self.schedule.run(&mut self.world);
             // lifecycle_system takes the *pre-increment* tick counter so the
             // first tick is tick 0. Used to time out the HalfTime state
             // independent of the paused match clock.
             let pre_tick = self.tick;
-            lifecycle_system(self.match_entity, self.ball_entity, pre_tick, &mut self.world);
+            lifecycle_system(
+                self.match_entity,
+                self.ball_entity,
+                pre_tick,
+                &mut self.world,
+            );
             self.tick_clock();
             self.tick += 1;
             self.accumulator -= FIXED_TIMESTEP;
@@ -177,9 +221,7 @@ impl Simulation {
     /// identical states reached at different ticks must hash equal, which is
     /// what makes replay divergence detection meaningful.
     pub fn get_state_hash(&self) -> u64 {
-        use sim_components::{
-            Ball, Match, Player, Position, Skill, Stamina, Team, Velocity,
-        };
+        use sim_components::{Ball, Match, Player, Position, Skill, Stamina, Team, Velocity};
 
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         fn mix(h: &mut u64, v: u64) {
@@ -220,14 +262,8 @@ impl Simulation {
                 mix(&mut h, b.velocity.y.to_bits() as u64);
                 mix(&mut h, b.spin.to_bits() as u64);
                 mix(&mut h, ball_state_discriminant(b.state));
-                mix(
-                    &mut h,
-                    b.possessor.map_or(u64::MAX, |e| e.to_bits()),
-                );
-                mix(
-                    &mut h,
-                    b.last_touched_by.map_or(u64::MAX, |e| e.to_bits()),
-                );
+                mix(&mut h, b.possessor.map_or(u64::MAX, |e| e.to_bits()));
+                mix(&mut h, b.last_touched_by.map_or(u64::MAX, |e| e.to_bits()));
             }
             if let Some(p) = er.get::<Player>() {
                 mix(&mut h, u64::from(p.team_id.0));
@@ -246,16 +282,16 @@ impl Simulation {
             }
         }
 
-        // Mix the RNG state as the final value (so two simulations that have
-        // advanced their RNG differently — even with identical world state —
-        // will hash differently).
-        mix(&mut h, u64::from(self.rng.state()));
+        // Mix the original seed so same-seed simulations hash identically.
+        mix(&mut h, self.original_seed);
 
         h
     }
 
     pub fn create_match(world: &mut World, seed: u64) -> (Entity, Entity) {
-        use sim_components::{Ball, Match, MatchClock, MatchState, Player, Position, Team, TeamId, Velocity};
+        use sim_components::{
+            Ball, Match, MatchClock, MatchState, Player, Position, Team, TeamId, Velocity,
+        };
         use sim_math::Vec2;
 
         // Create ball entity
@@ -271,7 +307,9 @@ impl Simulation {
         // Ball also carries Position + Velocity components so the registered
         // ball_physics_system query (`Position, Velocity, Ball`) matches it.
         // The Ball struct fields stay as the snapshot/diagnostic copy.
-        world.entity_mut(ball_entity).insert(Position(Vec2::new(52.5, 34.0)));
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(52.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
         // Create home team
@@ -315,8 +353,12 @@ impl Simulation {
                 mentality_modifier: 0.0,
             });
             world.entity_mut(player_entity).insert(Position(pos));
-            world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
-            world.entity_mut(player_entity).insert(default_utility_brain());
+            world
+                .entity_mut(player_entity)
+                .insert(Velocity(Vec2::zero()));
+            world
+                .entity_mut(player_entity)
+                .insert(default_utility_brain());
             home_players.push(player_entity);
         }
 
@@ -366,8 +408,12 @@ impl Simulation {
                 mentality_modifier: 0.0,
             });
             world.entity_mut(player_entity).insert(Position(pos));
-            world.entity_mut(player_entity).insert(Velocity(Vec2::zero()));
-            world.entity_mut(player_entity).insert(default_utility_brain());
+            world
+                .entity_mut(player_entity)
+                .insert(Velocity(Vec2::zero()));
+            world
+                .entity_mut(player_entity)
+                .insert(default_utility_brain());
             away_players.push(player_entity);
         }
 
@@ -407,48 +453,79 @@ impl Simulation {
         (match_entity, home_team_entity)
     }
 
-    pub fn apply_command(&mut self, match_id: Entity, command: ManagerCommand) -> Result<(), String> {
+    pub fn apply_command(
+        &mut self,
+        match_id: Entity,
+        command: ManagerCommand,
+    ) -> Result<(), String> {
         // Get match component
-        let match_component = self.world.entity(match_id).get::<Match>().ok_or("Match entity not found")?;
-        
+        let match_component = self
+            .world
+            .entity(match_id)
+            .get::<Match>()
+            .ok_or("Match entity not found")?;
+
         // Validate command based on current state
         match &command {
             ManagerCommand::ChangeFormation(_) => {
                 // Validate formation change is allowed in current state
-                if match_component.state != MatchState::InPlay &&
-                   match_component.state != MatchState::Stoppage {
-                    return Err(format!("Invalid state for formation change: {:?}", match_component.state));
+                if match_component.state != MatchState::InPlay
+                    && match_component.state != MatchState::Stoppage
+                {
+                    return Err(format!(
+                        "Invalid state for formation change: {:?}",
+                        match_component.state
+                    ));
                 }
             }
-            ManagerCommand::Substitute { out: _, substitute: _ } => {
+            ManagerCommand::Substitute {
+                out: _,
+                substitute: _,
+            } => {
                 // Validate substitution is allowed in current state
-                if match_component.state != MatchState::Stoppage &&
-                   match_component.state != MatchState::HalfTime {
-                    return Err(format!("Invalid state for substitution: {:?}", match_component.state));
+                if match_component.state != MatchState::Stoppage
+                    && match_component.state != MatchState::HalfTime
+                {
+                    return Err(format!(
+                        "Invalid state for substitution: {:?}",
+                        match_component.state
+                    ));
                 }
             }
             ManagerCommand::ChangeMentality(_) => {
                 // Validate mentality change is allowed in current state
-                if match_component.state != MatchState::InPlay &&
-                   match_component.state != MatchState::Stoppage {
-                    return Err(format!("Invalid state for mentality change: {:?}", match_component.state));
+                if match_component.state != MatchState::InPlay
+                    && match_component.state != MatchState::Stoppage
+                {
+                    return Err(format!(
+                        "Invalid state for mentality change: {:?}",
+                        match_component.state
+                    ));
                 }
             }
             ManagerCommand::SetTactic(_) => {
                 // Validate tactic change is allowed in current state
-                if match_component.state != MatchState::InPlay &&
-                   match_component.state != MatchState::Stoppage {
-                    return Err(format!("Invalid state for tactic change: {:?}", match_component.state));
+                if match_component.state != MatchState::InPlay
+                    && match_component.state != MatchState::Stoppage
+                {
+                    return Err(format!(
+                        "Invalid state for tactic change: {:?}",
+                        match_component.state
+                    ));
                 }
             }
         }
-        
+
         // Apply command
         match command {
             ManagerCommand::ChangeFormation(formation) => {
                 // Update team formation
                 let home_team = match_component.home_team;
-                if let Some(mut team) = self.world.entity_mut(home_team).get_mut::<sim_components::Team>() {
+                if let Some(mut team) = self
+                    .world
+                    .entity_mut(home_team)
+                    .get_mut::<sim_components::Team>()
+                {
                     team.formation = formation;
                 }
             }
@@ -460,7 +537,11 @@ impl Simulation {
             ManagerCommand::ChangeMentality(mentality) => {
                 // Update team mentality
                 let home_team = match_component.home_team;
-                if let Some(mut team) = self.world.entity_mut(home_team).get_mut::<sim_components::Team>() {
+                if let Some(mut team) = self
+                    .world
+                    .entity_mut(home_team)
+                    .get_mut::<sim_components::Team>()
+                {
                     team.mentality = mentality;
                 }
             }
@@ -469,14 +550,18 @@ impl Simulation {
                 println!("Tactic set: {:?}", tactic);
             }
         }
-        
+
         Ok(())
     }
 
     pub fn get_state(&self, match_id: Entity) -> Result<MatchSnapshot, String> {
         // Get match component
-        let match_component = self.world.entity(match_id).get::<Match>().ok_or("Match entity not found")?;
-        
+        let match_component = self
+            .world
+            .entity(match_id)
+            .get::<Match>()
+            .ok_or("Match entity not found")?;
+
         // Get ball entity
         let mut ball_view = BallView {
             position: [0.0, 0.0],
@@ -485,7 +570,7 @@ impl Simulation {
             state: sim_components::BallState::Free,
             possessor: None,
         };
-        
+
         // Find ball entity
         for entity in self.world.iter_entities() {
             if let Some(ball) = entity.get::<sim_components::Ball>() {
@@ -499,7 +584,7 @@ impl Simulation {
                 break;
             }
         }
-        
+
         // Get player views
         let mut player_views = Vec::new();
         for entity in self.world.iter_entities() {
@@ -521,7 +606,7 @@ impl Simulation {
                 });
             }
         }
-        
+
         // Get clock view
         let clock_view = ClockView {
             elapsed: match_component.clock.elapsed,
@@ -529,10 +614,12 @@ impl Simulation {
             added_time: match_component.clock.added_time,
             is_running: match_component.clock.is_running,
         };
-        
+
         Ok(MatchSnapshot {
             tick: self.tick,
-            match_state: MatchStateView { state: match_component.state },
+            match_state: MatchStateView {
+                state: match_component.state,
+            },
             ball: ball_view,
             players: player_views,
             score: match_component.score,
@@ -670,20 +757,12 @@ fn role_discriminant(r: sim_components::Role) -> u64 {
 /// `PreMatch` would only advance one step per tick and the kickoff impulse
 /// wouldn't apply until tick 2 (clobbering anything else that ran in
 /// between).
-fn lifecycle_system(
-    match_entity: Entity,
-    ball_entity: Entity,
-    sim_tick: u64,
-    world: &mut World,
-) {
+fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, world: &mut World) {
     const HALFTIME_BREAK_TICKS: u64 = 18;
     const MAX_TRANSITIONS_PER_TICK: usize = 8;
 
     for _iteration in 0..MAX_TRANSITIONS_PER_TICK {
-        let current_state = world
-            .entity(match_entity)
-            .get::<Match>()
-            .map(|m| m.state);
+        let current_state = world.entity(match_entity).get::<Match>().map(|m| m.state);
         let Some(current_state) = current_state else {
             return;
         };
@@ -770,7 +849,10 @@ fn lifecycle_system(
             if let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>() {
                 vel.0 = Vec2::zero();
             }
-            if let Some(mut ball) = world.entity_mut(ball_entity).get_mut::<sim_components::Ball>() {
+            if let Some(mut ball) = world
+                .entity_mut(ball_entity)
+                .get_mut::<sim_components::Ball>()
+            {
                 ball.position = Vec2::new(52.5, 34.0);
                 ball.velocity = Vec2::zero();
             }
@@ -779,7 +861,10 @@ fn lifecycle_system(
             if let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>() {
                 vel.0 = Vec2::new(2.0, 0.0);
             }
-            if let Some(mut ball) = world.entity_mut(ball_entity).get_mut::<sim_components::Ball>() {
+            if let Some(mut ball) = world
+                .entity_mut(ball_entity)
+                .get_mut::<sim_components::Ball>()
+            {
                 ball.velocity = Vec2::new(2.0, 0.0);
             }
         }
@@ -797,7 +882,10 @@ fn lifecycle_system(
         let snapshot_pos = world.entity(ball_entity).get::<Position>().map(|p| p.0);
         let snapshot_vel = world.entity(ball_entity).get::<Velocity>().map(|v| v.0);
         if let (Some(p), Some(v)) = (snapshot_pos, snapshot_vel) {
-            if let Some(mut ball) = world.entity_mut(ball_entity).get_mut::<sim_components::Ball>() {
+            if let Some(mut ball) = world
+                .entity_mut(ball_entity)
+                .get_mut::<sim_components::Ball>()
+            {
                 ball.position = p;
                 ball.velocity = v;
             }
@@ -1071,31 +1159,31 @@ fn reset_formation_to_4_4_2(world: &mut World) {
     // Home formation targets — index 0 = GK, 1..=4 = defenders (sorted by x),
     // 5..=8 = midfielders (sorted by x), 9..=10 = forwards (sorted by x).
     let home_targets: [Vec2; 11] = [
-        Vec2::new(5.0, 34.0),    // GK
-        Vec2::new(20.0, 20.0),   // Defender 1
-        Vec2::new(35.0, 20.0),   // Defender 2
-        Vec2::new(50.0, 20.0),   // Defender 3
-        Vec2::new(65.0, 20.0),   // Defender 4
-        Vec2::new(25.0, 34.0),   // Midfielder 1
-        Vec2::new(40.0, 34.0),   // Midfielder 2
-        Vec2::new(55.0, 34.0),   // Midfielder 3
-        Vec2::new(70.0, 34.0),   // Midfielder 4
-        Vec2::new(80.0, 34.0),   // Forward 1
-        Vec2::new(88.0, 34.0),   // Forward 2
+        Vec2::new(5.0, 34.0),  // GK
+        Vec2::new(20.0, 20.0), // Defender 1
+        Vec2::new(35.0, 20.0), // Defender 2
+        Vec2::new(50.0, 20.0), // Defender 3
+        Vec2::new(65.0, 20.0), // Defender 4
+        Vec2::new(25.0, 34.0), // Midfielder 1
+        Vec2::new(40.0, 34.0), // Midfielder 2
+        Vec2::new(55.0, 34.0), // Midfielder 3
+        Vec2::new(70.0, 34.0), // Midfielder 4
+        Vec2::new(80.0, 34.0), // Forward 1
+        Vec2::new(88.0, 34.0), // Forward 2
     ];
     // Away formation targets — mirrored about pitch centre (52.5, 34).
     let away_targets: [Vec2; 11] = [
-        Vec2::new(100.0, 34.0),  // GK
-        Vec2::new(20.0, 48.0),   // Defender 1 (y mirrored from 20 → 48)
-        Vec2::new(35.0, 48.0),   // Defender 2
-        Vec2::new(50.0, 48.0),   // Defender 3
-        Vec2::new(65.0, 48.0),   // Defender 4
-        Vec2::new(35.0, 34.0),   // Midfielder 1 (x mirrored: 70 → 35)
-        Vec2::new(50.0, 34.0),   // Midfielder 2 (x mirrored: 55 → 50)
-        Vec2::new(65.0, 34.0),   // Midfielder 3 (x mirrored: 40 → 65)
-        Vec2::new(80.0, 34.0),   // Midfielder 4 (x mirrored: 25 → 80)
-        Vec2::new(17.0, 34.0),   // Forward 1 (x mirrored: 88 → 17)
-        Vec2::new(25.0, 34.0),   // Forward 2 (x mirrored: 80 → 25)
+        Vec2::new(100.0, 34.0), // GK
+        Vec2::new(20.0, 48.0),  // Defender 1 (y mirrored from 20 → 48)
+        Vec2::new(35.0, 48.0),  // Defender 2
+        Vec2::new(50.0, 48.0),  // Defender 3
+        Vec2::new(65.0, 48.0),  // Defender 4
+        Vec2::new(35.0, 34.0),  // Midfielder 1 (x mirrored: 70 → 35)
+        Vec2::new(50.0, 34.0),  // Midfielder 2 (x mirrored: 55 → 50)
+        Vec2::new(65.0, 34.0),  // Midfielder 3 (x mirrored: 40 → 65)
+        Vec2::new(80.0, 34.0),  // Midfielder 4 (x mirrored: 25 → 80)
+        Vec2::new(17.0, 34.0),  // Forward 1 (x mirrored: 88 → 17)
+        Vec2::new(25.0, 34.0),  // Forward 2 (x mirrored: 80 → 25)
     ];
 
     let mut home_players: Vec<Entity> = Vec::new();
@@ -1240,7 +1328,10 @@ mod tests {
 
         let snapshot = sim.get_state(match_entity).expect("get_state failed");
 
-        assert_ne!(snapshot.state_hash, 0, "State hash is zero — systems did not run");
+        assert_ne!(
+            snapshot.state_hash, 0,
+            "State hash is zero — systems did not run"
+        );
         assert_eq!(snapshot.players.len(), 22, "Expected 22 players");
 
         let bx = snapshot.ball.position[0];
@@ -1500,10 +1591,13 @@ mod tests {
             .collect();
 
         // At least one player's exported position must have changed.
-        let any_moved = after_positions
-            .iter()
-            .zip(kickoff_positions.iter())
-            .any(|(after, kickoff)| (after[0] - kickoff[0]).abs() > 0.001 || (after[1] - kickoff[1]).abs() > 0.001);
+        let any_moved =
+            after_positions
+                .iter()
+                .zip(kickoff_positions.iter())
+                .any(|(after, kickoff)| {
+                    (after[0] - kickoff[0]).abs() > 0.001 || (after[1] - kickoff[1]).abs() > 0.001
+                });
 
         assert!(
             any_moved,

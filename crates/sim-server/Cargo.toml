@@ -9,7 +9,6 @@ sim-components = { path = "../sim-components" }
 sim-core = { path = "../sim-core" }
 sim-replay = { path = "../sim-replay" }
 sim-rules = { path = "../sim-rules" }
-sim-referee = { path = "../sim-referee" }
 sim-physics = { path = "../sim-physics" }
 bevy_ecs.workspace = true
 clap = { version = "4", features = ["derive"] }

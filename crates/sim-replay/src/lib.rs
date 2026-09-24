@@ -1,7 +1,9 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallState, Match, MatchClock, Player, Role, ManagerCommand, TeamId, CardColor};
+use serde::{Deserialize, Serialize};
+use sim_components::{
+    Ball, BallState, CardColor, ManagerCommand, Match, MatchClock, Player, Role, TeamId,
+};
 use sim_core::Simulation;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone)]
 pub struct TimedCommand {
@@ -45,18 +47,17 @@ impl ReplaySession {
     pub fn add_command(&mut self, command: TimedCommand) {
         self.commands.push(command);
     }
-
-    pub fn get_state_hash(&self) -> u64 {
-        // Placeholder for state hash computation
-        0
-    }
 }
 
 pub fn replay(seed: u64, commands: Vec<TimedCommand>) -> Result<ReplayResult, String> {
     replay_with_ticks(seed, commands, 324000)
 }
 
-pub fn replay_with_ticks(seed: u64, commands: Vec<TimedCommand>, total_ticks: u64) -> Result<ReplayResult, String> {
+pub fn replay_with_ticks(
+    seed: u64,
+    commands: Vec<TimedCommand>,
+    total_ticks: u64,
+) -> Result<ReplayResult, String> {
     // Create a new simulation with the given seed
     let mut simulation = Simulation::new(seed);
 
@@ -67,7 +68,7 @@ pub fn replay_with_ticks(seed: u64, commands: Vec<TimedCommand>, total_ticks: u6
     let mut state_hash_history = Vec::new();
     let event_log = Vec::new();
     let mut divergence_point = None;
-    
+
     for tick in 0..total_ticks {
         // Check if there's a command for this tick
         for timed_command in &commands {
@@ -76,14 +77,14 @@ pub fn replay_with_ticks(seed: u64, commands: Vec<TimedCommand>, total_ticks: u6
                 let _ = simulation.apply_command(match_entity, timed_command.command.clone());
             }
         }
-        
+
         // Run simulation tick
         simulation.tick(sim_core::FIXED_TIMESTEP);
-        
+
         // Get state hash
         let state_hash = simulation.get_state_hash();
         state_hash_history.push(state_hash);
-        
+
         // Check for divergence (compare with previous hash if available)
         if state_hash_history.len() > 1 {
             let previous_hash = state_hash_history[state_hash_history.len() - 2];
@@ -95,10 +96,10 @@ pub fn replay_with_ticks(seed: u64, commands: Vec<TimedCommand>, total_ticks: u6
             }
         }
     }
-    
+
     // Get final state
     let final_state = simulation.get_state(match_entity)?;
-    
+
     Ok(ReplayResult {
         final_state,
         event_log,
@@ -117,12 +118,34 @@ pub struct ReplayResult {
 
 #[derive(Debug, Clone)]
 pub enum MatchEvent {
-    Goal { team: TeamId, scorer: Entity, tick: u64 },
-    Foul { player: Entity, tick: u64 },
-    Card { player: Entity, color: CardColor, tick: u64 },
-    Substitution { team: TeamId, out: Entity, substitute: Entity, tick: u64 },
-    HalfTime { score: (u8, u8), tick: u64 },
-    FullTime { score: (u8, u8), tick: u64 },
+    Goal {
+        team: TeamId,
+        scorer: Entity,
+        tick: u64,
+    },
+    Foul {
+        player: Entity,
+        tick: u64,
+    },
+    Card {
+        player: Entity,
+        color: CardColor,
+        tick: u64,
+    },
+    Substitution {
+        team: TeamId,
+        out: Entity,
+        substitute: Entity,
+        tick: u64,
+    },
+    HalfTime {
+        score: (u8, u8),
+        tick: u64,
+    },
+    FullTime {
+        score: (u8, u8),
+        tick: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,26 +178,6 @@ pub struct PlayerSnapshot {
     pub skill: f32,
 }
 
-pub fn event_recording_system(
-    _match_query: Query<&Match>,
-    _ball_query: Query<&Ball>,
-    _player_query: Query<&Player>,
-) {
-    // Placeholder for event recording
-}
-
-pub fn divergence_detection_system(
-    _replay_session: Res<ReplaySession>,
-) {
-    // Placeholder for divergence detection
-}
-
-pub fn debug_logging_system(
-    _query: Query<&Player>,
-) {
-    // Placeholder for debug logging
-}
-
 pub fn save_snapshot(snapshot: &MatchSnapshot, path: &str) -> Result<(), String> {
     let encoded = bincode::serialize(snapshot).map_err(|e| e.to_string())?;
     std::fs::write(path, encoded).map_err(|e| e.to_string())
@@ -185,9 +188,16 @@ pub fn load_snapshot(path: &str) -> Result<MatchSnapshot, String> {
     bincode::deserialize(&data).map_err(|e| e.to_string())
 }
 
-pub fn create_snapshot_from_simulation(simulation: &Simulation, match_entity: Entity) -> Result<MatchSnapshot, String> {
-    let match_component = simulation.world.entity(match_entity).get::<Match>().ok_or("Match not found")?;
-    
+pub fn create_snapshot_from_simulation(
+    simulation: &Simulation,
+    match_entity: Entity,
+) -> Result<MatchSnapshot, String> {
+    let match_component = simulation
+        .world
+        .entity(match_entity)
+        .get::<Match>()
+        .ok_or("Match not found")?;
+
     let mut ball_position = [0.0f32; 2];
     for entity in simulation.world.iter_entities() {
         if let Some(ball) = entity.get::<Ball>() {
@@ -195,14 +205,14 @@ pub fn create_snapshot_from_simulation(simulation: &Simulation, match_entity: En
             break;
         }
     }
-    
+
     let mut player_positions = Vec::new();
     for entity in simulation.world.iter_entities() {
         if let Some(player) = entity.get::<Player>() {
             player_positions.push(([player.position.x, player.position.y], player.team_id));
         }
     }
-    
+
     Ok(MatchSnapshot {
         tick: simulation.tick,
         state_hash: simulation.get_state_hash(),
@@ -237,8 +247,16 @@ mod tests {
         let result1 = replay_with_ticks(seed, commands.clone(), 1000).unwrap();
         let result2 = replay_with_ticks(seed, commands, 1000).unwrap();
 
-        assert_eq!(result1.state_hash_history.len(), result2.state_hash_history.len());
-        for (i, (hash1, hash2)) in result1.state_hash_history.iter().zip(result2.state_hash_history.iter()).enumerate() {
+        assert_eq!(
+            result1.state_hash_history.len(),
+            result2.state_hash_history.len()
+        );
+        for (i, (hash1, hash2)) in result1
+            .state_hash_history
+            .iter()
+            .zip(result2.state_hash_history.iter())
+            .enumerate()
+        {
             assert_eq!(hash1, hash2, "State hash mismatch at tick {}", i);
         }
 
@@ -290,10 +308,10 @@ mod tests {
                 is_running: false,
             },
         };
-        
+
         let encoded = bincode::serialize(&snapshot).unwrap();
         let decoded: MatchSnapshot = bincode::deserialize(&encoded).unwrap();
-        
+
         assert_eq!(decoded.tick, snapshot.tick);
         assert_eq!(decoded.state_hash, snapshot.state_hash);
         assert_eq!(decoded.score, snapshot.score);

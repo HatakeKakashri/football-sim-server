@@ -87,10 +87,9 @@ impl PitchControlGrid {
     /// clamped to the nearest cell.
     pub fn control_at(&self, x: f32, y: f32) -> f32 {
         let pitch = PitchDimensions::standard();
-        let cx = ((x / pitch.width) * self.cols as f32)
-            .clamp(0.0, (self.cols - 1) as f32) as usize;
-        let cy = ((y / pitch.length) * self.rows as f32)
-            .clamp(0.0, (self.rows - 1) as f32) as usize;
+        let cx = ((x / pitch.width) * self.cols as f32).clamp(0.0, (self.cols - 1) as f32) as usize;
+        let cy =
+            ((y / pitch.length) * self.rows as f32).clamp(0.0, (self.rows - 1) as f32) as usize;
         self.cells[cy][cx]
     }
 }
@@ -132,10 +131,7 @@ pub fn pitch_control_system(world: &mut World) {
 
     // Snapshot players by team id.
     for entity in world.iter_entities() {
-        if let (Some(player), Some(pos)) = (
-            entity.get::<Player>(),
-            entity.get::<Position>(),
-        ) {
+        if let (Some(player), Some(pos)) = (entity.get::<Player>(), entity.get::<Position>()) {
             let speed = PITCH_CONTROL_PLAYER_SPEED;
             if player.team_id.0 == 0 {
                 home_players.push((pos.0, speed));
@@ -191,13 +187,13 @@ pub fn ball_physics_system(
     for (mut pos, mut vel, mut ball) in query.iter_mut() {
         // Apply velocity
         pos.0 += vel.0;
-        
+
         // Apply damping
         vel.0 *= BALL_DAMPING;
-        
+
         // Clamp ball speed
         vel.0 = vel.0.clamp_length(MAX_BALL_SPEED);
-        
+
         // Boundary clamping
         if pos.0.x < 0.0 {
             pos.0.x = 0.0;
@@ -206,7 +202,7 @@ pub fn ball_physics_system(
             pos.0.x = pitch.width;
             vel.0.x = -vel.0.x * 0.5;
         }
-        
+
         if pos.0.y < 0.0 {
             pos.0.y = 0.0;
             vel.0.y = -vel.0.y * 0.5;
@@ -214,7 +210,7 @@ pub fn ball_physics_system(
             pos.0.y = pitch.length;
             vel.0.y = -vel.0.y * 0.5;
         }
-        
+
         // Update ball state based on velocity
         if vel.0.length() > 0.1 {
             ball.state = sim_components::BallState::InFlight;
@@ -233,10 +229,10 @@ pub fn player_movement_system(
     for (mut pos, mut vel) in query.iter_mut() {
         // Clamp velocity to max speed
         vel.0 = vel.0.clamp_length(MAX_PLAYER_SPEED);
-        
+
         // Apply velocity
         pos.0 += vel.0;
-        
+
         // Boundary clamping (players stay within pitch)
         pos.0.x = pos.0.x.clamp(0.0, pitch.width);
         pos.0.y = pos.0.y.clamp(0.0, pitch.length);

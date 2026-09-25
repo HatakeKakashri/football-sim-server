@@ -610,6 +610,74 @@ pub fn player_action_execution_system(
     }
 }
 
+/// Speed imparted to the ball when a possessing player shoots or otherwise
+/// kicks it. Demo-scope simplification (see `kick_execution_system`): a flat
+/// speed per action type, not scaled by player skill/power.
+pub const KICK_SPEED_SHOT: f32 = 22.0;
+pub const KICK_SPEED_PASS: f32 = 14.0;
+
+/// Turns a possessing player's intent into actual ball velocity.
+///
+/// Before this system existed, nothing in the simulation ever wrote to the
+/// ball's `Velocity` component: players could gain possession via
+/// `possession_resolution_system`'s proximity check, but the ball itself
+/// never moved as a result of an action, so "kick/pass" was purely
+/// notional. This system closes that gap for the current demo scope only —
+/// it is intentionally not real ball control:
+/// - `ShootAtGoal`: kicks toward the already-resolved shot target.
+/// - `PassTo` / `ChaseBall` / `Tackle` / `Press`: continues the ball in the
+///   player's current heading. `PassTo`'s target entity is not resolved
+///   here (see the known `Entity::PLACEHOLDER` gap in
+///   `default_utility_brain`) — out of scope for "just movement and
+///   kick/pass", not a real pass-to-teammate mechanic.
+///
+/// Runs after `player_action_execution_system` in the same `Execution` set
+/// (so it sees this tick's resolved intent and velocity) and before the
+/// `Physics` set integrates the ball's velocity into its position.
+///
+/// Clears `ball.possessor` on every kick so the ball goes properly loose
+/// (`BallState::InFlight`) rather than getting stuck reporting `Possessed`
+/// by a player who has since moved away: `ball_physics_system` only
+/// downgrades state to `Possessed`/`Free` from velocity + possessor, and
+/// `possession_resolution_system` only re-resolves possession while
+/// `ball.state == BallState::Free`. Without this, a kicked ball that
+/// decelerates to rest before another player reaches it would silently
+/// re-freeze as "possessed" by the original kicker.
+pub fn kick_execution_system(
+    player_query: Query<(Entity, &Player)>,
+    mut ball_query: Query<(&mut Velocity, &mut Ball)>,
+) {
+    let Ok((mut ball_velocity, mut ball)) = ball_query.get_single_mut() else {
+        return;
+    };
+    let Some(possessor) = ball.possessor else {
+        return;
+    };
+    let Some((_, player)) = player_query.iter().find(|(e, _)| *e == possessor) else {
+        return;
+    };
+    let Some(intent) = &player.intent else {
+        return;
+    };
+
+    let kick = match intent {
+        Intent::ShootAtGoal(target) => {
+            let dir = *target - player.position;
+            (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_SHOT))
+        }
+        Intent::PassTo(_) | Intent::ChaseBall | Intent::Tackle(_) | Intent::Press(_) => {
+            (player.velocity.length() > 0.01)
+                .then(|| (player.velocity.normalized(), KICK_SPEED_PASS))
+        }
+        _ => None,
+    };
+
+    if let Some((direction, speed)) = kick {
+        ball_velocity.0 = direction * speed;
+        ball.possessor = None;
+    }
+}
+
 /// Resolve an intent to a target point and an action-specific speed,
 /// then return the unit-direction × speed vector. Target entities are
 /// resolved from the player's perception snapshot (`nearby_teammates` /

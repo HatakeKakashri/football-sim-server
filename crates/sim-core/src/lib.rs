@@ -77,7 +77,8 @@ impl Simulation {
         // because it mutates match state and needs the schedule to have already
         // executed this tick.
         use sim_ai_player::{
-            perception_system, player_action_execution_system, player_decision_system,
+            kick_execution_system, perception_system, player_action_execution_system,
+            player_decision_system,
         };
         use sim_physics::{pitch_control_system, player_movement_system};
         use sim_rules::{
@@ -101,7 +102,8 @@ impl Simulation {
             )
             // Execution
             .add_systems(
-                player_action_execution_system
+                (player_action_execution_system, kick_execution_system)
+                    .chain()
                     .in_set(SimulationSet::Execution)
                     .after(SimulationSet::Decision),
             )

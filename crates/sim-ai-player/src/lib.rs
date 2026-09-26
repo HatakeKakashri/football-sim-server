@@ -601,6 +601,24 @@ pub fn player_action_execution_system(
 pub const KICK_SPEED_SHOT: f32 = 22.0;
 pub const KICK_SPEED_PASS: f32 = 14.0;
 
+/// Nearest teammate's absolute position from the player's perception
+/// snapshot, if any. Used to aim a `PassTo` kick at an actual teammate
+/// rather than just continuing the ball in the passer's current heading.
+/// Mirrors the equivalent lookup `steer()` already uses to *move* a player
+/// toward the same teammate for a `PassTo` intent.
+fn nearest_teammate_position(player: &Player) -> Option<Vec2> {
+    player.perception.as_ref().and_then(|snap| {
+        snap.nearby_teammates
+            .iter()
+            .min_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|t| t.relative_position + player.position)
+    })
+}
+
 /// Turns a possessing player's intent into actual ball velocity.
 ///
 /// Before this system existed, nothing in the simulation ever wrote to the
@@ -610,11 +628,12 @@ pub const KICK_SPEED_PASS: f32 = 14.0;
 /// notional. This system closes that gap for the current demo scope only —
 /// it is intentionally not real ball control:
 /// - `ShootAtGoal`: kicks toward the already-resolved shot target.
-/// - `PassTo` / `ChaseBall` / `Tackle` / `Press`: continues the ball in the
-///   player's current heading. `PassTo`'s target entity is not resolved
-///   here (see the known `Entity::PLACEHOLDER` gap in
-///   `default_utility_brain`) — out of scope for "just movement and
-///   kick/pass", not a real pass-to-teammate mechanic.
+/// - `PassTo`: kicks toward the nearest teammate (if any), via
+///   `nearest_teammate_position`. No lead/interception modeling, no
+///   pass-completion mechanic beyond that — out of scope for "just
+///   movement and kick/pass".
+/// - `ChaseBall` / `Tackle` / `Press`: continues the ball in the player's
+///   current heading.
 ///
 /// Runs after `player_action_execution_system` in the same `Execution` set
 /// (so it sees this tick's resolved intent and velocity) and before the
@@ -650,7 +669,11 @@ pub fn kick_execution_system(
             let dir = *target - player.position;
             (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_SHOT))
         }
-        Intent::PassTo | Intent::ChaseBall | Intent::Tackle(_) | Intent::Press(_) => {
+        Intent::PassTo => nearest_teammate_position(player).and_then(|target| {
+            let dir = target - player.position;
+            (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_PASS))
+        }),
+        Intent::ChaseBall | Intent::Tackle(_) | Intent::Press(_) => {
             (player.velocity.length() > 0.01)
                 .then(|| (player.velocity.normalized(), KICK_SPEED_PASS))
         }

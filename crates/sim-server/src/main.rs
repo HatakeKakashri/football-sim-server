@@ -86,19 +86,120 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut last_possessor: Option<bevy_ecs::prelude::Entity> = None;
             let mut last_log_tick = 0;
 
+            // --- DEBUG INSTRUMENTATION (temporary, for phase2 validation) ---
+            // Neither `lifecycle_system` (sim-core, the system that actually
+            // performs InPlay->HalfTime/FullTime transitions) nor the unwired
+            // `match_duration_enforcement_system` (sim-rules, dead code: it's
+            // never added to the schedule, which is why "Half time!"/"Full
+            // time!" never print) currently report MatchState transitions.
+            // Track it here from the outside so every transition is visible.
+            let mut last_match_state: Option<sim_components::MatchState> = None;
+
+            // Player-movement census cadence: every N ticks, dump an
+            // aggregate view of all 22 players so "are players moving at
+            // all" can be answered without a full per-player dump every tick.
+            const CENSUS_INTERVAL_TICKS: u64 = 600; // ~10 sim-seconds at 60 ticks/sec
+            // --- END DEBUG INSTRUMENTATION HEADER ---
+
             for _ in 0..effective_ticks {
                 sim.tick(1.0 / 60.0);
 
-                if let Some(ball) = sim.world.get::<sim_components::Ball>(sim.ball_entity) {
-                    if ball.state != last_ball_state || ball.possessor != last_possessor || sim.tick - last_log_tick >= 1800 {
+                // --- DEBUG: MatchState transition log ---
+                if let Some(m) = sim.world.get::<sim_components::Match>(match_entity) {
+                    if last_match_state != Some(m.state) {
+                        println!(
+                            "[Tick {:06}] MatchState: {:?} -> {:?} | half={} elapsed={:.3} added_time={:.3} is_running={}",
+                            sim.tick, last_match_state, m.state,
+                            m.clock.half, m.clock.elapsed, m.clock.added_time, m.clock.is_running
+                        );
+                        last_match_state = Some(m.state);
+                    }
+
+                    // DEBUG: stop wasting ticks once the match is over. This
+                    // is a functional change, not just logging -- comment out
+                    // this block if you want to keep observing what happens
+                    // (or doesn't) to the world state after FullTime.
+                    if m.state == sim_components::MatchState::FullTime {
+                        println!(
+                            "[Tick {:06}] FullTime reached, stopping early ({} of {} ticks used)",
+                            sim.tick, sim.tick, effective_ticks
+                        );
+                        break;
+                    }
+                }
+
+                // --- DEBUG: periodic aggregate player-movement census ---
+                if sim.tick.is_multiple_of(CENSUS_INTERVAL_TICKS) {
+                    let ball_pos = sim
+                        .world
+                        .get::<sim_components::Position>(sim.ball_entity)
+                        .map(|p| p.0);
+
+                    let mut speed_sum = 0.0f32;
+                    let mut stationary_count = 0u32;
+                    let mut player_count = 0u32;
+                    let mut nearest_to_ball: Option<f32> = None;
+                    let mut intent_counts: std::collections::HashMap<&'static str, u32> =
+                        std::collections::HashMap::new();
+
+                    let mut query = sim.world.query::<(
+                        &sim_components::Player,
+                        &sim_components::Position,
+                        &sim_components::Velocity,
+                    )>();
+                    for (player, pos, vel) in query.iter(&sim.world) {
+                        player_count += 1;
+                        let speed = vel.0.length();
+                        speed_sum += speed;
+                        if speed < 0.05 {
+                            stationary_count += 1;
+                        }
+                        if let Some(bp) = ball_pos {
+                            let d = pos.0.distance(bp);
+                            nearest_to_ball = Some(nearest_to_ball.map_or(d, |cur: f32| cur.min(d)));
+                        }
+                        let label = match &player.intent {
+                            None => "None",
+                            Some(sim_components::Intent::MoveToPosition(_)) => "MoveToPosition",
+                            Some(sim_components::Intent::PassTo) => "PassTo",
+                            Some(sim_components::Intent::ShootAtGoal(_)) => "ShootAtGoal",
+                            Some(sim_components::Intent::Tackle(_)) => "Tackle",
+                            Some(sim_components::Intent::ChaseBall) => "ChaseBall",
+                            Some(sim_components::Intent::MarkOpponent(_)) => "MarkOpponent",
+                            Some(sim_components::Intent::Intercept) => "Intercept",
+                            Some(sim_components::Intent::Press(_)) => "Press",
+                            Some(sim_components::Intent::HoldPosition) => "HoldPosition",
+                            Some(sim_components::Intent::SupportRun) => "SupportRun",
+                            Some(sim_components::Intent::TrackBack) => "TrackBack",
+                        };
+                        *intent_counts.entry(label).or_insert(0) += 1;
+                    }
+
+                    if player_count > 0 {
+                        println!(
+                            "[Tick {:06}] CENSUS players={} avg_speed={:.3} stationary(<0.05)={}/{} nearest_to_ball={} intents={:?}",
+                            sim.tick,
+                            player_count,
+                            speed_sum / player_count as f32,
+                            stationary_count,
+                            player_count,
+                            nearest_to_ball.map_or_else(|| "n/a".to_string(), |d| format!("{d:.2}m")),
+                            intent_counts
+                        );
+                    }
+                }
+                // --- END DEBUG: periodic census ---
+
+                if let Some(ball) = sim.world.get::<sim_components::Ball>(sim.ball_entity)
+                    && (ball.state != last_ball_state || ball.possessor != last_possessor || sim.tick - last_log_tick >= 1800) {
                         let match_comp = sim.world.get::<sim_components::Match>(match_entity);
-                        let score = match_comp.map(|m| m.score).unwrap_or((0, 0));
-                        let time = match_comp.map(|m| m.clock.elapsed).unwrap_or(0.0);
+                        let score = match_comp.map_or((0, 0), |m| m.score);
+                        let time = match_comp.map_or(0.0, |m| m.clock.elapsed);
                         
                         let intent_str = if let Some(p_ent) = ball.possessor {
                             if let Some(player) = sim.world.get::<sim_components::Player>(p_ent) {
                                 if let Some(intent) = &player.intent {
-                                    format!("{:?}", intent)
+                                    format!("{intent:?}")
                                 } else {
                                     "None".to_string()
                                 }
@@ -120,11 +221,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             intent_str
                         );
                         
-                        last_ball_state = ball.state.clone();
+                        last_ball_state = ball.state;
                         last_possessor = ball.possessor;
                         last_log_tick = sim.tick;
                     }
-                }
             }
             let duration = start.elapsed();
             println!(

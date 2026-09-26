@@ -76,6 +76,7 @@ impl Simulation {
         // order. Lifecycle runs *outside* the schedule (after `schedule.run`)
         // because it mutates match state and needs the schedule to have already
         // executed this tick.
+        use sim_ai_manager::{mentality_shift_system, substitution_system};
         use sim_ai_player::{
             kick_execution_system, perception_system, player_action_execution_system,
             player_decision_system,
@@ -86,7 +87,6 @@ impl Simulation {
             minimum_player_count_system, offside_detection_system, out_of_bounds_system,
             possession_resolution_system, restart_system,
         };
-        use sim_ai_manager::{mentality_shift_system, substitution_system};
         schedule
             // Perception
             .add_systems(
@@ -122,14 +122,25 @@ impl Simulation {
             )
             // Rules (explicitly chained)
             .add_systems(
-                (out_of_bounds_system, goal_detection_system, offside_detection_system, foul_detection_system, restart_system)
+                (
+                    out_of_bounds_system,
+                    goal_detection_system,
+                    offside_detection_system,
+                    foul_detection_system,
+                    restart_system,
+                )
                     .chain()
                     .in_set(SimulationSet::Rules)
                     .after(SimulationSet::Possession),
             )
             // MatchAdmin
             .add_systems(
-                (added_time_calculation_system, minimum_player_count_system, substitution_system, mentality_shift_system)
+                (
+                    added_time_calculation_system,
+                    minimum_player_count_system,
+                    substitution_system,
+                    mentality_shift_system,
+                )
                     .chain()
                     .in_set(SimulationSet::MatchAdmin)
                     .after(SimulationSet::Rules),
@@ -767,6 +778,15 @@ fn role_discriminant(r: sim_components::Role) -> u64 {
 fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, world: &mut World) {
     const HALFTIME_BREAK_TICKS: u64 = 18;
     const MAX_TRANSITIONS_PER_TICK: usize = 8;
+    // `MatchClock.elapsed` accumulates in real seconds (`tick_clock()` adds
+    // `FIXED_TIMESTEP` = 1/60 per tick, so 60 ticks = 1.0 elapsed-second).
+    // A half is 45 real-world match-minutes, i.e. 45 * 60 = 2700.0 elapsed
+    // seconds = 162,000 ticks. This is the SAME threshold for both halves:
+    // `elapsed` resets to 0.0 at the second-half kickoff (below), so half 2
+    // needs its own 2700.0 budget, not the cumulative 90-minute match length.
+    // `main.rs`'s `--full-match` flag is sized for exactly this: 324,000
+    // ticks = 2 * 162,000 (+ the 18-tick halftime break).
+    const HALF_LENGTH_SECONDS: f32 = 45.0 * 60.0;
 
     for _iteration in 0..MAX_TRANSITIONS_PER_TICK {
         let current_state = world.entity(match_entity).get::<Match>().map(|m| m.state);
@@ -792,11 +812,10 @@ fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, wo
             MatchState::InPlay => {
                 let clock = world.entity(match_entity).get::<MatchClock>().cloned();
                 if let Some(c) = clock {
-                    let in_play_threshold = if c.half == 1 {
-                        45.0 + c.added_time
-                    } else {
-                        90.0 + c.added_time
-                    };
+                    // Both halves use the same per-half length: `elapsed` is
+                    // reset to 0.0 at the second-half kickoff, so there is no
+                    // "cumulative 90 minutes" quantity to compare against here.
+                    let in_play_threshold = HALF_LENGTH_SECONDS + c.added_time;
                     let is_final_half = c.half >= 2;
                     if c.elapsed >= in_play_threshold {
                         if is_final_half {
@@ -1479,9 +1498,10 @@ mod tests {
         );
     }
 
-    /// Phase 1 verification: a full match (≤ 10 000 ticks ≈ 2.7 min of sim
-    /// time, well past the simulated 90-minute threshold) eventually drives
-    /// `state` to `FullTime`, transitions through `half == 2`, and the clock
+    /// Verification: a full match (≤ 330 000 ticks — two 45-minute halves at
+    /// 162 000 ticks each, plus the 18-tick halftime break, matching the
+    /// `--full-match` CLI budget of 324 000 ticks) eventually drives `state`
+    /// to `FullTime`, transitions through `half == 2`, and the clock
     /// pauses/resets at half-time.
     #[test]
     fn test_full_match_reaches_full_time() {
@@ -1492,7 +1512,7 @@ mod tests {
 
         let final_state = {
             let mut state = MatchState::PreMatch;
-            for tick_index in 0..10_000u64 {
+            for tick_index in 0..330_000u64 {
                 sim.tick(1.0 / 60.0);
                 let clock = sim
                     .world
@@ -1500,7 +1520,7 @@ mod tests {
                     .get::<MatchClock>()
                     .cloned()
                     .expect("match clock");
-                if clock.half == 2 && (2700..5400).contains(&tick_index) {
+                if clock.half == 2 && (162_000..324_100).contains(&tick_index) {
                     saw_half_2 = true;
                 }
                 // After we first observe half == 2 (i.e. 2nd half in progress),
@@ -1524,11 +1544,11 @@ mod tests {
         assert_eq!(
             final_state,
             MatchState::FullTime,
-            "match never reached FullTime within 10_000 ticks"
+            "match never reached FullTime within 330_000 ticks"
         );
         assert!(
             saw_half_2,
-            "clock.half never observed as 2 between tick 2700 and 5400"
+            "clock.half never observed as 2 between tick 162_000 and 324_100"
         );
         assert!(
             clock_paused_after_half,
@@ -1545,7 +1565,7 @@ mod tests {
         let mut observed_low_elapsed_in_half_2 = false;
         let mut sim2 = Simulation::new(7);
         let me2 = sim2.match_entity;
-        for _ in 0..10_000u64 {
+        for _ in 0..170_000u64 {
             sim2.tick(1.0 / 60.0);
             let c = sim2.world.entity(me2).get::<MatchClock>().cloned().unwrap();
             if c.half == 2 && c.elapsed < 1.0 {

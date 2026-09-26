@@ -1021,7 +1021,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         },
         // PassTo — open passing lane, reasonable teammate distance, space.
         PlayerAction {
-            intent: Intent::PassTo(Entity::PLACEHOLDER),
+            intent: Intent::PassTo,
             considerations: vec![
                 PlayerConsideration {
                     name: "pass_angle_clear".to_string(),

@@ -82,8 +82,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("Running simulation with seed {seed}, {effective_ticks} ticks...");
             let start = Instant::now();
+            let mut last_ball_state = sim_components::BallState::Free;
+            let mut last_possessor: Option<bevy_ecs::prelude::Entity> = None;
+            let mut last_log_tick = 0;
+
             for _ in 0..effective_ticks {
                 sim.tick(1.0 / 60.0);
+
+                if let Some(ball) = sim.world.get::<sim_components::Ball>(sim.ball_entity) {
+                    if ball.state != last_ball_state || ball.possessor != last_possessor || sim.tick - last_log_tick >= 1800 {
+                        let match_comp = sim.world.get::<sim_components::Match>(match_entity);
+                        let score = match_comp.map(|m| m.score).unwrap_or((0, 0));
+                        let time = match_comp.map(|m| m.clock.elapsed).unwrap_or(0.0);
+                        
+                        let intent_str = if let Some(p_ent) = ball.possessor {
+                            if let Some(player) = sim.world.get::<sim_components::Player>(p_ent) {
+                                if let Some(intent) = &player.intent {
+                                    format!("{:?}", intent)
+                                } else {
+                                    "None".to_string()
+                                }
+                            } else {
+                                "None".to_string()
+                            }
+                        } else {
+                            "None".to_string()
+                        };
+
+                        println!("[Tick {:06} | {:02}:{:02}] Score: {}-{} | State: {:?} | Pos: ({:>5.1}, {:>5.1}) | Possessor: {:?} | Intent: {}",
+                            sim.tick,
+                            (time / 60.0) as u32,
+                            (time % 60.0) as u32,
+                            score.0, score.1,
+                            ball.state,
+                            ball.position.x, ball.position.y,
+                            ball.possessor,
+                            intent_str
+                        );
+                        
+                        last_ball_state = ball.state.clone();
+                        last_possessor = ball.possessor;
+                        last_log_tick = sim.tick;
+                    }
+                }
             }
             let duration = start.elapsed();
             println!(

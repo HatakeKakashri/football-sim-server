@@ -301,7 +301,7 @@ pub fn player_decision_system(
 fn intent_kind(intent: &Intent) -> &'static str {
     match intent {
         Intent::MoveToPosition(_) => "MoveToPosition",
-        Intent::PassTo(_) => "PassTo",
+        Intent::PassTo => "PassTo",
         Intent::ShootAtGoal(_) => "ShootAtGoal",
         Intent::Tackle(_) => "Tackle",
         Intent::ChaseBall => "ChaseBall",
@@ -352,7 +352,7 @@ fn compute_consideration_input(
         "pass_angle_clear" => {
             // For Phase 2: 1.0 if no opponent is between player and target,
             // linearly fading to 0.0 if a defender blocks the lane.
-            if let Intent::PassTo(_target) = intent {
+            if let Intent::PassTo = intent {
                 let lane_clear = !perception.nearby_opponents.iter().any(|opp| {
                     let dist = opp.distance;
                     dist < 8.0
@@ -549,24 +549,16 @@ pub fn player_action_execution_system(
                 if roll > tackle_success_prob {
                     // Tackle fails - player stumbles, moves slower
                     speed_modifier = 0.3;
-                    println!(
-                        "Tackle attempt failed (roll {:.2} > prob {:.2})",
-                        roll, tackle_success_prob
-                    );
+                
                 }
                 // Store target for potential later use
                 let _ = target;
             }
-            Intent::PassTo(target) => {
+            Intent::PassTo => {
                 // Pass completion: probability based on distance and skill
-                let pass_distance = player.position.distance(
-                    player.perception.as_ref()
-                        .and_then(|p| Some(p.nearby_teammates.iter()
-                            .find(|t| t.entity == *target)
-                            .map(|t| t.relative_position + player.position)))
-                        .flatten()
-                        .unwrap_or(player.position)
-                );
+                let pass_distance = player.perception.as_ref()
+                    .and_then(|p| p.nearby_teammates.first().map(|t| t.distance))
+                    .unwrap_or(15.0);
                 // Longer passes = lower completion probability
                 let pass_prob = (1.0 - (pass_distance / 50.0).min(0.8)) * player.skill;
                 let roll: f32 = rng.0.r#gen();
@@ -577,12 +569,8 @@ pub fn player_action_execution_system(
                         rng.0.gen_range(-2.0..2.0),
                         rng.0.gen_range(-2.0..2.0)
                     );
-                    println!(
-                        "Pass deviation (roll {:.2} > prob {:.2})",
-                        roll, pass_prob
-                    );
+                
                 }
-                let _ = target;
             }
             Intent::ShootAtGoal(_) => {
                 // Shot accuracy: skill and stamina affect accuracy
@@ -595,10 +583,7 @@ pub fn player_action_execution_system(
                         rng.0.gen_range(-3.0..3.0),
                         rng.0.gen_range(-2.0..2.0)
                     );
-                    println!(
-                        "Shot miss (roll {:.2} > accuracy {:.2})",
-                        roll, accuracy
-                    );
+                
                 }
             }
             _ => {}
@@ -665,7 +650,7 @@ pub fn kick_execution_system(
             let dir = *target - player.position;
             (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_SHOT))
         }
-        Intent::PassTo(_) | Intent::ChaseBall | Intent::Tackle(_) | Intent::Press(_) => {
+        Intent::PassTo | Intent::ChaseBall | Intent::Tackle(_) | Intent::Press(_) => {
             (player.velocity.length() > 0.01)
                 .then(|| (player.velocity.normalized(), KICK_SPEED_PASS))
         }
@@ -720,7 +705,7 @@ fn steer(player: &Player, intent: &Intent) -> Vec2 {
 
     let (target, speed): (Vec2, f32) = match intent {
         Intent::MoveToPosition(target) => (*target, 5.0),
-        Intent::PassTo(_) => (nearest_teammate_pos(player).unwrap_or(ball_pos), 8.0),
+        Intent::PassTo => (nearest_teammate_pos(player).unwrap_or(ball_pos), 8.0),
         Intent::ShootAtGoal(target) => (*target, 10.0),
         Intent::Tackle(_) => (nearest_opponent_pos(player).unwrap_or(player_pos), 10.0),
         Intent::ChaseBall => (ball_pos, 8.0),
@@ -896,7 +881,7 @@ mod tests {
         // Create utility brain with pass action
         let utility_brain = UtilityBrain {
             actions: vec![PlayerAction {
-                intent: sim_components::Intent::PassTo(teammate_entity),
+                intent: sim_components::Intent::PassTo,
                 considerations: vec![],
             }],
             hysteresis: 0.1,

@@ -478,10 +478,7 @@ pub fn foul_detection_system(
                 let rel_vel = (vel1 - vel2).length();
                 if rel_vel > 8.0 {
                     // Collision detected - foul on the player moving faster or with ball
-                    println!(
-                        "DANGEROUS PLAY: high-speed collision between players at ({:.1}, {:.1}) and ({:.1}, {:.1}), relative velocity {:.1}",
-                        pos1.x, pos1.y, pos2.x, pos2.y, rel_vel
-                    );
+
 
                     // For Phase 1: emit a RuleEvent but don't yet assign cards
                     // Use u64 entity IDs for serialization compatibility
@@ -504,17 +501,14 @@ pub fn foul_detection_system(
     // A player is committing professional foul if:
     // - They have the ball within 1.5m but are not the possessor (handball)
     // - They are in possession and a opponent is about to score (DOGSO)
-    for (_entity, _player, pos, vel) in player_query.iter() {
+    for (_entity, _player, _pos, vel) in player_query.iter() {
         let speed = vel.0.length();
 
         // Deliberate handball: very low movement speed while near ball but not possessing
         // This is a simplified check - full implementation would need ball position
         if speed < 0.5 {
             // Could be a professional foul - player holding ball deliberately
-            println!(
-                "POSSIBLE PROFESSIONAL FOUL: player at ({:.1}, {:.1}) with very low speed {:.1}",
-                pos.0.x, pos.0.y, speed
-            );
+
             // Phase 1: just log, don't penalize yet
         }
     }

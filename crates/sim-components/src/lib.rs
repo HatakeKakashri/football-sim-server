@@ -91,7 +91,7 @@ pub enum RuleEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intent {
     MoveToPosition(Vec2),
-    PassTo(Entity),
+    PassTo,
     ShootAtGoal(Vec2),
     Tackle(Entity),
     ChaseBall,

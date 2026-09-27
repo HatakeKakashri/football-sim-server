@@ -109,8 +109,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if last_match_state != Some(m.state) {
                         println!(
                             "[Tick {:06}] MatchState: {:?} -> {:?} | half={} elapsed={:.3} added_time={:.3} is_running={}",
-                            sim.tick, last_match_state, m.state,
-                            m.clock.half, m.clock.elapsed, m.clock.added_time, m.clock.is_running
+                            sim.tick,
+                            last_match_state,
+                            m.state,
+                            m.clock.half,
+                            m.clock.elapsed,
+                            m.clock.added_time,
+                            m.clock.is_running
                         );
                         last_match_state = Some(m.state);
                     }
@@ -156,7 +161,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if let Some(bp) = ball_pos {
                             let d = pos.0.distance(bp);
-                            nearest_to_ball = Some(nearest_to_ball.map_or(d, |cur: f32| cur.min(d)));
+                            nearest_to_ball =
+                                Some(nearest_to_ball.map_or(d, |cur: f32| cur.min(d)));
                         }
                         let label = match &player.intent {
                             None => "None",
@@ -183,7 +189,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             speed_sum / player_count as f32,
                             stationary_count,
                             player_count,
-                            nearest_to_ball.map_or_else(|| "n/a".to_string(), |d| format!("{d:.2}m")),
+                            nearest_to_ball
+                                .map_or_else(|| "n/a".to_string(), |d| format!("{d:.2}m")),
                             intent_counts
                         );
                     }
@@ -191,62 +198,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // --- END DEBUG: periodic census ---
 
                 if let Some(ball) = sim.world.get::<sim_components::Ball>(sim.ball_entity)
-                    && (ball.state != last_ball_state || ball.possessor != last_possessor || sim.tick - last_log_tick >= 1800) {
-                        let match_comp = sim.world.get::<sim_components::Match>(match_entity);
-                        let score = match_comp.map_or((0, 0), |m| m.score);
-                        // `m.clock.elapsed` is per-half (see
-                        // `sim_core::lifecycle_system`): it resets to ~0.0 at
-                        // the second-half kickoff so half 2's own budget
-                        // can't be shrunk by stoppage time added in half 1.
-                        // That's correct for the InPlay->HalfTime/FullTime
-                        // *threshold checks*, but printed here raw it made
-                        // this diagnostic's displayed clock restart at 0:00
-                        // for the second half instead of continuing from
-                        // 45:00 -- e.g. run1.log's ticks 160307 and 322282
-                        // (the same offset into half 1 and half 2
-                        // respectively) both printed the literal string
-                        // "44:32", 45 real match-minutes apart. Adding the
-                        // shared `sim_core::HALF_LENGTH_SECONDS` once the
-                        // match is in its second half makes this a
-                        // match-wide, monotonically increasing time value.
-                        let time = match_comp.map_or(0.0, |m| {
-                            let half_offset = if m.clock.half >= 2 {
-                                sim_core::HALF_LENGTH_SECONDS
-                            } else {
-                                0.0
-                            };
-                            half_offset + m.clock.elapsed
-                        });
-                        
-                        let intent_str = if let Some(p_ent) = ball.possessor {
-                            if let Some(player) = sim.world.get::<sim_components::Player>(p_ent) {
-                                if let Some(intent) = &player.intent {
-                                    format!("{intent:?}")
-                                } else {
-                                    "None".to_string()
-                                }
-                            } else {
-                                "None".to_string()
-                            }
+                    && (ball.state != last_ball_state
+                        || ball.possessor != last_possessor
+                        || sim.tick - last_log_tick >= 1800)
+                {
+                    let match_comp = sim.world.get::<sim_components::Match>(match_entity);
+                    let score = match_comp.map_or((0, 0), |m| m.score);
+                    // `m.clock.elapsed` is per-half (see
+                    // `sim_core::lifecycle_system`): it resets to ~0.0 at
+                    // the second-half kickoff so half 2's own budget
+                    // can't be shrunk by stoppage time added in half 1.
+                    // That's correct for the InPlay->HalfTime/FullTime
+                    // *threshold checks*, but printed here raw it made
+                    // this diagnostic's displayed clock restart at 0:00
+                    // for the second half instead of continuing from
+                    // 45:00 -- e.g. run1.log's ticks 160307 and 322282
+                    // (the same offset into half 1 and half 2
+                    // respectively) both printed the literal string
+                    // "44:32", 45 real match-minutes apart. Adding the
+                    // shared `sim_core::HALF_LENGTH_SECONDS` once the
+                    // match is in its second half makes this a
+                    // match-wide, monotonically increasing time value.
+                    let time = match_comp.map_or(0.0, |m| {
+                        let half_offset = if m.clock.half >= 2 {
+                            sim_core::HALF_LENGTH_SECONDS
                         } else {
-                            "None".to_string()
+                            0.0
                         };
+                        half_offset + m.clock.elapsed
+                    });
 
-                        println!("[Tick {:06} | {:02}:{:02}] Score: {}-{} | State: {:?} | Pos: ({:>5.1}, {:>5.1}) | Possessor: {:?} | Intent: {}",
-                            sim.tick,
-                            (time / 60.0) as u32,
-                            (time % 60.0) as u32,
-                            score.0, score.1,
-                            ball.state,
-                            ball.position.x, ball.position.y,
-                            ball.possessor,
-                            intent_str
-                        );
-                        
-                        last_ball_state = ball.state;
-                        last_possessor = ball.possessor;
-                        last_log_tick = sim.tick;
-                    }
+                    let (possessor_str, intent_str) = if let Some(p_ent) = ball.possessor {
+                        if let Some(player) = sim.world.get::<sim_components::Player>(p_ent) {
+                            let label = format!("Team{} {:?}", player.team_id.0, player.role);
+                            let intent = player
+                                .intent
+                                .as_ref()
+                                .map(|i| format!("{:?}", i))
+                                .unwrap_or_else(|| "None".to_string());
+                            (label, intent)
+                        } else {
+                            ("None".to_string(), "None".to_string())
+                        }
+                    } else {
+                        ("None".to_string(), "None".to_string())
+                    };
+
+                    println!(
+                        "[Tick {:06} | {:02}:{:02}] Score: {}-{} | State: {:?} | Pos: ({:>5.1}, {:>5.1}) | Possessor: {} | Intent: {}",
+                        sim.tick,
+                        (time / 60.0) as u32,
+                        (time % 60.0) as u32,
+                        score.0,
+                        score.1,
+                        ball.state,
+                        ball.position.x,
+                        ball.position.y,
+                        possessor_str,
+                        intent_str
+                    );
+
+                    last_ball_state = ball.state;
+                    last_possessor = ball.possessor;
+                    last_log_tick = sim.tick;
+                }
             }
             let duration = start.elapsed();
             println!(

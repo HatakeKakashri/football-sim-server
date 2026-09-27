@@ -332,10 +332,22 @@ fn calculate_oob_restart_position(pos: Vec2, oob_type: BallOutOfBoundsType) -> V
 /// judged relative to the position of the second-last defender *at the
 /// instant the ball was touched* by a teammate of the potentially-offside
 /// player.
+/// Demo-scope note: this evaluates every attacking player every tick with no
+/// edge-detection, so a player who simply lingers in an offside position
+/// (plausible with the demo's basic/random movement) would otherwise print
+/// one line per tick for as long as they stay there. `tick_counter` throttles
+/// output to at most once every 300 calls (~5 sim-seconds at 60 ticks/sec)
+/// regardless of how many players are offside in that window. This changes
+/// only how often a detected condition is printed — the detection logic
+/// itself (a known Phase-1-only stub per tasks.md) is untouched.
 pub fn offside_detection_system(
     ball_query: Query<(&Position, &Ball)>,
     player_query: Query<(Entity, &Position, &TeamIdComponent), Without<Ball>>,
+    mut tick_counter: Local<u32>,
 ) {
+    *tick_counter += 1;
+    let should_log = *tick_counter % 300 == 0;
+
     let Ok((ball_pos, ball)) = ball_query.get_single() else {
         return;
     };
@@ -380,7 +392,7 @@ pub fn offside_detection_system(
         let closer_than_ball = dir.closer_than(pos.0.x, ball_pos.0.x);
         let closer_than_defender = dir.closer_than(pos.0.x, second_last_defender_x);
 
-        if closer_than_ball && closer_than_defender {
+        if closer_than_ball && closer_than_defender && should_log {
             println!(
                 "OFFSIDE position detected: player at ({:.1}, {:.1}), toucher team {}",
                 pos.0.x, pos.0.y, toucher_team_id
@@ -607,6 +619,9 @@ pub fn referee_advantage_system(ball_query: Query<&mut Ball>, match_query: Query
 
 pub fn added_time_calculation_system(mut referee_query: Query<&mut sim_components::Referee>) {
     for mut referee in referee_query.iter_mut() {
+        if referee.stoppage_events.is_empty() {
+            continue;
+        }
         let added_time: f32 = referee.stoppage_events.len() as f32 * 0.5;
         let added_time = added_time.min(10.0);
         referee.stoppage_events.clear();

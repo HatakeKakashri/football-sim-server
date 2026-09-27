@@ -152,12 +152,16 @@ pub fn perception_system(
 
         nearby_teammates.sort_by(
             |a: &sim_components::NearbyEntity, b: &sim_components::NearbyEntity| {
-                a.distance.partial_cmp(&b.distance).unwrap()
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             },
         );
         nearby_opponents.sort_by(
             |a: &sim_components::NearbyEntity, b: &sim_components::NearbyEntity| {
-                a.distance.partial_cmp(&b.distance).unwrap()
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             },
         );
 

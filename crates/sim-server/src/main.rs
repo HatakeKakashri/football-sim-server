@@ -194,7 +194,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && (ball.state != last_ball_state || ball.possessor != last_possessor || sim.tick - last_log_tick >= 1800) {
                         let match_comp = sim.world.get::<sim_components::Match>(match_entity);
                         let score = match_comp.map_or((0, 0), |m| m.score);
-                        let time = match_comp.map_or(0.0, |m| m.clock.elapsed);
+                        // `m.clock.elapsed` is per-half (see
+                        // `sim_core::lifecycle_system`): it resets to ~0.0 at
+                        // the second-half kickoff so half 2's own budget
+                        // can't be shrunk by stoppage time added in half 1.
+                        // That's correct for the InPlay->HalfTime/FullTime
+                        // *threshold checks*, but printed here raw it made
+                        // this diagnostic's displayed clock restart at 0:00
+                        // for the second half instead of continuing from
+                        // 45:00 -- e.g. run1.log's ticks 160307 and 322282
+                        // (the same offset into half 1 and half 2
+                        // respectively) both printed the literal string
+                        // "44:32", 45 real match-minutes apart. Adding the
+                        // shared `sim_core::HALF_LENGTH_SECONDS` once the
+                        // match is in its second half makes this a
+                        // match-wide, monotonically increasing time value.
+                        let time = match_comp.map_or(0.0, |m| {
+                            let half_offset = if m.clock.half >= 2 {
+                                sim_core::HALF_LENGTH_SECONDS
+                            } else {
+                                0.0
+                            };
+                            half_offset + m.clock.elapsed
+                        });
                         
                         let intent_str = if let Some(p_ent) = ball.possessor {
                             if let Some(player) = sim.world.get::<sim_components::Player>(p_ent) {

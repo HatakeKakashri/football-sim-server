@@ -775,18 +775,26 @@ fn role_discriminant(r: sim_components::Role) -> u64 {
 /// `PreMatch` would only advance one step per tick and the kickoff impulse
 /// wouldn't apply until tick 2 (clobbering anything else that ran in
 /// between).
+// `MatchClock.elapsed` accumulates in real seconds (`tick_clock()` adds
+// `FIXED_TIMESTEP` = 1/60 per tick, so 60 ticks = 1.0 elapsed-second). A
+// half is 45 real-world match-minutes, i.e. 45 * 60 = 2700.0 elapsed
+// seconds = 162,000 ticks. This is the SAME threshold for both halves:
+// `elapsed` resets to 0.0 at the second-half kickoff (see `lifecycle_system`
+// below), so half 2 needs its own 2700.0 budget, not the cumulative
+// 90-minute match length. `main.rs`'s `--full-match` flag is sized for
+// exactly this: 324,000 ticks = 2 * 162,000 (+ the 18-tick halftime break).
+//
+// `pub` (rather than a private const local to `lifecycle_system`, as
+// before) so callers outside this crate -- specifically `sim-server`'s
+// diagnostic match-clock display, which must add this offset once the
+// match enters its second half -- have one authoritative value instead of
+// a second, independently-typed copy of `2700.0` that could drift out of
+// sync with this one.
+pub const HALF_LENGTH_SECONDS: f32 = 45.0 * 60.0;
+
 fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, world: &mut World) {
     const HALFTIME_BREAK_TICKS: u64 = 18;
     const MAX_TRANSITIONS_PER_TICK: usize = 8;
-    // `MatchClock.elapsed` accumulates in real seconds (`tick_clock()` adds
-    // `FIXED_TIMESTEP` = 1/60 per tick, so 60 ticks = 1.0 elapsed-second).
-    // A half is 45 real-world match-minutes, i.e. 45 * 60 = 2700.0 elapsed
-    // seconds = 162,000 ticks. This is the SAME threshold for both halves:
-    // `elapsed` resets to 0.0 at the second-half kickoff (below), so half 2
-    // needs its own 2700.0 budget, not the cumulative 90-minute match length.
-    // `main.rs`'s `--full-match` flag is sized for exactly this: 324,000
-    // ticks = 2 * 162,000 (+ the 18-tick halftime break).
-    const HALF_LENGTH_SECONDS: f32 = 45.0 * 60.0;
 
     for _iteration in 0..MAX_TRANSITIONS_PER_TICK {
         let current_state = world.entity(match_entity).get::<Match>().map(|m| m.state);

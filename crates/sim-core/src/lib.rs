@@ -8,8 +8,10 @@ use sim_components::{
 use sim_math::{PitchDimensions, Vec2};
 use sim_physics::ball_physics_system;
 
-pub const FIXED_TIMESTEP: f32 = 1.0 / 60.0;
-pub const MAX_ACCUMULATOR: f32 = 0.25;
+// Re-export time constants from sim-components for downstream crates
+pub use sim_components::time::{
+    HALF_LENGTH_TICKS, HALFTIME_BREAK_TICKS, TICKS_PER_SECOND, TOTAL_MATCH_TICKS,
+};
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SimulationSet {
@@ -28,7 +30,6 @@ pub struct Simulation {
     pub rng: SmallRng,
     pub original_seed: u64,
     pub tick: u64,
-    pub accumulator: f32,
     pub match_entity: Entity,
     pub ball_entity: Entity,
 }
@@ -161,68 +162,45 @@ impl Simulation {
             rng,
             original_seed,
             tick: 0,
-            accumulator: 0.0,
             match_entity,
             ball_entity,
         }
     }
 
-    pub fn tick(&mut self, delta_time: f32) {
-        self.accumulator += delta_time;
+    /// Advance the simulation by one fixed timestep (1/60 second).
+    pub fn tick(&mut self) {
+        // Phase 3: Insert current tick as a resource so referee systems can access it.
+        self.world.insert_resource(sim_rules::CurrentTick(self.tick));
 
-        // Cap accumulator to prevent spiral of death
-        if self.accumulator > MAX_ACCUMULATOR {
-            self.accumulator = MAX_ACCUMULATOR;
-        }
+        self.schedule.run(&mut self.world);
 
-        while self.accumulator >= FIXED_TIMESTEP {
-            // Phase 3: Insert current tick as a resource so referee systems can access it.
-            // Using pre-increment tick (same as lifecycle_system) so first tick is 0.
-            self.world
-                .insert_resource(sim_rules::CurrentTick(self.tick));
+        // lifecycle_system takes the current tick counter.
+        lifecycle_system(
+            self.match_entity,
+            self.ball_entity,
+            self.tick,
+            &mut self.world,
+        );
 
-            self.schedule.run(&mut self.world);
-            // lifecycle_system takes the *pre-increment* tick counter so the
-            // first tick is tick 0. Used to time out the HalfTime state
-            // independent of the paused match clock.
-            let pre_tick = self.tick;
-            lifecycle_system(
-                self.match_entity,
-                self.ball_entity,
-                pre_tick,
-                &mut self.world,
-            );
-            self.tick_clock();
-            self.tick += 1;
-            self.accumulator -= FIXED_TIMESTEP;
-        }
+        // Advance match clock (integer ticks, no floating point).
+        self.tick_clock();
+
+        self.tick += 1;
     }
 
-    /// Advance the match clock by `FIXED_TIMESTEP` if the clock is running.
-    /// Clock advancement runs after `schedule.run()` and `lifecycle_system()`
-    /// so that any state transitions (e.g. `InPlay → HalfTime`) have already
-    /// been applied and `is_running` reflects the new state.
-    ///
-    /// Mirrors the updated component value into `Match.clock` so the snapshot
-    /// hash (which reads from the inner field) sees the same value.
+    /// Advance the match clock by one tick if the clock is running.
     fn tick_clock(&mut self) {
-        let new_elapsed = if let Some(mut clock) = self
+        if let Some(mut clock) = self
             .world
             .entity_mut(self.match_entity)
             .get_mut::<MatchClock>()
         {
             if clock.is_running {
-                clock.elapsed += FIXED_TIMESTEP;
-                Some(clock.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        if let Some(clock) = new_elapsed {
-            if let Some(mut m) = self.world.entity_mut(self.match_entity).get_mut::<Match>() {
-                m.clock = clock;
+                clock.elapsed_ticks += 1;
+                let clock_clone = clock.clone();
+                if let Some(mut m) = self.world.entity_mut(self.match_entity).get_mut::<Match>() {
+                    m.clock = clock_clone;
+                }
             }
         }
     }
@@ -234,10 +212,10 @@ impl Simulation {
     /// `Player`, `Team`, `Match`. After all entity bytes are mixed in, the
     /// RNG state is appended as the final 4 bytes.
     ///
-    /// **Excluded** by design: the tick counter, accumulator, and any
-    /// wall-clock data. The hash identifies *state*, not *time* — two
-    /// identical states reached at different ticks must hash equal, which is
-    /// what makes replay divergence detection meaningful.
+    /// **Excluded** by design: the tick counter and any wall-clock data.
+    /// The hash identifies *state*, not *time* — two identical states
+    /// reached at different ticks must hash equal, which is what makes
+    /// replay divergence detection meaningful.
     pub fn get_state_hash(&self) -> u64 {
         use sim_components::{Ball, Match, Player, Position, Skill, Stamina, Team, Velocity};
 
@@ -294,9 +272,9 @@ impl Simulation {
                 mix(&mut h, match_state_discriminant(m.state));
                 mix(&mut h, u64::from(m.score.0));
                 mix(&mut h, u64::from(m.score.1));
-                mix(&mut h, m.clock.elapsed.to_bits() as u64);
+                mix(&mut h, m.clock.elapsed_ticks);
                 mix(&mut h, u64::from(m.clock.half));
-                mix(&mut h, m.clock.added_time.to_bits() as u64);
+                mix(&mut h, m.clock.added_time_ticks);
             }
         }
 
@@ -366,7 +344,7 @@ impl Simulation {
                 intent: None,
                 perception: Some(default_snapshot),
                 score_differential: 0,
-                time_remaining: 90.0,
+                time_remaining_secs: 5400.0,
                 team_possession: 0.5,
                 mentality_modifier: 0.0,
             });
@@ -421,7 +399,7 @@ impl Simulation {
                 intent: None,
                 perception: Some(default_snapshot),
                 score_differential: 0,
-                time_remaining: 90.0,
+                time_remaining_secs: 5400.0,
                 team_possession: 0.5,
                 mentality_modifier: 0.0,
             });
@@ -447,9 +425,9 @@ impl Simulation {
         // Create match entity
         let match_entity = world.spawn(()).id();
         let initial_clock = MatchClock {
-            elapsed: 0.0,
+            elapsed_ticks: 0,
             half: 1,
-            added_time: 0.0,
+            added_time_ticks: 0,
             is_running: true,
         };
         world.entity_mut(match_entity).insert(Match {
@@ -627,9 +605,9 @@ impl Simulation {
 
         // Get clock view
         let clock_view = ClockView {
-            elapsed: match_component.clock.elapsed,
+            elapsed_ticks: match_component.clock.elapsed_ticks,
             half: match_component.clock.half,
-            added_time: match_component.clock.added_time,
+            added_time_ticks: match_component.clock.added_time_ticks,
             is_running: match_component.clock.is_running,
         };
 
@@ -689,9 +667,9 @@ pub struct PlayerView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClockView {
-    pub elapsed: f32,
+    pub elapsed_ticks: u64,
     pub half: u8,
-    pub added_time: f32,
+    pub added_time_ticks: u64,
     pub is_running: bool,
 }
 
@@ -775,25 +753,12 @@ fn role_discriminant(r: sim_components::Role) -> u64 {
 /// `PreMatch` would only advance one step per tick and the kickoff impulse
 /// wouldn't apply until tick 2 (clobbering anything else that ran in
 /// between).
-// `MatchClock.elapsed` accumulates in real seconds (`tick_clock()` adds
-// `FIXED_TIMESTEP` = 1/60 per tick, so 60 ticks = 1.0 elapsed-second). A
-// half is 45 real-world match-minutes, i.e. 45 * 60 = 2700.0 elapsed
-// seconds = 162,000 ticks. This is the SAME threshold for both halves:
-// `elapsed` resets to 0.0 at the second-half kickoff (see `lifecycle_system`
-// below), so half 2 needs its own 2700.0 budget, not the cumulative
-// 90-minute match length. `main.rs`'s `--full-match` flag is sized for
-// exactly this: 324,000 ticks = 2 * 162,000 (+ the 18-tick halftime break).
-//
-// `pub` (rather than a private const local to `lifecycle_system`, as
-// before) so callers outside this crate -- specifically `sim-server`'s
-// diagnostic match-clock display, which must add this offset once the
-// match enters its second half -- have one authoritative value instead of
-// a second, independently-typed copy of `2700.0` that could drift out of
-// sync with this one.
-pub const HALF_LENGTH_SECONDS: f32 = 45.0 * 60.0;
-
+// `MatchClock.elapsed_ticks` accumulates in simulation ticks (60 ticks = 1 second).
+// A half is 45 match-minutes = 45 * 60 * 60 = 162,000 ticks (HALF_LENGTH_TICKS).
+// This is the SAME threshold for both halves: `elapsed_ticks` resets to 0 at the
+// second-half kickoff (see `lifecycle_system` below), so half 2 needs its own
+// 162,000-tick budget, not the cumulative 90-minute match length.
 fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, world: &mut World) {
-    const HALFTIME_BREAK_TICKS: u64 = 18;
     const MAX_TRANSITIONS_PER_TICK: usize = 8;
 
     for _iteration in 0..MAX_TRANSITIONS_PER_TICK {
@@ -820,12 +785,12 @@ fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, wo
             MatchState::InPlay => {
                 let clock = world.entity(match_entity).get::<MatchClock>().cloned();
                 if let Some(c) = clock {
-                    // Both halves use the same per-half length: `elapsed` is
-                    // reset to 0.0 at the second-half kickoff, so there is no
+                    // Both halves use the same per-half length: `elapsed_ticks` is
+                    // reset to 0 at the second-half kickoff, so there is no
                     // "cumulative 90 minutes" quantity to compare against here.
-                    let in_play_threshold = HALF_LENGTH_SECONDS + c.added_time;
+                    let in_play_threshold = HALF_LENGTH_TICKS + c.added_time_ticks;
                     let is_final_half = c.half >= 2;
-                    if c.elapsed >= in_play_threshold {
+                    if c.elapsed_ticks >= in_play_threshold {
                         if is_final_half {
                             next_state = MatchState::FullTime;
                         } else {
@@ -853,9 +818,9 @@ fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, wo
                     next_state = MatchState::Kickoff;
                     if let Some(c) = clock {
                         new_clock = Some(MatchClock {
-                            elapsed: 0.0,
+                            elapsed_ticks: 0,
                             half: 2,
-                            added_time: c.added_time,
+                            added_time_ticks: c.added_time_ticks,
                             is_running: true,
                         });
                     }
@@ -1299,12 +1264,12 @@ fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sim_components::time;
 
     #[test]
     fn test_simulation_creation() {
         let sim = Simulation::new(12345);
         assert_eq!(sim.tick, 0);
-        assert_eq!(sim.accumulator, 0.0);
     }
 
     /// Strengthened from the prior "tick-aligned equality" form: collect every
@@ -1317,13 +1282,12 @@ mod tests {
         let mut sim1 = Simulation::new(seed);
         let mut sim2 = Simulation::new(seed);
 
-        let delta = 1.0 / 60.0;
         let mut hashes1 = Vec::with_capacity(1000);
         let mut hashes2 = Vec::with_capacity(1000);
 
         for _ in 0..1000 {
-            sim1.tick(delta);
-            sim2.tick(delta);
+            sim1.tick();
+            sim2.tick();
             hashes1.push(sim1.get_state_hash());
             hashes2.push(sim2.get_state_hash());
         }
@@ -1347,8 +1311,8 @@ mod tests {
         let mut b = Simulation::new(seed);
         let n = 50u64;
         for _ in 0..n {
-            a.tick(1.0 / 60.0);
-            b.tick(1.0 / 60.0);
+            a.tick();
+            b.tick();
             assert_eq!(a.get_state_hash(), b.get_state_hash());
         }
     }
@@ -1358,7 +1322,7 @@ mod tests {
         let mut sim = Simulation::new(42);
         let match_entity = sim.match_entity;
 
-        sim.tick(1.0 / 60.0);
+        sim.tick();
 
         let snapshot = sim.get_state(match_entity).expect("get_state failed");
 
@@ -1408,7 +1372,7 @@ mod tests {
 
         // Let the kickoff settle so the lifecycle no longer overwrites
         // velocity on each tick.
-        sim.tick(1.0 / 60.0);
+        sim.tick();
 
         // Set a non-zero velocity directly via world mutation.
         {
@@ -1426,7 +1390,7 @@ mod tests {
             (p.0.x, p.0.y)
         };
 
-        sim.tick(1.0 / 60.0);
+        sim.tick();
 
         let final_pos: (f32, f32) = {
             let p = sim
@@ -1456,8 +1420,8 @@ mod tests {
         let mut b = Simulation::new(seed);
 
         for _ in 0..10 {
-            a.tick(1.0 / 60.0);
-            b.tick(1.0 / 60.0);
+            a.tick();
+            b.tick();
         }
         let hash_before_a = a.get_state_hash();
         let hash_before_b = b.get_state_hash();
@@ -1491,18 +1455,18 @@ mod tests {
         let mut sim = Simulation::new(42);
         let me = sim.match_entity;
         for _ in 0..60 {
-            sim.tick(1.0 / 60.0);
+            sim.tick();
         }
-        let elapsed = sim
+        let elapsed_ticks = sim
             .world
             .entity(me)
             .get::<MatchClock>()
             .expect("match entity has MatchClock component")
-            .elapsed;
+            .elapsed_ticks;
         assert!(
-            (elapsed - 1.0).abs() < 0.01,
-            "clock should be ~1.0s, got {}",
-            elapsed
+            elapsed_ticks == 60,
+            "clock should be 60 ticks, got {}",
+            elapsed_ticks
         );
     }
 
@@ -1520,15 +1484,15 @@ mod tests {
 
         let final_state = {
             let mut state = MatchState::PreMatch;
-            for tick_index in 0..330_000u64 {
-                sim.tick(1.0 / 60.0);
+            for _ in 0..330_000u64 {
+                sim.tick();
                 let clock = sim
                     .world
                     .entity(me)
                     .get::<MatchClock>()
                     .cloned()
                     .expect("match clock");
-                if clock.half == 2 && (162_000..324_100).contains(&tick_index) {
+                if clock.half == 2 && clock.elapsed_ticks > 0 && clock.elapsed_ticks < 162_100 {
                     saw_half_2 = true;
                 }
                 // After we first observe half == 2 (i.e. 2nd half in progress),
@@ -1574,9 +1538,9 @@ mod tests {
         let mut sim2 = Simulation::new(7);
         let me2 = sim2.match_entity;
         for _ in 0..170_000u64 {
-            sim2.tick(1.0 / 60.0);
+            sim2.tick();
             let c = sim2.world.entity(me2).get::<MatchClock>().cloned().unwrap();
-            if c.half == 2 && c.elapsed < 1.0 {
+            if c.half == 2 && c.elapsed_ticks < 60 {
                 observed_low_elapsed_in_half_2 = true;
                 break;
             }
@@ -1602,7 +1566,7 @@ mod tests {
         let me = sim.match_entity;
 
         // Let the kickoff impulse settle (kickoff → InPlay on tick 0).
-        sim.tick(1.0 / 60.0);
+        sim.tick();
 
         let kickoff_positions: Vec<[f32; 2]> = sim
             .get_state(me)
@@ -1614,7 +1578,7 @@ mod tests {
 
         // Advance several ticks so player movement physics accumulates.
         for _ in 0..120 {
-            sim.tick(1.0 / 60.0);
+            sim.tick();
         }
 
         let after_positions: Vec<[f32; 2]> = sim
@@ -1640,5 +1604,212 @@ mod tests {
              Player.position may not be synced from the Position component. \
              Kickoff positions: {kickoff_positions:?}"
         );
+    }
+
+    /// Test: Half-time transition with added time.
+    /// Verifies that the match correctly transitions to HalfTime when
+    /// the first half elapsed time reaches 45 minutes + added time.
+    #[test]
+    fn test_half_time_transition_with_added_time() {
+        let mut sim = Simulation::new(42);
+        let me = sim.match_entity;
+
+        // Fast-forward to just before half-time with 3 minutes added time
+        // Set clock close to threshold so transition happens quickly
+        let clock = MatchClock {
+            elapsed_ticks: time::HALF_LENGTH_TICKS + 3 * 60 * 60 - 60, // 1 second before half-time threshold
+            half: 1,
+            added_time_ticks: 3 * 60 * 60, // 3 minutes added time
+            is_running: true,
+        };
+        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
+            m.state = MatchState::InPlay;
+            m.clock = clock.clone();
+        }
+        sim.world.entity_mut(me).insert(clock);
+
+        // Run until half-time transition (needs ~60 ticks to reach threshold)
+        for _ in 0..100 {
+            sim.tick();
+            let state = sim
+                .world
+                .entity(me)
+                .get::<Match>()
+                .map(|m| m.state)
+                .unwrap();
+            if state == MatchState::HalfTime {
+                break;
+            }
+        }
+
+        let m = sim.world.entity(me).get::<Match>().unwrap();
+        assert_eq!(m.state, MatchState::HalfTime);
+        assert!(!m.clock.is_running);
+        assert_eq!(m.clock.half, 1);
+        assert_eq!(m.clock.added_time_ticks, 3 * 60 * 60);
+    }
+
+    /// Test: Second-half kickoff clock reset.
+    /// Verifies that at the start of the second half, elapsed_ticks resets to 0.
+    #[test]
+    fn test_second_half_kickoff_clock_reset() {
+        let mut sim = Simulation::new(42);
+        let me = sim.match_entity;
+
+        // Set up match at HalfTime state
+        let clock = MatchClock {
+            elapsed_ticks: time::HALF_LENGTH_TICKS,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: false,
+        };
+        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
+            m.state = MatchState::HalfTime;
+            m.clock = clock.clone();
+        }
+        sim.world.entity_mut(me).insert(clock);
+
+        // Insert HalfTimeEntryTick resource to trigger transition
+        sim.world.insert_resource(crate::HalfTimeEntryTick {
+            tick: Some(sim.tick),
+        });
+
+        // Run ticks to trigger HalfTime -> Kickoff -> InPlay (second half) transition
+        // The lifecycle system transitions HalfTime -> Kickoff -> InPlay in one tick
+        for _ in 0..30 {
+            sim.tick();
+            let state = sim
+                .world
+                .entity(me)
+                .get::<Match>()
+                .map(|m| m.state)
+                .unwrap();
+            // After transition, state will be InPlay (second half)
+            if state == MatchState::InPlay {
+                break;
+            }
+        }
+
+        // Verify clock was reset for second half and state is InPlay (half 2)
+        // Note: tick_clock() runs after lifecycle_system(), so after one tick
+        // the clock will be at 1 (it was reset to 0, then incremented).
+        let m = sim.world.entity(me).get::<Match>().unwrap();
+        assert_eq!(m.state, MatchState::InPlay, "should be InPlay in second half");
+        assert_eq!(m.clock.half, 2, "should be in second half");
+        assert_eq!(m.clock.elapsed_ticks, 1, "clock should be at 1 after first tick of second half (reset to 0 then incremented)");
+        assert!(m.clock.is_running);
+    }
+
+    /// Test: Clock pause/resume during stoppage.
+    /// Verifies that the match clock pauses when is_running is false
+    /// and resumes when set back to true.
+    #[test]
+    fn test_clock_pause_resume_stoppage() {
+        let mut sim = Simulation::new(42);
+        let me = sim.match_entity;
+
+        // Set to InPlay with clock running
+        let clock = MatchClock {
+            elapsed_ticks: 30 * 60 * 60, // 30 minutes
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
+        };
+        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
+            m.state = MatchState::InPlay;
+            m.clock = clock.clone();
+        }
+        sim.world.entity_mut(me).insert(clock);
+
+        // Run 60 ticks (1 second) - clock should advance
+        for _ in 0..60 {
+            sim.tick();
+        }
+        let m = sim.world.entity(me).get::<Match>().unwrap();
+        assert_eq!(m.clock.elapsed_ticks, 30 * 60 * 60 + 60);
+
+        // Pause clock (simulate stoppage) - update both Match.clock and MatchClock component
+        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
+            m.clock.is_running = false;
+        }
+        if let Some(mut clock) = sim.world.get_mut::<MatchClock>(me) {
+            clock.is_running = false;
+        }
+
+        // Run 60 ticks - clock should NOT advance
+        for _ in 0..60 {
+            sim.tick();
+        }
+        let m = sim.world.entity(me).get::<Match>().unwrap();
+        assert_eq!(m.clock.elapsed_ticks, 30 * 60 * 60 + 60, "clock should not advance while paused");
+
+        // Resume clock - update both Match.clock and MatchClock component
+        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
+            m.clock.is_running = true;
+        }
+        if let Some(mut clock) = sim.world.get_mut::<MatchClock>(me) {
+            clock.is_running = true;
+        }
+
+        // Run 60 ticks - clock should advance again
+        for _ in 0..60 {
+            sim.tick();
+        }
+        let m = sim.world.entity(me).get::<Match>().unwrap();
+        assert_eq!(m.clock.elapsed_ticks, 30 * 60 * 60 + 60 + 60, "clock should advance after resume");
+    }
+
+    /// Test: AI time-remaining calculation in second half.
+    /// Verifies that the time remaining calculation correctly handles
+    /// the second half (where elapsed_ticks resets but total elapsed continues).
+    #[test]
+    fn test_ai_time_remaining_in_second_half() {
+        let mut sim = Simulation::new(42);
+        let me = sim.match_entity;
+
+        // Set up match in second half, 15 minutes elapsed (60 minutes total match time)
+        let clock = MatchClock {
+            elapsed_ticks: 15 * 60 * 60, // 15 minutes into second half
+            half: 2,
+            added_time_ticks: 0,
+            is_running: true,
+        };
+        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
+            m.state = MatchState::InPlay;
+            m.clock = clock.clone();
+        }
+        sim.world.entity_mut(me).insert(clock);
+
+        // Get the clock and compute time remaining using shared utilities
+        let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+        let match_remaining_secs = time::match_time_remaining_secs(clock);
+        let half_remaining_secs = time::half_time_remaining_secs(clock);
+
+        // Match time remaining: 90 min - 60 min = 30 min = 1800 sec
+        assert_eq!(match_remaining_secs, 30.0 * 60.0);
+        // Half time remaining: 45 min - 15 min = 30 min = 1800 sec
+        assert_eq!(half_remaining_secs, 30.0 * 60.0);
+
+        // Now test at 40 minutes into second half (85 minutes total)
+        // Update both Match.clock and MatchClock component
+        let clock = MatchClock {
+            elapsed_ticks: 40 * 60 * 60, // 40 minutes into second half
+            half: 2,
+            added_time_ticks: 0,
+            is_running: true,
+        };
+        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
+            m.clock = clock.clone();
+        }
+        sim.world.entity_mut(me).insert(clock);
+
+        let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+        let match_remaining_secs = time::match_time_remaining_secs(clock);
+        let half_remaining_secs = time::half_time_remaining_secs(clock);
+
+        // Match time remaining: 90 min - 85 min = 5 min = 300 sec
+        assert_eq!(match_remaining_secs, 5.0 * 60.0);
+        // Half time remaining: 45 min - 40 min = 5 min = 300 sec
+        assert_eq!(half_remaining_secs, 5.0 * 60.0);
     }
 }

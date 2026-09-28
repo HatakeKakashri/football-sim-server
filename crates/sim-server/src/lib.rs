@@ -30,7 +30,7 @@ impl ServerSimulation {
         }
     }
 
-    pub fn tick(&mut self, delta_time: f32) {
+    pub fn tick(&mut self) {
         // Apply queued commands at tick boundaries
         let commands = self.command_queue.apply_at_tick(self.simulation.tick);
         for command in commands {
@@ -39,7 +39,7 @@ impl ServerSimulation {
         }
 
         // Advance simulation
-        self.simulation.tick(delta_time);
+        self.simulation.tick();
     }
 
     pub fn apply_command(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
@@ -322,7 +322,7 @@ mod tests {
 
         let full_match_ticks: u64 = 324000;
         for _ in 0..full_match_ticks {
-            server.tick(1.0 / 60.0);
+            server.tick();
         }
 
         let state = server.get_state();
@@ -335,13 +335,13 @@ mod tests {
     fn test_determinism_two_seeds_differ() {
         let mut s1 = ServerSimulation::new(111);
         for _ in 0..1000 {
-            s1.tick(1.0 / 60.0);
+            s1.tick();
         }
         let h1 = s1.get_state().state_hash;
 
         let mut s2 = ServerSimulation::new(222);
         for _ in 0..1000 {
-            s2.tick(1.0 / 60.0);
+            s2.tick();
         }
         let h2 = s2.get_state().state_hash;
 

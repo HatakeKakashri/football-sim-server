@@ -2,6 +2,8 @@ use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_math::Vec2;
 
+pub mod time;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TeamId(pub u8);
 
@@ -160,10 +162,25 @@ pub struct MatchStateComponent(pub MatchState);
 
 #[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct MatchClock {
-    pub elapsed: f32,
+    /// Elapsed time in simulation ticks (60 ticks = 1 second).
+    /// Only advances when `is_running == true`.
+    pub elapsed_ticks: u64,
     pub half: u8,
-    pub added_time: f32,
+    /// Added time in simulation ticks.
+    pub added_time_ticks: u64,
     pub is_running: bool,
+}
+
+impl MatchClock {
+    /// Returns elapsed time in seconds for display purposes.
+    pub fn elapsed_secs(&self) -> f32 {
+        self.elapsed_ticks as f32 / 60.0
+    }
+
+    /// Returns added time in seconds for display purposes.
+    pub fn added_time_secs(&self) -> f32 {
+        self.added_time_ticks as f32 / 60.0
+    }
 }
 
 #[derive(Component, Debug, Clone)]
@@ -196,7 +213,8 @@ pub struct Player {
     // tick so that downstream decisions can reason about score state, clock,
     // possession share, and tactical mentality without re-querying the world.
     pub score_differential: i8,
-    pub time_remaining: f32,
+    /// Match time remaining in seconds (written by perception system).
+    pub time_remaining_secs: f32,
     pub team_possession: f32,
     pub mentality_modifier: f32,
 }
@@ -213,7 +231,7 @@ impl Default for Player {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 90.0 * 60.0, // 90 minutes = 5400 seconds
             team_possession: 0.5,
             mentality_modifier: 0.0,
         }

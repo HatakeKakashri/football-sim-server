@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Manager, Match, Player, Stamina, Team};
+use sim_components::{Manager, Match, Player, Stamina, Team, time};
 
 pub fn manager_decision_system(
     mut query: Query<(&mut Manager, &Team)>,
@@ -7,20 +7,22 @@ pub fn manager_decision_system(
 ) {
     for (mut manager, _team) in query.iter_mut() {
         if let Ok(match_entity) = match_query.get_single() {
-            let current_tick = match_entity.clock.elapsed as u64;
+            let current_tick = match_entity.clock.elapsed_ticks;
 
             if current_tick - manager.last_decision_tick < manager.decision_cooldown {
                 continue;
             }
 
             let score_difference = match_entity.score.0 as i32 - match_entity.score.1 as i32;
-            let time_remaining = 90.0 - match_entity.clock.elapsed;
+            
+            // Use shared time utilities for consistent time remaining calculation
+            let time_remaining_secs = time::match_time_remaining_secs(&match_entity.clock);
 
             let mut total_score = 0.0;
             for factor in &manager.decision_table.factors {
                 let factor_score = match factor.name.as_str() {
                     "score_difference" => (score_difference as f32 / 3.0).clamp(-1.0, 1.0),
-                    "time_remaining" => (time_remaining / 90.0).clamp(0.0, 1.0),
+                    "time_remaining" => (time_remaining_secs / (90.0 * 60.0)).clamp(0.0, 1.0),
                     _ => 0.0,
                 };
                 total_score += factor_score * factor.weight;
@@ -93,10 +95,12 @@ pub fn mentality_shift_system(mut query: Query<(&mut Team,)>, match_query: Query
     for (mut team,) in query.iter_mut() {
         if let Ok(match_entity) = match_query.get_single() {
             let score_difference = match_entity.score.0 as i32 - match_entity.score.1 as i32;
-            let time_remaining = 90.0 - match_entity.clock.elapsed;
+            
+            // Use shared time utilities for consistent time remaining calculation (in minutes)
+            let time_remaining_mins = time::match_time_remaining_mins(&match_entity.clock);
 
             let new_mentality = if score_difference >= 2 {
-                if time_remaining < 15.0 {
+                if time_remaining_mins < 15.0 {
                     sim_components::Mentality::Defend
                 } else {
                     sim_components::Mentality::Balance
@@ -104,7 +108,7 @@ pub fn mentality_shift_system(mut query: Query<(&mut Team,)>, match_query: Query
             } else if score_difference <= -2 {
                 sim_components::Mentality::Attack
             } else {
-                if time_remaining < 10.0 {
+                if time_remaining_mins < 10.0 {
                     if score_difference < 0 {
                         sim_components::Mentality::Attack
                     } else {
@@ -151,9 +155,9 @@ mod tests {
             away_team: Entity::PLACEHOLDER,
             score: (1, 3),
             clock: MatchClock {
-                elapsed: 70.0,
+                elapsed_ticks: 70 * 60,
                 half: 2,
-                added_time: 0.0,
+                added_time_ticks: 0,
                 is_running: true,
             },
             state: MatchState::InPlay,
@@ -222,7 +226,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -238,7 +242,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -267,15 +271,16 @@ mod tests {
         let mut world = World::new();
 
         let match_entity = world.spawn(()).id();
+        // 5 minutes remaining in match = 85 minutes total elapsed = 45 min (half 1) + 40 min (half 2)
         world.entity_mut(match_entity).insert(Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
             score: (2, 1),
             clock: MatchClock {
-                elapsed: 85.0,
+                elapsed_ticks: 40 * 60 * 60, // 40 minutes into second half
                 half: 2,
-                added_time: 0.0,
+                added_time_ticks: 0,
                 is_running: true,
             },
             state: MatchState::InPlay,

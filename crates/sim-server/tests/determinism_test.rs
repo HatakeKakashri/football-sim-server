@@ -11,8 +11,8 @@ fn test_deterministic_simulation() {
 
     // Run both simulations
     for _ in 0..ticks {
-        sim1.tick(1.0 / 60.0);
-        sim2.tick(1.0 / 60.0);
+        sim1.tick();
+        sim2.tick();
     }
 
     // Verify state hashes match
@@ -31,7 +31,7 @@ fn test_per_tick_hash_logging() {
     let mut hashes = Vec::new();
 
     for _ in 0..ticks {
-        sim.tick(1.0 / 60.0);
+        sim.tick();
         hashes.push(sim.get_state_hash());
     }
 

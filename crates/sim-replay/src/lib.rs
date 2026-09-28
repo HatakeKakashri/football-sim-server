@@ -79,7 +79,7 @@ pub fn replay_with_ticks(
         }
 
         // Run simulation tick
-        simulation.tick(sim_core::FIXED_TIMESTEP);
+        simulation.tick();
 
         // Get state hash
         let state_hash = simulation.get_state_hash();
@@ -302,9 +302,9 @@ mod tests {
             player_positions: vec![([10.0, 20.0], TeamId(0))],
             score: (2, 1),
             clock: MatchClock {
-                elapsed: 45.0,
+                elapsed_ticks: 45 * 60 * 60,
                 half: 1,
-                added_time: 3.0,
+                added_time_ticks: 3 * 60,
                 is_running: false,
             },
         };

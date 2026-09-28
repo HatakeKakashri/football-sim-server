@@ -1,7 +1,7 @@
 use bevy_ecs::prelude::*;
 use sim_components::{
     Ball, BallOutOfBoundsType, BallState, Match, Player, Position, RuleEvent, Skill, TeamId,
-    TeamIdComponent, Velocity,
+    TeamIdComponent, Velocity, time,
 };
 use sim_math::Vec2;
 
@@ -617,15 +617,25 @@ pub fn referee_advantage_system(ball_query: Query<&mut Ball>, match_query: Query
     let _ = (ball_query, match_query);
 }
 
-pub fn added_time_calculation_system(mut referee_query: Query<&mut sim_components::Referee>) {
+pub fn added_time_calculation_system(
+    mut referee_query: Query<&mut sim_components::Referee>,
+    mut match_query: Query<&mut sim_components::Match>,
+) {
     for mut referee in referee_query.iter_mut() {
         if referee.stoppage_events.is_empty() {
             continue;
         }
-        let added_time: f32 = referee.stoppage_events.len() as f32 * 0.5;
-        let added_time = added_time.min(10.0);
+        // 0.5 minutes per stoppage event, capped at 10 minutes
+        let added_time_min = (referee.stoppage_events.len() as f32 * 0.5).min(10.0);
+        let added_time_ticks = (added_time_min * 60.0 * 60.0) as u64; // Convert minutes to ticks
+        
+        // Apply to match clock
+        if let Ok(mut m) = match_query.get_single_mut() {
+            m.clock.added_time_ticks = added_time_ticks;
+            println!("Added time calculated: {} minutes ({} ticks)", added_time_min, added_time_ticks);
+        }
+        
         referee.stoppage_events.clear();
-        println!("Added time calculated: {} minutes", added_time);
     }
 }
 
@@ -635,10 +645,10 @@ pub fn match_duration_enforcement_system(mut match_query: Query<&mut Match>) {
             continue;
         }
 
-        let max_time = if m.clock.half == 1 { 45.0 } else { 90.0 };
-        let effective_time = max_time + m.clock.added_time;
+        // Use shared time utilities: half time remaining ticks
+        let half_remaining_ticks = time::half_time_remaining_ticks(&m.clock);
 
-        if m.clock.elapsed >= effective_time {
+        if half_remaining_ticks == 0 {
             m.clock.is_running = false;
             if m.clock.half == 1 {
                 m.state = sim_components::MatchState::HalfTime;
@@ -764,9 +774,9 @@ mod tests {
             away_team: Entity::PLACEHOLDER,
             score: (0, 0),
             clock: sim_components::MatchClock {
-                elapsed: 30.0,
+                elapsed_ticks: 30 * 60,
                 half: 1,
-                added_time: 0.0,
+                added_time_ticks: 0,
                 is_running: true,
             },
             state: sim_components::MatchState::InPlay,
@@ -813,9 +823,9 @@ mod tests {
             away_team: Entity::PLACEHOLDER,
             score: (0, 0),
             clock: sim_components::MatchClock {
-                elapsed: 30.0,
+                elapsed_ticks: 30 * 60,
                 half: 1,
-                added_time: 0.0,
+                added_time_ticks: 0,
                 is_running: true,
             },
             state: sim_components::MatchState::InPlay,
@@ -855,9 +865,9 @@ mod tests {
             away_team: Entity::PLACEHOLDER,
             score: (0, 0),
             clock: sim_components::MatchClock {
-                elapsed: 30.0,
+                elapsed_ticks: 30 * 60,
                 half: 1,
-                added_time: 0.0,
+                added_time_ticks: 0,
                 is_running: true,
             },
             state: sim_components::MatchState::InPlay,
@@ -898,9 +908,9 @@ mod tests {
             away_team: Entity::PLACEHOLDER,
             score: (1, 0),
             clock: sim_components::MatchClock {
-                elapsed: 30.0,
+                elapsed_ticks: 30 * 60,
                 half: 1,
-                added_time: 0.0,
+                added_time_ticks: 0,
                 is_running: true,
             },
             state: sim_components::MatchState::InPlay,
@@ -994,7 +1004,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -1045,7 +1055,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -1102,7 +1112,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -1157,7 +1167,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -1206,7 +1216,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -1248,9 +1258,10 @@ mod tests {
             away_team: Entity::PLACEHOLDER,
             score: (1, 0),
             clock: sim_components::MatchClock {
-                elapsed: 48.0, // 45 + 3 added time
+                // 48 minutes = 45 min half + 3 min added time = 162,180 ticks
+                elapsed_ticks: 45 * 60 * 60 + 3 * 60 * 60,
                 half: 1,
-                added_time: 3.0,
+                added_time_ticks: 3 * 60 * 60,
                 is_running: true,
             },
             state: sim_components::MatchState::InPlay,
@@ -1278,9 +1289,9 @@ mod tests {
             away_team: Entity::PLACEHOLDER,
             score: (0, 0),
             clock: sim_components::MatchClock {
-                elapsed: 30.0,
+                elapsed_ticks: 30 * 60,
                 half: 1,
-                added_time: 0.0,
+                added_time_ticks: 0,
                 is_running: true,
             },
             state: sim_components::MatchState::InPlay,
@@ -1299,7 +1310,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -1324,7 +1335,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });

@@ -1,7 +1,7 @@
 use bevy_ecs::prelude::*;
 use rand::Rng;
 use sim_ai_core::{ResponseCurve, geometric_mean};
-use sim_components::{Ball, BallState, Intent, Player, Position, Skill, Stamina, Velocity};
+use sim_components::{Ball, BallState, Intent, Player, Position, Skill, Stamina, Velocity, time};
 use sim_math::Vec2;
 use sim_physics::{PitchControlGrid, SimRng};
 
@@ -72,19 +72,19 @@ pub fn perception_system(
         let q = queries.p3();
         q.iter().next().map(|m| {
             let diff: i8 = (m.score.0 as i16 - m.score.1 as i16) as i8;
-            let half_total = if m.clock.half == 1 { 45.0 } else { 90.0 };
-            let time_remaining = half_total - m.clock.elapsed;
+            // Use shared time utilities: match time remaining in seconds
+            let time_remaining_secs = time::match_time_remaining_secs(&m.clock);
             (
                 diff,
-                time_remaining,
+                time_remaining_secs,
                 sim_components::TeamId(0),
                 sim_components::TeamId(1),
             )
         })
     };
-    let (score_diff, time_remaining, _home_id, _away_id) = match_info.unwrap_or((
+    let (score_diff, time_remaining_secs, _home_id, _away_id) = match_info.unwrap_or((
         0,
-        90.0,
+        90.0 * 60.0, // 90 minutes = 5400 seconds
         sim_components::TeamId(0),
         sim_components::TeamId(1),
     ));
@@ -193,7 +193,7 @@ pub fn perception_system(
         if let Ok((_, mut player, _)) = queries.p0().get_mut(entity) {
             player.perception = Some(perception);
             player.score_differential = score_diff;
-            player.time_remaining = time_remaining;
+            player.time_remaining_secs = time_remaining_secs;
             player.team_possession = team_possession;
             player.mentality_modifier = mentality_modifier;
         }
@@ -797,7 +797,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -847,9 +847,9 @@ mod tests {
                 away_team: Entity::PLACEHOLDER,
                 score: (0, 0),
                 clock: sim_components::MatchClock {
-                    elapsed: 0.0,
+                    elapsed_ticks: 0,
                     half: 1,
-                    added_time: 0.0,
+                    added_time_ticks: 0,
                     is_running: true,
                 },
                 state: sim_components::MatchState::InPlay,
@@ -881,7 +881,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -900,7 +900,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -947,9 +947,9 @@ mod tests {
                 away_team: Entity::PLACEHOLDER,
                 score: (0, 0),
                 clock: sim_components::MatchClock {
-                    elapsed: 0.0,
+                    elapsed_ticks: 0,
                     half: 1,
-                    added_time: 0.0,
+                    added_time_ticks: 0,
                     is_running: true,
                 },
                 state: sim_components::MatchState::InPlay,
@@ -981,7 +981,7 @@ mod tests {
             intent: Some(sim_components::Intent::ShootAtGoal(Vec2::new(105.0, 34.0))),
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -1015,7 +1015,7 @@ mod tests {
                 },
             }),
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -1039,9 +1039,9 @@ mod tests {
                 away_team: Entity::PLACEHOLDER,
                 score: (0, 0),
                 clock: sim_components::MatchClock {
-                    elapsed: 0.0,
+                    elapsed_ticks: 0,
                     half: 1,
-                    added_time: 0.0,
+                    added_time_ticks: 0,
                     is_running: true,
                 },
                 state: sim_components::MatchState::InPlay,
@@ -1084,7 +1084,7 @@ mod tests {
             intent: None,
             perception: None,
             score_differential: 0,
-            time_remaining: 90.0,
+            time_remaining_secs: 5400.0,
             team_possession: 0.5,
             mentality_modifier: 0.0,
         });
@@ -1129,9 +1129,9 @@ mod tests {
                 away_team: Entity::PLACEHOLDER,
                 score: (0, 0),
                 clock: sim_components::MatchClock {
-                    elapsed: 0.0,
+                    elapsed_ticks: 0,
                     half: 1,
-                    added_time: 0.0,
+                    added_time_ticks: 0,
                     is_running: true,
                 },
                 state: sim_components::MatchState::InPlay,
@@ -1149,7 +1149,7 @@ mod tests {
                 .entity_mut(match_entity)
                 .get_mut::<sim_components::Match>()
             {
-                m.clock.elapsed += 1.0 / 60.0;
+                m.clock.elapsed_ticks += 1;
             }
             schedule.run(&mut world);
         }

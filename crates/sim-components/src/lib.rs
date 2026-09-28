@@ -254,7 +254,6 @@ pub struct Match {
     pub home_team: Entity,
     pub away_team: Entity,
     pub score: (u8, u8),
-    pub clock: MatchClock,
     pub state: MatchState,
     pub seed: u64,
 }

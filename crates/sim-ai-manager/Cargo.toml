@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 sim-math = { path = "../sim-math" }
 sim-components = { path = "../sim-components" }
-sim-ai-core = { path = "../sim-ai-core" }
 bevy_ecs.workspace = true
 
 [lints]

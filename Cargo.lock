@@ -589,7 +589,6 @@ name = "sim-ai-manager"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
- "sim-ai-core",
  "sim-components",
  "sim-math",
 ]
@@ -684,9 +683,7 @@ dependencies = [
  "sim-components",
  "sim-core",
  "sim-math",
- "sim-physics",
  "sim-replay",
- "sim-rules",
 ]
 
 [[package]]

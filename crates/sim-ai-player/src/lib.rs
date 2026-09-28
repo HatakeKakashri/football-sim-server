@@ -1,7 +1,6 @@
 use bevy_ecs::prelude::*;
-use rand::Rng;
 use sim_ai_core::{ResponseCurve, geometric_mean};
-use sim_components::{Ball, BallState, Intent, Player, Position, Skill, Stamina, Velocity, time};
+use sim_components::{Ball, BallState, Intent, MatchClock, Player, Position, Skill, Stamina, Velocity, time};
 use sim_math::Vec2;
 use sim_physics::{PitchControlGrid, SimRng};
 
@@ -34,6 +33,7 @@ pub fn perception_system(
         Query<(Entity, &Player, &Position)>,
         Query<(Entity, &Ball, &Position)>,
         Query<&sim_components::Match>,
+        Query<&sim_components::MatchClock>,
         Query<&sim_components::Team>,
     )>,
 ) {
@@ -65,15 +65,26 @@ pub fn perception_system(
     // Phase 2: snapshot the single Match and all Teams up front. These are
     // read-only resources used to fill in match-context fields on each
     // player (score differential, time remaining, possession, mentality).
-    // The Match stores its own clock snapshot; the separate `MatchClock`
-    // component is the running clock but for Phase 2 we use the inner
-    // `Match.clock` to avoid an additional ParamSet slot.
+    // Phase 2: snapshot the single Match and MatchClock up front. These are
+    // read-only resources used to fill in match-context fields on each
+    // player (score differential, time remaining, possession, mentality).
+    // First get the clock from MatchClock component.
+    let clock = {
+        let clock_q = queries.p4();
+        clock_q.iter().next().cloned().unwrap_or(MatchClock {
+            elapsed_ticks: 0,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
+        })
+    };
+    // Then get match info (score) from Match component.
     let match_info: Option<(i8, f32, sim_components::TeamId, sim_components::TeamId)> = {
         let q = queries.p3();
         q.iter().next().map(|m| {
             let diff: i8 = (m.score.0 as i16 - m.score.1 as i16) as i8;
             // Use shared time utilities: match time remaining in seconds
-            let time_remaining_secs = time::match_time_remaining_secs(&m.clock);
+            let time_remaining_secs = time::match_time_remaining_secs(&clock);
             (
                 diff,
                 time_remaining_secs,
@@ -89,18 +100,20 @@ pub fn perception_system(
         sim_components::TeamId(1),
     ));
 
-    // Snapshot mentalities by team id.
-    let mut mentality_by_team: std::collections::HashMap<sim_components::TeamId, f32> =
-        std::collections::HashMap::new();
+    // Snapshot mentalities by team id — two teams only, so a fixed array
+    // replaces the HashMap (no allocation, no iteration order nondeterminism).
+    let mut mentality_by_team: [f32; 2] = [0.0, 0.0];
     {
-        let q = queries.p4();
+        let q = queries.p5();
         for team in q.iter() {
             let m = match team.mentality {
                 sim_components::Mentality::Defend => -0.5,
                 sim_components::Mentality::Balance => 0.0,
                 sim_components::Mentality::Attack => 0.5,
             };
-            mentality_by_team.insert(team.id, m);
+            if team.id.0 < 2 {
+                mentality_by_team[team.id.0 as usize] = m;
+            }
         }
     }
 
@@ -188,7 +201,11 @@ pub fn perception_system(
         } else {
             away_possession
         };
-        let mentality_modifier = *mentality_by_team.get(&team_id).unwrap_or(&0.0);
+        let mentality_modifier = if team_id.0 < 2 {
+            mentality_by_team[team_id.0 as usize]
+        } else {
+            0.0
+        };
 
         if let Ok((_, mut player, _)) = queries.p0().get_mut(entity) {
             player.perception = Some(perception);
@@ -515,7 +532,7 @@ fn compute_consideration_input(
 }
 
 pub fn player_action_execution_system(
-    mut query: Query<(&mut Player, &mut Velocity)>,
+    mut query: Query<(Entity, &mut Player, &mut Velocity)>,
     mut rng: ResMut<SimRng>,
 ) {
     // Phase 2: real steering for every action. Each arm turns the abstract
@@ -533,7 +550,14 @@ pub fn player_action_execution_system(
     // the Position/Velocity components) see fresh values.
     //
     // Phase 3: stochastic outcomes for tackles, passes, and shots using RNG.
-    for (mut player, mut velocity) in query.iter_mut() {
+    // DETERMINISM: collect entities first and sort by Entity ID to ensure
+    // stable RNG draw order across processes (spec §7, rule #22).
+    let mut entities: Vec<Entity> = query.iter().map(|(e, _, _)| e).collect();
+    entities.sort_by_key(|e| e.to_bits());
+    for entity in entities {
+        let Ok((_entity, mut player, mut velocity)) = query.get_mut(entity) else {
+            continue;
+        };
         let Some(intent) = player.intent.clone() else {
             velocity.0 = Vec2::zero();
             player.velocity = Vec2::zero();
@@ -549,7 +573,7 @@ pub fn player_action_execution_system(
                 // Tackle resolution: higher skill = higher success probability
                 // Roll against skill-based probability
                 let tackle_success_prob = player.skill.clamp(0.3, 0.9);
-                let roll: f32 = rng.0.r#gen();
+                let roll: f32 = rng.gen_f32();
                 if roll > tackle_success_prob {
                     // Tackle fails - player stumbles, moves slower
                     speed_modifier = 0.3;
@@ -565,13 +589,13 @@ pub fn player_action_execution_system(
                     .unwrap_or(15.0);
                 // Longer passes = lower completion probability
                 let pass_prob = (1.0 - (pass_distance / 50.0).min(0.8)) * player.skill;
-                let roll: f32 = rng.0.r#gen();
+                let roll: f32 = rng.gen_f32();
                 if roll > pass_prob {
                     // Pass goes awry - add random deviation
                     speed_modifier = 0.7;
                     direction_modifier = Vec2::new(
-                        rng.0.gen_range(-2.0..2.0),
-                        rng.0.gen_range(-2.0..2.0)
+                        rng.gen_range_f32(-2.0, 2.0),
+                        rng.gen_range_f32(-2.0, 2.0)
                     );
                 
                 }
@@ -579,13 +603,13 @@ pub fn player_action_execution_system(
             Intent::ShootAtGoal(_) => {
                 // Shot accuracy: skill and stamina affect accuracy
                 let accuracy = player.skill * (0.5 + 0.5 * player.stamina);
-                let roll: f32 = rng.0.r#gen();
+                let roll: f32 = rng.gen_f32();
                 if roll > accuracy {
                     // Shot misses - add deviation
                     speed_modifier = 0.8;
                     direction_modifier = Vec2::new(
-                        rng.0.gen_range(-3.0..3.0),
-                        rng.0.gen_range(-2.0..2.0)
+                        rng.gen_range_f32(-3.0, 3.0),
+                        rng.gen_range_f32(-2.0, 2.0)
                     );
                 
                 }
@@ -838,22 +862,24 @@ mod tests {
         schedule.add_systems(consideration_scoring_system);
         schedule.add_systems(player_decision_system);
 
-        let _match_entity = world.spawn(()).id();
+        let match_entity = world.spawn(()).id();
         world
-            .entity_mut(_match_entity)
+            .entity_mut(match_entity)
             .insert(sim_components::Match {
                 id: 1,
                 home_team: Entity::PLACEHOLDER,
                 away_team: Entity::PLACEHOLDER,
                 score: (0, 0),
-                clock: sim_components::MatchClock {
-                    elapsed_ticks: 0,
-                    half: 1,
-                    added_time_ticks: 0,
-                    is_running: true,
-                },
                 state: sim_components::MatchState::InPlay,
                 seed: 0,
+            });
+        world
+            .entity_mut(match_entity)
+            .insert(sim_components::MatchClock {
+                elapsed_ticks: 0,
+                half: 1,
+                added_time_ticks: 0,
+                is_running: true,
             });
 
         // Run schedule
@@ -938,22 +964,24 @@ mod tests {
         schedule.add_systems(consideration_scoring_system);
         schedule.add_systems(player_decision_system);
 
-        let _match_entity = world.spawn(()).id();
+        let match_entity = world.spawn(()).id();
         world
-            .entity_mut(_match_entity)
+            .entity_mut(match_entity)
             .insert(sim_components::Match {
                 id: 1,
                 home_team: Entity::PLACEHOLDER,
                 away_team: Entity::PLACEHOLDER,
                 score: (0, 0),
-                clock: sim_components::MatchClock {
-                    elapsed_ticks: 0,
-                    half: 1,
-                    added_time_ticks: 0,
-                    is_running: true,
-                },
                 state: sim_components::MatchState::InPlay,
                 seed: 0,
+            });
+        world
+            .entity_mut(match_entity)
+            .insert(sim_components::MatchClock {
+                elapsed_ticks: 0,
+                half: 1,
+                added_time_ticks: 0,
+                is_running: true,
             });
 
         // Run schedule
@@ -1030,22 +1058,24 @@ mod tests {
         };
         world.entity_mut(defender_entity).insert(utility_brain);
 
-        let _match_entity = world.spawn(()).id();
+        let match_entity = world.spawn(()).id();
         world
-            .entity_mut(_match_entity)
+            .entity_mut(match_entity)
             .insert(sim_components::Match {
                 id: 1,
                 home_team: Entity::PLACEHOLDER,
                 away_team: Entity::PLACEHOLDER,
                 score: (0, 0),
-                clock: sim_components::MatchClock {
-                    elapsed_ticks: 0,
-                    half: 1,
-                    added_time_ticks: 0,
-                    is_running: true,
-                },
                 state: sim_components::MatchState::InPlay,
                 seed: 0,
+            });
+        world
+            .entity_mut(match_entity)
+            .insert(sim_components::MatchClock {
+                elapsed_ticks: 0,
+                half: 1,
+                added_time_ticks: 0,
+                is_running: true,
             });
 
         // Run systems
@@ -1128,14 +1158,16 @@ mod tests {
                 home_team: Entity::PLACEHOLDER,
                 away_team: Entity::PLACEHOLDER,
                 score: (0, 0),
-                clock: sim_components::MatchClock {
-                    elapsed_ticks: 0,
-                    half: 1,
-                    added_time_ticks: 0,
-                    is_running: true,
-                },
                 state: sim_components::MatchState::InPlay,
                 seed: 0,
+            });
+        world
+            .entity_mut(match_entity)
+            .insert(sim_components::MatchClock {
+                elapsed_ticks: 0,
+                half: 1,
+                added_time_ticks: 0,
+                is_running: true,
             });
 
         let mut schedule = Schedule::default();
@@ -1145,11 +1177,11 @@ mod tests {
         // evaluation interval (= 6) elapses and decision_system runs at
         // least once. Then verify intent was set.
         for _ in 0..6 {
-            if let Some(mut m) = world
+            if let Some(mut clock) = world
                 .entity_mut(match_entity)
-                .get_mut::<sim_components::Match>()
+                .get_mut::<sim_components::MatchClock>()
             {
-                m.clock.elapsed_ticks += 1;
+                clock.elapsed_ticks += 1;
             }
             schedule.run(&mut world);
         }

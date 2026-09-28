@@ -1,17 +1,36 @@
 use bevy_ecs::prelude::*;
-use rand::{SeedableRng, rngs::SmallRng};
 use sim_components::{Ball, Position, Velocity};
 use sim_math::{PitchDimensions, Vec2};
 
 /// Phase 2: RNG resource wrapper for stochastic gameplay outcomes.
 /// Inserted as a Bevy Resource so systems can access it via `ResMut<SimRng>`.
-/// Wraps SmallRng for speed (Mersenne Twister 19937).
+/// Uses a simple, completely deterministic LCG (Linear Congruential Generator)
+/// to eliminate any external crate non-determinism across processes.
 #[derive(Resource)]
-pub struct SimRng(pub SmallRng);
+pub struct SimRng {
+    state: u64,
+}
 
 impl SimRng {
     pub fn new(seed: u64) -> Self {
-        Self(SmallRng::seed_from_u64(seed))
+        // Use a non-zero seed; LCG with 0 would produce all zeros
+        Self { state: seed.wrapping_add(0x9E37_79B9_7F4A_7C15) }
+    }
+
+    /// Generate a random u64 using LCG (Numerical Recipes constants)
+    pub fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.state
+    }
+
+    /// Generate a random f32 in [0, 1)
+    pub fn gen_f32(&mut self) -> f32 {
+        (self.next_u64() >> 11) as f32 * (1.0 / 9007199254740992.0)  // 2^53
+    }
+
+    /// Generate a random f32 in [min, max)
+    pub fn gen_range_f32(&mut self, min: f32, max: f32) -> f32 {
+        min + self.gen_f32() * (max - min)
     }
 }
 

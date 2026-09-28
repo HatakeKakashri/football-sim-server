@@ -148,8 +148,10 @@ pub enum MatchEvent {
     },
 }
 
+/// A match snapshot recorded for replay purposes.
+/// Distinct from `sim_core::MatchSnapshot` which is the live state view.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MatchSnapshot {
+pub struct RecordedSnapshot {
     pub tick: u64,
     pub state_hash: u64,
     pub ball_position: [f32; 2],
@@ -178,12 +180,12 @@ pub struct PlayerSnapshot {
     pub skill: f32,
 }
 
-pub fn save_snapshot(snapshot: &MatchSnapshot, path: &str) -> Result<(), String> {
+pub fn save_snapshot(snapshot: &RecordedSnapshot, path: &str) -> Result<(), String> {
     let encoded = bincode::serialize(snapshot).map_err(|e| e.to_string())?;
     std::fs::write(path, encoded).map_err(|e| e.to_string())
 }
 
-pub fn load_snapshot(path: &str) -> Result<MatchSnapshot, String> {
+pub fn load_snapshot(path: &str) -> Result<RecordedSnapshot, String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     bincode::deserialize(&data).map_err(|e| e.to_string())
 }
@@ -191,7 +193,7 @@ pub fn load_snapshot(path: &str) -> Result<MatchSnapshot, String> {
 pub fn create_snapshot_from_simulation(
     simulation: &Simulation,
     match_entity: Entity,
-) -> Result<MatchSnapshot, String> {
+) -> Result<RecordedSnapshot, String> {
     let match_component = simulation
         .world
         .entity(match_entity)
@@ -213,13 +215,26 @@ pub fn create_snapshot_from_simulation(
         }
     }
 
-    Ok(MatchSnapshot {
+    // Get clock from MatchClock component
+    let clock = simulation
+        .world
+        .iter_entities()
+        .find_map(|e| e.get::<MatchClock>())
+        .cloned()
+        .unwrap_or(MatchClock {
+            elapsed_ticks: 0,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: false,
+        });
+
+    Ok(RecordedSnapshot {
         tick: simulation.tick,
         state_hash: simulation.get_state_hash(),
         ball_position,
         player_positions,
         score: match_component.score,
-        clock: match_component.clock.clone(),
+        clock,
     })
 }
 
@@ -295,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_serialization() {
-        let snapshot = MatchSnapshot {
+        let snapshot = RecordedSnapshot {
             tick: 1000,
             state_hash: 123456789,
             ball_position: [52.5, 34.0],
@@ -310,7 +325,7 @@ mod tests {
         };
 
         let encoded = bincode::serialize(&snapshot).unwrap();
-        let decoded: MatchSnapshot = bincode::deserialize(&encoded).unwrap();
+        let decoded: RecordedSnapshot = bincode::deserialize(&encoded).unwrap();
 
         assert_eq!(decoded.tick, snapshot.tick);
         assert_eq!(decoded.state_hash, snapshot.state_hash);

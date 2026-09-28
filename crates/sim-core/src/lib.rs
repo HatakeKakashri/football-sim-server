@@ -1,5 +1,4 @@
 use bevy_ecs::prelude::*;
-use rand::{SeedableRng, rngs::SmallRng};
 use serde::{Deserialize, Serialize};
 use sim_components::{
     ManagerCommand, Match, MatchClock, MatchState, PerceptionSnapshot, PitchBounds, Player,
@@ -27,7 +26,6 @@ pub enum SimulationSet {
 pub struct Simulation {
     pub world: World,
     pub schedule: Schedule,
-    pub rng: SmallRng,
     pub original_seed: u64,
     pub tick: u64,
     pub match_entity: Entity,
@@ -49,7 +47,6 @@ impl Simulation {
         world.insert_resource(sim_physics::SimRng::new(seed));
 
         let mut schedule = Schedule::default();
-        let rng = SmallRng::seed_from_u64(seed);
         let original_seed = seed;
 
         // Configure system sets for explicit ordering
@@ -159,7 +156,6 @@ impl Simulation {
         Self {
             world,
             schedule,
-            rng,
             original_seed,
             tick: 0,
             match_entity,
@@ -197,10 +193,6 @@ impl Simulation {
         {
             if clock.is_running {
                 clock.elapsed_ticks += 1;
-                let clock_clone = clock.clone();
-                if let Some(mut m) = self.world.entity_mut(self.match_entity).get_mut::<Match>() {
-                    m.clock = clock_clone;
-                }
             }
         }
     }
@@ -269,12 +261,15 @@ impl Simulation {
                 mix(&mut h, u64::from(t.id.0));
             }
             if let Some(m) = er.get::<Match>() {
+                // Get clock from the MatchClock component
+                if let Some(clock) = er.get::<MatchClock>() {
+                    mix(&mut h, clock.elapsed_ticks);
+                    mix(&mut h, u64::from(clock.half));
+                    mix(&mut h, clock.added_time_ticks);
+                }
                 mix(&mut h, match_state_discriminant(m.state));
                 mix(&mut h, u64::from(m.score.0));
                 mix(&mut h, u64::from(m.score.1));
-                mix(&mut h, m.clock.elapsed_ticks);
-                mix(&mut h, u64::from(m.clock.half));
-                mix(&mut h, m.clock.added_time_ticks);
             }
         }
 
@@ -435,15 +430,9 @@ impl Simulation {
             home_team: home_team_entity,
             away_team: away_team_entity,
             score: (0, 0),
-            clock: initial_clock.clone(),
             state: MatchState::PreMatch,
             seed,
         });
-        // Phase 1: also expose the clock as its own Component so the
-        // `tick_clock` and `lifecycle_system` functions can mutate it via
-        // `get_mut::<MatchClock>()`. The inner `Match.clock` field remains
-        // the snapshot used by the state hash; both views are kept in sync
-        // by every site that mutates the component.
         world.entity_mut(match_entity).insert(initial_clock);
 
         (match_entity, home_team_entity)
@@ -603,13 +592,23 @@ impl Simulation {
             }
         }
 
-        // Get clock view
-        let clock_view = ClockView {
-            elapsed_ticks: match_component.clock.elapsed_ticks,
-            half: match_component.clock.half,
-            added_time_ticks: match_component.clock.added_time_ticks,
-            is_running: match_component.clock.is_running,
-        };
+        // Get clock view from MatchClock component
+        let clock_view = self
+            .world
+            .entity(match_id)
+            .get::<MatchClock>()
+            .map(|clock| ClockView {
+                elapsed_ticks: clock.elapsed_ticks,
+                half: clock.half,
+                added_time_ticks: clock.added_time_ticks,
+                is_running: clock.is_running,
+            })
+            .unwrap_or(ClockView {
+                elapsed_ticks: 0,
+                half: 1,
+                added_time_ticks: 0,
+                is_running: false,
+            });
 
         Ok(MatchSnapshot {
             tick: self.tick,
@@ -833,11 +832,7 @@ fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, wo
 
         // Apply clock mutation.
         if let Some(clock) = new_clock {
-            let clock_for_match = clock.clone();
             world.entity_mut(match_entity).insert(clock);
-            if let Some(mut m) = world.entity_mut(match_entity).get_mut::<Match>() {
-                m.clock = clock_for_match;
-            }
         }
 
         // Apply ball placement / kickoff impulse.
@@ -1624,7 +1619,6 @@ mod tests {
         };
         if let Some(mut m) = sim.world.get_mut::<Match>(me) {
             m.state = MatchState::InPlay;
-            m.clock = clock.clone();
         }
         sim.world.entity_mut(me).insert(clock);
 
@@ -1643,10 +1637,11 @@ mod tests {
         }
 
         let m = sim.world.entity(me).get::<Match>().unwrap();
+        let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
         assert_eq!(m.state, MatchState::HalfTime);
-        assert!(!m.clock.is_running);
-        assert_eq!(m.clock.half, 1);
-        assert_eq!(m.clock.added_time_ticks, 3 * 60 * 60);
+        assert!(!clock.is_running);
+        assert_eq!(clock.half, 1);
+        assert_eq!(clock.added_time_ticks, 3 * 60 * 60);
     }
 
     /// Test: Second-half kickoff clock reset.
@@ -1665,7 +1660,6 @@ mod tests {
         };
         if let Some(mut m) = sim.world.get_mut::<Match>(me) {
             m.state = MatchState::HalfTime;
-            m.clock = clock.clone();
         }
         sim.world.entity_mut(me).insert(clock);
 
@@ -1694,10 +1688,11 @@ mod tests {
         // Note: tick_clock() runs after lifecycle_system(), so after one tick
         // the clock will be at 1 (it was reset to 0, then incremented).
         let m = sim.world.entity(me).get::<Match>().unwrap();
+        let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
         assert_eq!(m.state, MatchState::InPlay, "should be InPlay in second half");
-        assert_eq!(m.clock.half, 2, "should be in second half");
-        assert_eq!(m.clock.elapsed_ticks, 1, "clock should be at 1 after first tick of second half (reset to 0 then incremented)");
-        assert!(m.clock.is_running);
+        assert_eq!(clock.half, 2, "should be in second half");
+        assert_eq!(clock.elapsed_ticks, 1, "clock should be at 1 after first tick of second half (reset to 0 then incremented)");
+        assert!(clock.is_running);
     }
 
     /// Test: Clock pause/resume during stoppage.
@@ -1717,7 +1712,6 @@ mod tests {
         };
         if let Some(mut m) = sim.world.get_mut::<Match>(me) {
             m.state = MatchState::InPlay;
-            m.clock = clock.clone();
         }
         sim.world.entity_mut(me).insert(clock);
 
@@ -1725,13 +1719,10 @@ mod tests {
         for _ in 0..60 {
             sim.tick();
         }
-        let m = sim.world.entity(me).get::<Match>().unwrap();
-        assert_eq!(m.clock.elapsed_ticks, 30 * 60 * 60 + 60);
+        let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+        assert_eq!(clock.elapsed_ticks, 30 * 60 * 60 + 60);
 
-        // Pause clock (simulate stoppage) - update both Match.clock and MatchClock component
-        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
-            m.clock.is_running = false;
-        }
+        // Pause clock (simulate stoppage)
         if let Some(mut clock) = sim.world.get_mut::<MatchClock>(me) {
             clock.is_running = false;
         }
@@ -1740,13 +1731,10 @@ mod tests {
         for _ in 0..60 {
             sim.tick();
         }
-        let m = sim.world.entity(me).get::<Match>().unwrap();
-        assert_eq!(m.clock.elapsed_ticks, 30 * 60 * 60 + 60, "clock should not advance while paused");
+        let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+        assert_eq!(clock.elapsed_ticks, 30 * 60 * 60 + 60, "clock should not advance while paused");
 
-        // Resume clock - update both Match.clock and MatchClock component
-        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
-            m.clock.is_running = true;
-        }
+        // Resume clock
         if let Some(mut clock) = sim.world.get_mut::<MatchClock>(me) {
             clock.is_running = true;
         }
@@ -1755,8 +1743,8 @@ mod tests {
         for _ in 0..60 {
             sim.tick();
         }
-        let m = sim.world.entity(me).get::<Match>().unwrap();
-        assert_eq!(m.clock.elapsed_ticks, 30 * 60 * 60 + 60 + 60, "clock should advance after resume");
+        let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+        assert_eq!(clock.elapsed_ticks, 30 * 60 * 60 + 60 + 60, "clock should advance after resume");
     }
 
     /// Test: AI time-remaining calculation in second half.
@@ -1776,7 +1764,6 @@ mod tests {
         };
         if let Some(mut m) = sim.world.get_mut::<Match>(me) {
             m.state = MatchState::InPlay;
-            m.clock = clock.clone();
         }
         sim.world.entity_mut(me).insert(clock);
 
@@ -1791,16 +1778,12 @@ mod tests {
         assert_eq!(half_remaining_secs, 30.0 * 60.0);
 
         // Now test at 40 minutes into second half (85 minutes total)
-        // Update both Match.clock and MatchClock component
         let clock = MatchClock {
             elapsed_ticks: 40 * 60 * 60, // 40 minutes into second half
             half: 2,
             added_time_ticks: 0,
             is_running: true,
         };
-        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
-            m.clock = clock.clone();
-        }
         sim.world.entity_mut(me).insert(clock);
 
         let clock = sim.world.entity(me).get::<MatchClock>().unwrap();

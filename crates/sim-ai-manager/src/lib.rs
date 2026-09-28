@@ -1,13 +1,17 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Manager, Match, Player, Stamina, Team, time};
+use sim_components::{Manager, Match, MatchClock, Player, Stamina, Team, time};
 
 pub fn manager_decision_system(
     mut query: Query<(&mut Manager, &Team)>,
     match_query: Query<&Match>,
+    clock_query: Query<&MatchClock>,
 ) {
     for (mut manager, _team) in query.iter_mut() {
         if let Ok(match_entity) = match_query.get_single() {
-            let current_tick = match_entity.clock.elapsed_ticks;
+            let Ok(clock) = clock_query.get_single() else {
+                continue;
+            };
+            let current_tick = clock.elapsed_ticks;
 
             if current_tick - manager.last_decision_tick < manager.decision_cooldown {
                 continue;
@@ -16,7 +20,7 @@ pub fn manager_decision_system(
             let score_difference = match_entity.score.0 as i32 - match_entity.score.1 as i32;
             
             // Use shared time utilities for consistent time remaining calculation
-            let time_remaining_secs = time::match_time_remaining_secs(&match_entity.clock);
+            let time_remaining_secs = time::match_time_remaining_secs(&clock);
 
             let mut total_score = 0.0;
             for factor in &manager.decision_table.factors {
@@ -91,13 +95,20 @@ pub fn substitution_system(
     }
 }
 
-pub fn mentality_shift_system(mut query: Query<(&mut Team,)>, match_query: Query<&Match>) {
+pub fn mentality_shift_system(
+    mut query: Query<(&mut Team,)>,
+    match_query: Query<&Match>,
+    clock_query: Query<&MatchClock>,
+) {
     for (mut team,) in query.iter_mut() {
         if let Ok(match_entity) = match_query.get_single() {
+            let Ok(clock) = clock_query.get_single() else {
+                continue;
+            };
             let score_difference = match_entity.score.0 as i32 - match_entity.score.1 as i32;
             
             // Use shared time utilities for consistent time remaining calculation (in minutes)
-            let time_remaining_mins = time::match_time_remaining_mins(&match_entity.clock);
+            let time_remaining_mins = time::match_time_remaining_mins(&clock);
 
             let new_mentality = if score_difference >= 2 {
                 if time_remaining_mins < 15.0 {
@@ -154,14 +165,14 @@ mod tests {
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
             score: (1, 3),
-            clock: MatchClock {
-                elapsed_ticks: 70 * 60,
-                half: 2,
-                added_time_ticks: 0,
-                is_running: true,
-            },
             state: MatchState::InPlay,
             seed: 12345,
+        });
+        world.entity_mut(match_entity).insert(MatchClock {
+            elapsed_ticks: 70 * 60,
+            half: 2,
+            added_time_ticks: 0,
+            is_running: true,
         });
 
         let team_entity = world.spawn(()).id();
@@ -277,14 +288,14 @@ mod tests {
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
             score: (2, 1),
-            clock: MatchClock {
-                elapsed_ticks: 40 * 60 * 60, // 40 minutes into second half
-                half: 2,
-                added_time_ticks: 0,
-                is_running: true,
-            },
             state: MatchState::InPlay,
             seed: 12345,
+        });
+        world.entity_mut(match_entity).insert(MatchClock {
+            elapsed_ticks: 40 * 60 * 60, // 40 minutes into second half
+            half: 2,
+            added_time_ticks: 0,
+            is_running: true,
         });
 
         let team_entity = world.spawn(()).id();

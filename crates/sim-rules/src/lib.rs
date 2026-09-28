@@ -1,6 +1,6 @@
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallOutOfBoundsType, BallState, Match, Player, Position, RuleEvent, Skill, TeamId,
+    Ball, BallOutOfBoundsType, BallState, Match, MatchClock, Player, Position, RuleEvent, Skill, TeamId,
     TeamIdComponent, Velocity, time,
 };
 use sim_math::Vec2;
@@ -620,6 +620,7 @@ pub fn referee_advantage_system(ball_query: Query<&mut Ball>, match_query: Query
 pub fn added_time_calculation_system(
     mut referee_query: Query<&mut sim_components::Referee>,
     mut match_query: Query<&mut sim_components::Match>,
+    mut clock_query: Query<&mut MatchClock>,
 ) {
     for mut referee in referee_query.iter_mut() {
         if referee.stoppage_events.is_empty() {
@@ -630,8 +631,8 @@ pub fn added_time_calculation_system(
         let added_time_ticks = (added_time_min * 60.0 * 60.0) as u64; // Convert minutes to ticks
         
         // Apply to match clock
-        if let Ok(mut m) = match_query.get_single_mut() {
-            m.clock.added_time_ticks = added_time_ticks;
+        if let Ok(mut clock) = clock_query.get_single_mut() {
+            clock.added_time_ticks = added_time_ticks;
             println!("Added time calculated: {} minutes ({} ticks)", added_time_min, added_time_ticks);
         }
         
@@ -639,18 +640,30 @@ pub fn added_time_calculation_system(
     }
 }
 
-pub fn match_duration_enforcement_system(mut match_query: Query<&mut Match>) {
+pub fn match_duration_enforcement_system(
+    mut match_query: Query<&mut sim_components::Match>,
+    mut clock_query: Query<&mut MatchClock>,
+) {
     for mut m in match_query.iter_mut() {
-        if !m.clock.is_running {
+        // First check if clock is running
+        let is_running = clock_query.get_single().map(|c| c.is_running).unwrap_or(false);
+        if !is_running {
             continue;
         }
 
-        // Use shared time utilities: half time remaining ticks
-        let half_remaining_ticks = time::half_time_remaining_ticks(&m.clock);
+        // Check half time remaining
+        let half_remaining_ticks = clock_query
+            .get_single()
+            .map(|c| time::half_time_remaining_ticks(c))
+            .unwrap_or(0);
 
         if half_remaining_ticks == 0 {
-            m.clock.is_running = false;
-            if m.clock.half == 1 {
+            if let Ok(mut clock) = clock_query.get_single_mut() {
+                clock.is_running = false;
+            }
+            // Need to re-query to get half
+            let half = clock_query.get_single().map(|c| c.half).unwrap_or(1);
+            if half == 1 {
                 m.state = sim_components::MatchState::HalfTime;
                 println!("Half time! Score: {}-{}", m.score.0, m.score.1);
             } else {
@@ -773,14 +786,14 @@ mod tests {
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
             score: (0, 0),
-            clock: sim_components::MatchClock {
-                elapsed_ticks: 30 * 60,
-                half: 1,
-                added_time_ticks: 0,
-                is_running: true,
-            },
             state: sim_components::MatchState::InPlay,
             seed: 12345,
+        });
+        world.entity_mut(match_entity).insert(MatchClock {
+            elapsed_ticks: 30 * 60,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
         });
 
         // Create ball entity in home goal (x = 105.5, y = 34)
@@ -822,14 +835,14 @@ mod tests {
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
             score: (0, 0),
-            clock: sim_components::MatchClock {
-                elapsed_ticks: 30 * 60,
-                half: 1,
-                added_time_ticks: 0,
-                is_running: true,
-            },
             state: sim_components::MatchState::InPlay,
             seed: 12345,
+        });
+        world.entity_mut(match_entity).insert(MatchClock {
+            elapsed_ticks: 30 * 60,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
         });
 
         // Create ball entity in away goal (x = -0.5, y = 34)
@@ -864,14 +877,14 @@ mod tests {
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
             score: (0, 0),
-            clock: sim_components::MatchClock {
-                elapsed_ticks: 30 * 60,
-                half: 1,
-                added_time_ticks: 0,
-                is_running: true,
-            },
             state: sim_components::MatchState::InPlay,
             seed: 12345,
+        });
+        world.entity_mut(match_entity).insert(MatchClock {
+            elapsed_ticks: 30 * 60,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
         });
 
         // Create ball entity in home goal with Dead state
@@ -907,14 +920,14 @@ mod tests {
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
             score: (1, 0),
-            clock: sim_components::MatchClock {
-                elapsed_ticks: 30 * 60,
-                half: 1,
-                added_time_ticks: 0,
-                is_running: true,
-            },
             state: sim_components::MatchState::InPlay,
             seed: 12345,
+        });
+        world.entity_mut(match_entity).insert(MatchClock {
+            elapsed_ticks: 30 * 60,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
         });
 
         // Create ball entity in Dead state (after a goal)
@@ -1257,15 +1270,15 @@ mod tests {
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
             score: (1, 0),
-            clock: sim_components::MatchClock {
-                // 48 minutes = 45 min half + 3 min added time = 162,180 ticks
-                elapsed_ticks: 45 * 60 * 60 + 3 * 60 * 60,
-                half: 1,
-                added_time_ticks: 3 * 60 * 60,
-                is_running: true,
-            },
             state: sim_components::MatchState::InPlay,
             seed: 12345,
+        });
+        world.entity_mut(match_entity).insert(MatchClock {
+            // 48 minutes = 45 min half + 3 min added time = 162,180 ticks
+            elapsed_ticks: 45 * 60 * 60 + 3 * 60 * 60,
+            half: 1,
+            added_time_ticks: 3 * 60 * 60,
+            is_running: true,
         });
 
         let mut schedule = Schedule::default();
@@ -1273,7 +1286,8 @@ mod tests {
         schedule.run(&mut world);
 
         let m = world.entity(match_entity).get::<Match>().unwrap();
-        assert!(!m.clock.is_running);
+        let clock = world.entity(match_entity).get::<MatchClock>().unwrap();
+        assert!(!clock.is_running);
         assert_eq!(m.state, sim_components::MatchState::HalfTime);
     }
 
@@ -1288,14 +1302,14 @@ mod tests {
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
             score: (0, 0),
-            clock: sim_components::MatchClock {
-                elapsed_ticks: 30 * 60,
-                half: 1,
-                added_time_ticks: 0,
-                is_running: true,
-            },
             state: sim_components::MatchState::InPlay,
             seed: 12345,
+        });
+        world.entity_mut(match_entity).insert(MatchClock {
+            elapsed_ticks: 30 * 60,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
         });
 
         // Create two opposing players very close together with high relative velocity

@@ -931,6 +931,52 @@ mod tests {
         assert!(true);
     }
 
+    /// Phase E PR 4b: the string labels produced by `intent_kind` must
+    /// match the labels the old flat enum produced, so any consumer that
+    /// hashes on the label (e.g. hysteresis matching in
+    /// `player_decision_system`) doesn't drift. This test enumerates all
+    /// 11 variants and asserts the round-tripped label equals the legacy
+    /// discriminant name.
+    #[test]
+    fn test_intent_kind_string_for_all_variants() {
+        // `Entity::PLACEHOLDER` is a Bevy 0.14 `Entity::from_raw(0)` idiom;
+        // if the Bevy version changes, adjust.
+        let cases = [
+            (
+                Intent::Movement(MovementIntent::MoveToPosition(Vec2::zero())),
+                "MoveToPosition",
+            ),
+            (
+                Intent::Movement(MovementIntent::HoldPosition),
+                "HoldPosition",
+            ),
+            (Intent::Movement(MovementIntent::ChaseBall), "ChaseBall"),
+            (Intent::Movement(MovementIntent::Intercept), "Intercept"),
+            (Intent::Movement(MovementIntent::SupportRun), "SupportRun"),
+            (Intent::Movement(MovementIntent::TrackBack), "TrackBack"),
+            (Intent::Action(ActionIntent::PassTo), "PassTo"),
+            (
+                Intent::Action(ActionIntent::ShootAtGoal(Vec2::zero())),
+                "ShootAtGoal",
+            ),
+            (
+                Intent::Action(ActionIntent::Tackle(Entity::PLACEHOLDER)),
+                "Tackle",
+            ),
+            (
+                Intent::Action(ActionIntent::MarkOpponent(Entity::PLACEHOLDER)),
+                "MarkOpponent",
+            ),
+            (
+                Intent::Action(ActionIntent::Press(Entity::PLACEHOLDER)),
+                "Press",
+            ),
+        ];
+        for (intent, expected) in cases {
+            assert_eq!(intent_kind(&intent), expected);
+        }
+    }
+
     #[test]
     fn test_stamina_based_decision() {
         // Test that low stamina player conserves energy

@@ -37,12 +37,6 @@ impl Score {
 }
 
 #[derive(Debug, Clone)]
-pub struct Consideration {
-    pub name: String,
-    pub curve: ResponseCurve,
-}
-
-#[derive(Debug, Clone)]
 pub enum ResponseCurve {
     Linear {
         min: f32,

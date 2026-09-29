@@ -306,7 +306,7 @@ pub fn player_decision_system(
                     skill.0,
                     pitch_control.as_deref(),
                 );
-                let score = consideration.curve.evaluate(raw).clamp(0.0, 1.0);
+                let score = consideration.curve.evaluate(raw).raw();
                 consideration_scores.push(score);
             }
 

@@ -7,6 +7,14 @@
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Score(f32);
 
+#[allow(
+    clippy::use_self,
+    reason = "named constants like ZERO/ONE read more clearly than Self(0.0)"
+)]
+#[allow(
+    clippy::missing_const_for_fn,
+    reason = "f32::is_nan / clamp const-stability is recent; non-const keeps MSRV floor lower"
+)]
 impl Score {
     pub const ZERO: Score = Score(0.0);
     pub const ONE: Score = Score(1.0);
@@ -52,28 +60,33 @@ pub enum ResponseCurve {
 }
 
 impl ResponseCurve {
+    /// Evaluate the curve at the given input, returning a `Score` clamped
+    /// to `[0.0, 1.0]`.
+    ///
+    /// `Linear` divides by `(max - min).max(f32::EPSILON)` so the
+    /// `max <= min` degenerate case yields `Score::ZERO` instead of NaN.
+    /// The previous implementation incorrectly clamped the *denominator*
+    /// due to operator precedence — fixed in Phase E PR 2.
     #[must_use]
-    pub fn evaluate(&self, input: f32) -> f32 {
+    pub fn evaluate(&self, input: f32) -> Score {
         match self {
-            Self::Linear { min, max } => (input - min) / (max - min).clamp(0.0, 1.0),
+            Self::Linear { min, max } => {
+                let denom = (max - min).max(f32::EPSILON);
+                let raw = (input - min) / denom;
+                Score::new(raw)
+            }
             Self::Logistic {
                 midpoint,
                 steepness,
             } => {
                 let x = steepness * (input - midpoint);
-                1.0 / (1.0 + (-x).exp())
+                Score::new(1.0 / (1.0 + (-x).exp()))
             }
             Self::Step {
                 threshold,
                 below,
                 above,
-            } => {
-                if input < *threshold {
-                    *below
-                } else {
-                    *above
-                }
-            }
+            } => Score::new(if input < *threshold { *below } else { *above }),
         }
     }
 }
@@ -93,28 +106,32 @@ pub fn geometric_mean(values: &[f32]) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests assert exact Score values after clamping"
+)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_response_curves() {
         let linear = ResponseCurve::Linear { min: 0.0, max: 1.0 };
-        assert_eq!(linear.evaluate(0.5), 0.5);
+        assert_eq!(linear.evaluate(0.5).raw(), 0.5);
 
         let logistic = ResponseCurve::Logistic {
             midpoint: 0.5,
             steepness: 10.0,
         };
         let result = logistic.evaluate(0.5);
-        assert!((result - 0.5).abs() < 0.01);
+        assert!((result.raw() - 0.5).abs() < 0.01);
 
         let step = ResponseCurve::Step {
             threshold: 0.5,
             below: 0.0,
             above: 1.0,
         };
-        assert_eq!(step.evaluate(0.3), 0.0);
-        assert_eq!(step.evaluate(0.7), 1.0);
+        assert_eq!(step.evaluate(0.3), Score::new(0.0));
+        assert_eq!(step.evaluate(0.7), Score::new(1.0));
     }
 
     #[test]

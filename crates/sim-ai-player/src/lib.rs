@@ -21,12 +21,12 @@ pub const DECISION_CADENCE_TICKS: u64 = 6;
 pub struct DecisionEvaluationCount(pub u64);
 
 /// Map an entity to one of `DECISION_CADENCE_TICKS` decision-cadence
-/// slots. Uses a SplitMix64 finalize on the entity's packed id bits so
+/// slots. Uses a `SplitMix64` finalize on the entity's packed id bits so
 /// 22 players distribute roughly evenly across the N slots without a
 /// roster-index pass. Stable for a given entity id (Bevy entity ids are
 /// dense u32 indices, allocated deterministically).
 const fn player_stagger_slot(entity: Entity) -> u64 {
-    let bits = entity.to_bits() as u64;
+    let bits = entity.to_bits();
     // SplitMix64 finalize — well-trodden; uniform in [0, 2^64).
     let z = (bits ^ (bits >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     let z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
@@ -241,7 +241,7 @@ pub const fn consideration_scoring_system(_query: Query<(&mut Player, &Stamina, 
 ///    matches the player's currently-active intent.
 /// 3. Commit the new intent to the Player.
 ///
-/// Phase D (CODEBASE_REVIEW §7): per-player decision cadence. A player is
+/// Phase D (`CODEBASE_REVIEW` §7): per-player decision cadence. A player is
 /// evaluated only when `(elapsed_ticks % DECISION_CADENCE_TICKS) ==
 /// player_stagger_slot(entity)`. This decouples decision cost from the
 /// 60 Hz physics tick (spec §10: ~10 Hz decision cadence). The

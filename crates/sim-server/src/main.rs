@@ -84,9 +84,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if full_match {
                 loop {
                     sim.tick();
-                    if let Some(m) = sim.world.get::<sim_components::Match>(match_entity)
-                        && m.state == sim_components::MatchState::FullTime
-                    {
+                    let m_state = sim
+                        .world
+                        .resource::<sim_components::Match>()
+                        .state;
+                    if m_state == sim_components::MatchState::FullTime {
                         println!("[Tick {:06}] FullTime reached", sim.tick);
                         break;
                     }
@@ -99,8 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 for _ in 0..ticks {
                     sim.tick();
-                    if let Some(m) = sim.world.get::<sim_components::Match>(match_entity)
-                        && m.state == sim_components::MatchState::FullTime
+                    if sim.world.resource::<sim_components::Match>().state
+                        == sim_components::MatchState::FullTime
                     {
                         break;
                     }

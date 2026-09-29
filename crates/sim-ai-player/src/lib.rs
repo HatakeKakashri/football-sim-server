@@ -50,10 +50,10 @@ pub fn perception_system(
         Query<(Entity, &Position, &TeamIdComponent)>,
         Query<(Entity, &Position, &TeamIdComponent)>,
         Query<(Entity, &Ball, &Position)>,
-        Query<&sim_components::Match>,
         Query<&sim_components::MatchClock>,
         Query<&sim_components::Team>,
     )>,
+    match_res: Res<sim_components::Match>,
 ) {
     // Get ball position and state via the Ball query — disjointness with
     // the player queries is enforced by the ParamSet slot, not by Query
@@ -82,12 +82,12 @@ pub fn perception_system(
         }
     }
 
-    // Phase 2: snapshot the single Match and MatchClock up front. These are
-    // read-only resources used to fill in match-context fields on each
-    // player (score differential, time remaining, possession, mentality).
-    // First get the clock from MatchClock component.
+    // Phase 2: snapshot the single MatchClock up front (read-only resource
+    // used to fill in match-context fields on each player — time remaining,
+    // etc.). Phase C §4.3: `Match` itself is now a Resource and accessed
+    // directly via the `match_res` parameter above.
     let clock = {
-        let clock_q = queries.p4();
+        let clock_q = queries.p3();
         clock_q.iter().next().cloned().unwrap_or(MatchClock {
             elapsed_ticks: 0,
             half: 1,
@@ -95,33 +95,23 @@ pub fn perception_system(
             is_running: true,
         })
     };
-    // Then get match info (score) from Match component.
-    let match_info: Option<(i16, f32, sim_components::TeamId, sim_components::TeamId)> = {
-        let q = queries.p3();
-        q.iter().next().map(|m| {
-            let diff = i16::from(m.score.0) - i16::from(m.score.1);
-            // Use shared time utilities: match time remaining in seconds
-            let time_remaining_secs = time::match_time_remaining_secs(&clock);
-            (
-                diff,
-                time_remaining_secs,
-                sim_components::TeamId(0),
-                sim_components::TeamId(1),
-            )
-        })
+    // Derive match-context fields from the resource.
+    let (_score_diff, _time_remaining_secs, _home_id, _away_id) = {
+        let diff = i16::from(match_res.score.0) - i16::from(match_res.score.1);
+        let time_remaining_secs = time::match_time_remaining_secs(&clock);
+        (
+            diff,
+            time_remaining_secs,
+            sim_components::TeamId(0),
+            sim_components::TeamId(1),
+        )
     };
-    let (_score_diff, _time_remaining_secs, _home_id, _away_id) = match_info.unwrap_or((
-        0,
-        90.0 * 60.0, // 90 minutes = 5400 seconds
-        sim_components::TeamId(0),
-        sim_components::TeamId(1),
-    ));
 
     // Snapshot mentalities by team id — two teams only, so a fixed array
     // replaces the HashMap (no allocation, no iteration order nondeterminism).
     let mut mentality_by_team: [f32; 2] = [0.0, 0.0];
     {
-        let q = queries.p5();
+        let q = queries.p4();
         for team in q.iter() {
             let m = match team.mentality {
                 sim_components::Mentality::Defend => -0.5,
@@ -858,16 +848,14 @@ mod tests {
         schedule.add_systems(player_decision_system);
 
         let match_entity = world.spawn(()).id();
-        world
-            .entity_mut(match_entity)
-            .insert(sim_components::Match {
-                id: 1,
-                home_team: Entity::PLACEHOLDER,
-                away_team: Entity::PLACEHOLDER,
-                score: (0, 0),
-                state: sim_components::MatchState::InPlay,
-                seed: 0,
-            });
+        world.insert_resource(sim_components::Match {
+            id: 1,
+            home_team: Entity::PLACEHOLDER,
+            away_team: Entity::PLACEHOLDER,
+            score: (0, 0),
+            state: sim_components::MatchState::InPlay,
+            seed: 0,
+        });
         world
             .entity_mut(match_entity)
             .insert(sim_components::MatchClock {
@@ -963,16 +951,14 @@ mod tests {
         schedule.add_systems(player_decision_system);
 
         let match_entity = world.spawn(()).id();
-        world
-            .entity_mut(match_entity)
-            .insert(sim_components::Match {
-                id: 1,
-                home_team: Entity::PLACEHOLDER,
-                away_team: Entity::PLACEHOLDER,
-                score: (0, 0),
-                state: sim_components::MatchState::InPlay,
-                seed: 0,
-            });
+        world.insert_resource(sim_components::Match {
+            id: 1,
+            home_team: Entity::PLACEHOLDER,
+            away_team: Entity::PLACEHOLDER,
+            score: (0, 0),
+            state: sim_components::MatchState::InPlay,
+            seed: 0,
+        });
         world
             .entity_mut(match_entity)
             .insert(sim_components::MatchClock {
@@ -1068,16 +1054,14 @@ mod tests {
         world.entity_mut(defender_entity).insert(utility_brain);
 
         let match_entity = world.spawn(()).id();
-        world
-            .entity_mut(match_entity)
-            .insert(sim_components::Match {
-                id: 1,
-                home_team: Entity::PLACEHOLDER,
-                away_team: Entity::PLACEHOLDER,
-                score: (0, 0),
-                state: sim_components::MatchState::InPlay,
-                seed: 0,
-            });
+        world.insert_resource(sim_components::Match {
+            id: 1,
+            home_team: Entity::PLACEHOLDER,
+            away_team: Entity::PLACEHOLDER,
+            score: (0, 0),
+            state: sim_components::MatchState::InPlay,
+            seed: 0,
+        });
         world
             .entity_mut(match_entity)
             .insert(sim_components::MatchClock {
@@ -1164,16 +1148,14 @@ mod tests {
 
         // Insert a Match entity so player_decision_system can compute tick.
         let match_entity = world.spawn(()).id();
-        world
-            .entity_mut(match_entity)
-            .insert(sim_components::Match {
-                id: 1,
-                home_team: Entity::PLACEHOLDER,
-                away_team: Entity::PLACEHOLDER,
-                score: (0, 0),
-                state: sim_components::MatchState::InPlay,
-                seed: 0,
-            });
+        world.insert_resource(sim_components::Match {
+            id: 1,
+            home_team: Entity::PLACEHOLDER,
+            away_team: Entity::PLACEHOLDER,
+            score: (0, 0),
+            state: sim_components::MatchState::InPlay,
+            seed: 0,
+        });
         world
             .entity_mut(match_entity)
             .insert(sim_components::MatchClock {
@@ -1215,6 +1197,16 @@ mod tests {
     #[test]
     fn test_perception_records_real_entity_ids() {
         let mut world = World::new();
+
+        // Phase C §4.3: Match is a Resource required by `perception_system`.
+        world.insert_resource(sim_components::Match {
+            id: 1,
+            home_team: Entity::PLACEHOLDER,
+            away_team: Entity::PLACEHOLDER,
+            score: (0, 0),
+            state: sim_components::MatchState::InPlay,
+            seed: 0,
+        });
 
         // Two opposing players within perception range.
         let home_player = world.spawn(()).id();

@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, Position, Velocity};
+use sim_components::{Ball, Player, Position, Velocity};
 use sim_math::{PitchDimensions, Vec2};
 
 /// Phase 2: RNG resource wrapper for stochastic gameplay outcomes.
@@ -170,52 +170,47 @@ impl PitchControlGrid {
 
 /// Phase 2 system: recompute the pitch control grid.
 ///
-/// Runs every tick (cheap: 16 × 12 = 192 cell evaluations). Reads world state (players +
-/// ball) and writes the `PitchControlGrid` resource. Does NOT mutate any
-/// component, so it is safe to run before decision/execution systems.
+/// Runs every tick (cheap: 16 × 12 = 192 cell evaluations). Reads world state
+/// (players + ball) and writes the `PitchControlGrid` resource. Does NOT
+/// mutate any component, so it is safe to run before decision/execution
+/// systems.
 ///
-/// Note: takes `&mut World` directly (not `ResMut<PitchControlGrid>`) so
-/// that downstream systems reading the grid with `Res<PitchControlGrid>`
-/// don't conflict with this system's exclusive access.
+/// Phase C ECS-shape polish (review §2.5): now uses a typed `Query` instead
+/// of `world.iter_entities()`. The ball position is queried with
+/// `Query<(&Ball, &Position)>` and player positions with
+/// `Query<(&Player, &Position)>`. The grid resource is mutated via
+/// `ResMut<PitchControlGrid>`; downstream readers that take
+/// `Res<PitchControlGrid>` are serialised correctly by the scheduler
+/// (`pitch_control_system` writes, `player_decision_system` reads).
 ///
 /// Logic per spec §3:
-/// 1. Partition players by team via `Player.team_id` (still on the Player
-///    component after the Phase B ECS migration); pull each player's world
-///    position from the `Position` component (no longer a field of
-///    `Player`).
-/// 2. Identify the ball "possessor": the player within 1.5 m of the ball.
-/// 3. If possessed: attacker = possessor's team (top-3 by distance to ball),
-///    defender = opposing team (top-3 by distance to ball).
-///    Otherwise: attacker/defender = 3 closest from each team.
+/// 1. Partition players by team via `Player.team_id`; pull each player's
+///    world position from the `Position` component.
+/// 2. Identify the ball position from the `Ball` + `Position` query.
+/// 3. Sort both teams by distance to the ball; pick top-3 from each as
+///    attackers/defenders (same selection rule in the free-ball case —
+///    empty ball position just means stable tiebreaks).
 /// 4. For each grid cell, call `cell_score` with attacker/defender sets.
 /// 5. Store the result back into the resource.
-pub fn pitch_control_system(world: &mut World) {
-    use sim_components::Player;
-
+pub fn pitch_control_system(
+    mut grid: ResMut<PitchControlGrid>,
+    ball_query: Query<(&Ball, &Position)>,
+    player_query: Query<(&Player, &Position)>,
+) {
     // Snapshot player positions by team id (read-only).
     let mut home_players: Vec<(Vec2, f32)> = Vec::new();
     let mut away_players: Vec<(Vec2, f32)> = Vec::new();
 
-    // Find ball position by iterating entities.
-    let mut ball_pos_opt: Option<Vec2> = None;
-    for entity in world.iter_entities() {
-        if entity.get::<sim_components::Ball>().is_some()
-            && let Some(p) = entity.get::<Position>()
-        {
-            ball_pos_opt = Some(p.0);
-            break;
-        }
-    }
+    // Query the ball position from the typed query.
+    let ball_pos_opt = ball_query.iter().next().map(|(_, p)| p.0);
 
-    // Snapshot players by team id.
-    for entity in world.iter_entities() {
-        if let (Some(player), Some(pos)) = (entity.get::<Player>(), entity.get::<Position>()) {
-            let speed = PITCH_CONTROL_PLAYER_SPEED;
-            if player.team_id.0 == 0 {
-                home_players.push((pos.0, speed));
-            } else if player.team_id.0 == 1 {
-                away_players.push((pos.0, speed));
-            }
+    // Snapshot players by team id via Query.
+    for (player, pos) in &player_query {
+        let speed = PITCH_CONTROL_PLAYER_SPEED;
+        if player.team_id.0 == 0 {
+            home_players.push((pos.0, speed));
+        } else if player.team_id.0 == 1 {
+            away_players.push((pos.0, speed));
         }
     }
 
@@ -240,13 +235,6 @@ pub fn pitch_control_system(world: &mut World) {
     let attackers: Vec<(Vec2, f32)> = home_sorted.iter().take(3).copied().collect();
     let defenders: Vec<(Vec2, f32)> = away_sorted.iter().take(3).copied().collect();
 
-    // Recompute every cell. We mutate the resource via `world.resource_mut`
-    // (instead of taking `ResMut<PitchControlGrid>` directly) so that other
-    // systems on the same schedule can take `Res<PitchControlGrid>` without
-    // a conflict error.
-    let Some(mut grid) = world.get_resource_mut::<PitchControlGrid>() else {
-        return;
-    };
     for row in 0..grid.rows {
         for col in 0..grid.cols {
             let x = (usize_to_f32(col) + 0.5) * grid.cell_width;
@@ -332,10 +320,67 @@ pub fn player_movement_system(
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
+    use super::*;
+    use sim_components::{Ball, Player, Position, RoleComponent, TeamId, Velocity};
+
+    /// The `pitch_control_system` (Phase 2 ECS-shape polish: §2.5) must
+    /// succeed when invoked as a normal Bevy system (not via
+    /// `world.run_system`). It writes the `PitchControlGrid` resource and
+    /// produces a 16 × 12 grid with non-default cells when players exist.
     #[test]
-    fn test_physics_plugin() {
-        // Placeholder test
-        assert!(true);
+    fn pitch_control_system_runs_as_query_system() {
+        let mut world = World::new();
+        world.insert_resource(PitchControlGrid::build_standard());
+
+        // Two players, one per team, plus a ball.
+        world.spawn((
+            Player {
+                team_id: TeamId(0),
+                intent: None,
+            },
+            Position(Vec2::new(20.0, 34.0)),
+            Velocity(Vec2::zero()),
+            RoleComponent(sim_components::Role::CentralMidfielder),
+        ));
+        world.spawn((
+            Player {
+                team_id: TeamId(1),
+                intent: None,
+            },
+            Position(Vec2::new(85.0, 34.0)),
+            Velocity(Vec2::zero()),
+            RoleComponent(sim_components::Role::CentralMidfielder),
+        ));
+        let ball_entity = world.spawn(()).id();
+        world.entity_mut(ball_entity).insert(Ball {
+            spin: 0.0,
+            state: sim_components::BallState::Free,
+            possessor: None,
+            last_touched_by: None,
+            kick_velocity: None,
+        });
+        world
+            .entity_mut(ball_entity)
+            .insert(Position(Vec2::new(52.5, 34.0)));
+
+        // Run via the schedule so the system gets the Bevy system params.
+        let mut schedule = Schedule::default();
+        schedule.add_systems(pitch_control_system);
+        schedule.run(&mut world);
+
+        // At least one cell should be non-default (0.5). All-home players
+        // mean home should dominate the right-half of the pitch.
+        let grid = world.resource::<PitchControlGrid>();
+        let mut changed = 0;
+        for row in 0..grid.rows {
+            for col in 0..grid.cols {
+                if (grid.cells[row][col] - 0.5).abs() > f32::EPSILON {
+                    changed += 1;
+                }
+            }
+        }
+        assert!(changed > 0, "Grid should reflect player positions, all cells were 0.5");
     }
 }

@@ -134,7 +134,7 @@ pub fn out_of_bounds_system(
 pub fn goal_detection_system(
     mut commands: Commands,
     mut ball_query: Query<(Entity, &Position, &mut Ball)>,
-    mut match_query: Query<&mut Match>,
+    mut match_res: ResMut<Match>,
     current_tick: Res<CurrentTick>,
 ) {
     // First pass: collect goal events (avoid borrow conflicts)
@@ -154,26 +154,24 @@ pub fn goal_detection_system(
 
         // Away goal: ball at x <= 0 (left goal)
         if ball_pos.0.x <= 0.0 {
-            if let Ok(mut m) = match_query.get_single_mut() {
-                m.score.1 += 1;
-                let final_score = m.score;
-                goal_events.push((ball_entity, sim_components::TeamId(1), final_score));
-                println!(
-                    "GOAL scored by away team! Score: {}-{}",
-                    final_score.0, final_score.1
-                );
-            }
+            match_res.score.1 += 1;
+            let final_score = match_res.score;
+            goal_events.push((ball_entity, sim_components::TeamId(1), final_score));
+            tracing::info!(
+                "GOAL scored by away team! Score: {}-{}",
+                final_score.0,
+                final_score.1
+            );
         }
         // Home goal: ball at x >= PITCH_LENGTH (right goal)
-        else if ball_pos.0.x >= PITCH_LENGTH
-            && let Ok(mut m) = match_query.get_single_mut()
-        {
-            m.score.0 += 1;
-            let final_score = m.score;
+        else if ball_pos.0.x >= PITCH_LENGTH {
+            match_res.score.0 += 1;
+            let final_score = match_res.score;
             goal_events.push((ball_entity, sim_components::TeamId(0), final_score));
-            println!(
+            tracing::info!(
                 "GOAL scored by home team! Score: {}-{}",
-                final_score.0, final_score.1
+                final_score.0,
+                final_score.1
             );
         }
     }
@@ -456,14 +454,10 @@ const fn team_id_u8(team: &TeamIdComponent) -> u8 {
 pub fn foul_detection_system(
     mut commands: Commands,
     player_query: Query<(Entity, &Player, &Position, &Velocity)>,
-    match_query: Query<&Match>,
+    match_res: Res<Match>,
 ) {
-    let Ok(match_component) = match_query.get_single() else {
-        return;
-    };
-
     // Skip if match is not in play
-    if match_component.state != sim_components::MatchState::InPlay {
+    if match_res.state != sim_components::MatchState::InPlay {
         return;
     }
 
@@ -608,9 +602,9 @@ pub fn possession_resolution_system(
     }
 }
 
-pub const fn referee_advantage_system(ball_query: Query<&mut Ball>, match_query: Query<&Match>) {
+pub const fn referee_advantage_system(ball_query: Query<&mut Ball>, match_res: Res<Match>) {
     // Phase N: real advantage window logic
-    let _ = (ball_query, match_query);
+    let _ = (ball_query, match_res);
 }
 
 /// Added time granted per stoppage event, in seconds (0.5 min).
@@ -620,7 +614,6 @@ const MAX_ADDED_SECS_PER_HALF: u64 = 600;
 
 pub fn added_time_calculation_system(
     mut referee_query: Query<&mut sim_components::Referee>,
-    _match_query: Query<&mut sim_components::Match>,
     mut clock_query: Query<&mut MatchClock>,
 ) {
     for mut referee in &mut referee_query {
@@ -638,7 +631,9 @@ pub fn added_time_calculation_system(
         // Apply to match clock
         if let Ok(mut clock) = clock_query.get_single_mut() {
             clock.added_time_ticks = added_time_ticks;
-            println!("Added time calculated: {added_time_min} minutes ({added_time_ticks} ticks)");
+            tracing::info!(
+                "Added time calculated: {added_time_min} minutes ({added_time_ticks} ticks)"
+            );
         }
 
         referee.stoppage_events.clear();
@@ -646,34 +641,36 @@ pub fn added_time_calculation_system(
 }
 
 pub fn match_duration_enforcement_system(
-    mut match_query: Query<&mut sim_components::Match>,
+    mut match_res: ResMut<sim_components::Match>,
     mut clock_query: Query<&mut MatchClock>,
 ) {
-    for mut m in &mut match_query {
-        // First check if clock is running
-        let is_running = clock_query.get_single().is_ok_and(|c| c.is_running);
-        if !is_running {
-            continue;
+    // First check if clock is running
+    let is_running = clock_query.get_single().is_ok_and(|c| c.is_running);
+    if !is_running {
+        return;
+    }
+
+    // Check half time remaining
+    let half_remaining_ticks = clock_query
+        .get_single()
+        .map_or(0, time::half_time_remaining_ticks);
+
+    if half_remaining_ticks == 0 {
+        if let Ok(mut clock) = clock_query.get_single_mut() {
+            clock.is_running = false;
         }
-
-        // Check half time remaining
-        let half_remaining_ticks = clock_query
-            .get_single()
-            .map_or(0, time::half_time_remaining_ticks);
-
-        if half_remaining_ticks == 0 {
-            if let Ok(mut clock) = clock_query.get_single_mut() {
-                clock.is_running = false;
-            }
-            // Need to re-query to get half
-            let half = clock_query.get_single().map_or(1, |c| c.half);
-            if half == 1 {
-                m.state = sim_components::MatchState::HalfTime;
-                println!("Half time! Score: {}-{}", m.score.0, m.score.1);
-            } else {
-                m.state = sim_components::MatchState::FullTime;
-                println!("Full time! Score: {}-{}", m.score.0, m.score.1);
-            }
+        // Need to re-query to get half
+        let half = clock_query.get_single().map_or(1, |c| c.half);
+        if half == 1 {
+            match_res.state = sim_components::MatchState::HalfTime;
+            tracing::info!("Half time! Score: {}-{}", match_res.score.0, match_res.score.1);
+        } else {
+            match_res.state = sim_components::MatchState::FullTime;
+            tracing::info!(
+                "Full time! Score: {}-{}",
+                match_res.score.0,
+                match_res.score.1
+            );
         }
     }
 }
@@ -682,9 +679,10 @@ pub fn minimum_player_count_system(team_query: Query<&sim_components::Team>) {
     for team in team_query.iter() {
         let player_count = team.players.len();
         if player_count < 7 {
-            println!(
-                "WARNING: Team {} has only {} players (minimum 7 required)",
-                team.name, player_count
+            tracing::warn!(
+                "Team {} has only {} players (minimum 7 required)",
+                team.name,
+                player_count
             );
         }
     }
@@ -782,9 +780,8 @@ mod tests {
     fn test_goal_scored_home_team() {
         let mut world = World::new();
 
-        // Create match entity
-        let match_entity = world.spawn(()).id();
-        world.entity_mut(match_entity).insert(Match {
+        // Match is now a Resource (Phase C §4.3).
+        world.insert_resource(Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
@@ -792,6 +789,7 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 12345,
         });
+        let match_entity = world.spawn(()).id();
         world.entity_mut(match_entity).insert(MatchClock {
             elapsed_ticks: 30 * 60,
             half: 1,
@@ -815,7 +813,7 @@ mod tests {
         world.insert_resource(CurrentTick(100));
         schedule.run(&mut world);
 
-        let m = world.entity(match_entity).get::<Match>().unwrap();
+        let m = world.resource::<Match>();
         assert_eq!(m.score.0, 1);
         assert_eq!(m.score.1, 0);
 
@@ -831,9 +829,7 @@ mod tests {
     fn test_goal_scored_away_team() {
         let mut world = World::new();
 
-        // Create match entity
-        let match_entity = world.spawn(()).id();
-        world.entity_mut(match_entity).insert(Match {
+        world.insert_resource(Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
@@ -841,6 +837,7 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 12345,
         });
+        let match_entity = world.spawn(()).id();
         world.entity_mut(match_entity).insert(MatchClock {
             elapsed_ticks: 30 * 60,
             half: 1,
@@ -864,7 +861,7 @@ mod tests {
         world.insert_resource(CurrentTick(100));
         schedule.run(&mut world);
 
-        let m = world.entity(match_entity).get::<Match>().unwrap();
+        let m = world.resource::<Match>();
         assert_eq!(m.score.0, 0);
         assert_eq!(m.score.1, 1);
     }
@@ -873,9 +870,7 @@ mod tests {
     fn test_no_double_goal_when_ball_dead() {
         let mut world = World::new();
 
-        // Create match entity
-        let match_entity = world.spawn(()).id();
-        world.entity_mut(match_entity).insert(Match {
+        world.insert_resource(Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
@@ -883,6 +878,7 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 12345,
         });
+        let match_entity = world.spawn(()).id();
         world.entity_mut(match_entity).insert(MatchClock {
             elapsed_ticks: 30 * 60,
             half: 1,
@@ -907,7 +903,7 @@ mod tests {
         schedule.run(&mut world);
 
         // Score should still be 0-0 because ball was already Dead
-        let m = world.entity(match_entity).get::<Match>().unwrap();
+        let m = world.resource::<Match>();
         assert_eq!(m.score.0, 0);
         assert_eq!(m.score.1, 0);
     }
@@ -916,9 +912,7 @@ mod tests {
     fn test_kickoff_restart_places_ball_at_center() {
         let mut world = World::new();
 
-        // Create match entity
-        let match_entity = world.spawn(()).id();
-        world.entity_mut(match_entity).insert(Match {
+        world.insert_resource(Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
@@ -926,6 +920,7 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 12345,
         });
+        let match_entity = world.spawn(()).id();
         world.entity_mut(match_entity).insert(MatchClock {
             elapsed_ticks: 30 * 60,
             half: 1,
@@ -1264,8 +1259,7 @@ mod tests {
     fn test_match_duration_enforcement() {
         let mut world = World::new();
 
-        let match_entity = world.spawn(()).id();
-        world.entity_mut(match_entity).insert(Match {
+        world.insert_resource(Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
@@ -1273,6 +1267,7 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 12345,
         });
+        let match_entity = world.spawn(()).id();
         world.entity_mut(match_entity).insert(MatchClock {
             // 48 minutes = 45 min half + 3 min added time = 162,180 ticks
             elapsed_ticks: 45 * 60 * 60 + 3 * 60 * 60,
@@ -1285,7 +1280,7 @@ mod tests {
         schedule.add_systems(match_duration_enforcement_system);
         schedule.run(&mut world);
 
-        let m = world.entity(match_entity).get::<Match>().unwrap();
+        let m = world.resource::<Match>();
         let clock = world.entity(match_entity).get::<MatchClock>().unwrap();
         assert!(!clock.is_running);
         assert_eq!(m.state, sim_components::MatchState::HalfTime);
@@ -1295,9 +1290,7 @@ mod tests {
     fn test_foul_detection_dangerous_play() {
         let mut world = World::new();
 
-        // Create match entity in play
-        let match_entity = world.spawn(()).id();
-        world.entity_mut(match_entity).insert(Match {
+        world.insert_resource(Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
@@ -1305,6 +1298,7 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 12345,
         });
+        let match_entity = world.spawn(()).id();
         world.entity_mut(match_entity).insert(MatchClock {
             elapsed_ticks: 30 * 60,
             half: 1,

@@ -193,13 +193,12 @@ pub fn load_snapshot(path: &str) -> Result<RecordedSnapshot, String> {
 
 pub fn create_snapshot_from_simulation(
     simulation: &Simulation,
-    match_entity: Entity,
+    _match_entity: Entity,
 ) -> Result<RecordedSnapshot, String> {
     let match_component = simulation
         .world
-        .entity(match_entity)
-        .get::<Match>()
-        .ok_or("Match not found")?;
+        .resource::<Match>()
+        .clone();
 
     let mut ball_position = [0.0f32; 2];
     for entity in simulation.world.iter_entities() {

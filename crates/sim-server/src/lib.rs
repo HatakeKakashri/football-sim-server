@@ -43,14 +43,12 @@ impl ServerSimulation {
     }
 
     pub fn apply_command(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
-        // Get current match state
-        let match_entity = self.get_match_entity()?;
+        // Phase C §4.3: Match is a Resource, not a Component.
         let match_component = self
             .simulation
             .world
-            .entity(match_entity)
-            .get::<sim_components::Match>()
-            .unwrap();
+            .resource::<sim_components::Match>()
+            .clone();
 
         // Validate command based on current state
         match &command {
@@ -116,14 +114,11 @@ impl ServerSimulation {
     }
 
     fn apply_command_immediately(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
-        let match_entity = self.get_match_entity()?;
-
         let match_component = self
             .simulation
             .world
-            .entity(match_entity)
-            .get::<sim_components::Match>()
-            .unwrap();
+            .resource::<sim_components::Match>()
+            .clone();
 
         // Determine which team to update based on active_manager_side
         let team_to_update = match self.active_manager_side {
@@ -145,7 +140,7 @@ impl ServerSimulation {
             ManagerCommand::Substitute { out, substitute } => {
                 // Implement substitution logic
                 // For now, just log it
-                println!("Substitution: {out:?} -> {substitute:?}");
+                tracing::info!("Substitution: {out:?} -> {substitute:?}");
             }
             ManagerCommand::ChangeMentality(mentality) => {
                 if let Some(mut team) = self
@@ -159,34 +154,28 @@ impl ServerSimulation {
             }
             ManagerCommand::SetTactic(tactic) => {
                 // Store tactic somewhere (for now, just log)
-                println!("Tactic set: {tactic:?}");
+                tracing::info!("Tactic set: {tactic:?}");
             }
         }
 
         Ok(())
     }
 
+    /// Phase C §4.3: returns the match entity whose `MatchClock` component
+    /// is the source of truth for the clock. Kept as a method to preserve
+    /// the test API; with `Match` as a Resource, callers should generally
+    /// read `simulation.world.resource::<Match>()` directly.
+    #[allow(dead_code, reason = "kept for test API backwards compatibility")]
     fn get_match_entity(&self) -> Result<bevy_ecs::prelude::Entity, CommandError> {
-        // Find match entity in world
-        let mut match_entity = None;
-        for entity in self.simulation.world.iter_entities() {
-            if entity.get::<sim_components::Match>().is_some() {
-                match_entity = Some(entity.id());
-                break;
-            }
-        }
-        match_entity.ok_or(CommandError::InvalidForState {
-            current_state: sim_components::MatchState::PreMatch,
-            required_state: sim_components::MatchState::InPlay,
-        })
+        Ok(self.simulation.match_entity)
     }
 
     pub fn get_state(&self) -> MatchSnapshot {
-        // Get match entity
-        let match_entity = self.get_match_entity().unwrap();
-
-        // Use sim-core's get_state method
-        self.simulation.get_state(match_entity).unwrap()
+        // Phase C §4.3: Match is a Resource, so the match-entity argument
+        // is now informational. sim-core's get_state reads the resource.
+        self.simulation
+            .get_state(self.simulation.match_entity)
+            .unwrap()
     }
 }
 
@@ -274,15 +263,12 @@ mod tests {
         let mut server = ServerSimulation::new(12345);
         let match_entity = server.simulation.match_entity;
 
-        // Set match state to InPlay
-        if let Some(mut match_component) = server
+        // Set match state to InPlay (Phase C §4.3: Match is now a Resource).
+        server
             .simulation
             .world
-            .entity_mut(match_entity)
-            .get_mut::<sim_components::Match>()
-        {
-            match_component.state = sim_components::MatchState::InPlay;
-        }
+            .resource_mut::<sim_components::Match>()
+            .state = sim_components::MatchState::InPlay;
 
         // Try to change formation during InPlay state (should succeed)
         let result = server.apply_command(ManagerCommand::ChangeFormation(
@@ -312,13 +298,13 @@ mod tests {
     #[test]
     fn test_end_to_end_full_match_simulation() {
         let mut server = ServerSimulation::new(42);
-        let match_entity = server.simulation.match_entity;
 
-        {
-            let mut match_component = server.simulation.world.entity_mut(match_entity);
-            let mut mc = match_component.get_mut::<sim_components::Match>().unwrap();
-            mc.state = sim_components::MatchState::Kickoff;
-        }
+        // Phase C §4.3: Match is a Resource.
+        server
+            .simulation
+            .world
+            .resource_mut::<sim_components::Match>()
+            .state = sim_components::MatchState::Kickoff;
 
         let full_match_ticks: u64 = 324000;
         for _ in 0..full_match_ticks {

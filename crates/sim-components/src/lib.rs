@@ -218,7 +218,16 @@ pub struct Team {
     pub substitutes: Vec<Entity>,
 }
 
-#[derive(Component, Debug, Clone)]
+/// Phase C ECS-shape polish (review §4.3): `Match` is now a Resource rather
+/// than a Component. There is exactly one match per simulation, and the
+/// singleton-resource pattern removes the linear-scan lookups in
+/// `apply_command` / `get_match_entity` (§2.9). `Match` is no longer a
+/// `Component` — anywhere a system needs match state, take
+/// `Res<Match>` / `ResMut<Match>`. The match-entity slot on
+/// `Simulation::match_entity` is retained for compatibility with consumers
+/// that still need the entity (e.g. lifecycle commands), but no system
+/// reads match state via `Query<&Match>` after this change.
+#[derive(Resource, Debug, Clone)]
 pub struct Match {
     pub id: u64,
     pub home_team: Entity,

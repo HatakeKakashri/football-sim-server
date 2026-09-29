@@ -8,44 +8,41 @@ use sim_components::{Manager, Match, MatchClock, Player, Stamina, Team, time};
 
 pub fn manager_decision_system(
     mut query: Query<(&mut Manager, &Team)>,
-    match_query: Query<&Match>,
+    match_res: Res<Match>,
     clock_query: Query<&MatchClock>,
 ) {
     for (mut manager, _team) in &mut query {
-        if let Ok(match_entity) = match_query.get_single() {
-            let Ok(clock) = clock_query.get_single() else {
-                continue;
-            };
-            let current_tick = clock.elapsed_ticks;
+        let Ok(clock) = clock_query.get_single() else {
+            continue;
+        };
+        let current_tick = clock.elapsed_ticks;
 
-            if current_tick - manager.last_decision_tick < manager.decision_cooldown {
-                continue;
-            }
-
-            let score_difference =
-                i16::from(match_entity.score.0) - i16::from(match_entity.score.1);
-
-            // Use shared time utilities for consistent time remaining calculation
-            let time_remaining_secs = time::match_time_remaining_secs(clock);
-
-            let mut total_score = 0.0;
-            for factor in &manager.decision_table.factors {
-                let factor_score = match factor.name.as_str() {
-                    "score_difference" => (f32::from(score_difference) / 3.0).clamp(-1.0, 1.0),
-                    "time_remaining" => (time_remaining_secs / (90.0 * 60.0)).clamp(0.0, 1.0),
-                    _ => 0.0,
-                };
-                total_score += factor_score * factor.weight;
-            }
-
-            if total_score > 0.5 {
-                println!("Manager considering aggressive tactics (score: {total_score})");
-            } else if total_score < -0.5 {
-                println!("Manager considering defensive tactics (score: {total_score})");
-            }
-
-            manager.last_decision_tick = current_tick;
+        if current_tick - manager.last_decision_tick < manager.decision_cooldown {
+            continue;
         }
+
+        let score_difference = i16::from(match_res.score.0) - i16::from(match_res.score.1);
+
+        // Use shared time utilities for consistent time remaining calculation
+        let time_remaining_secs = time::match_time_remaining_secs(clock);
+
+        let mut total_score = 0.0;
+        for factor in &manager.decision_table.factors {
+            let factor_score = match factor.name.as_str() {
+                "score_difference" => (f32::from(score_difference) / 3.0).clamp(-1.0, 1.0),
+                "time_remaining" => (time_remaining_secs / (90.0 * 60.0)).clamp(0.0, 1.0),
+                _ => 0.0,
+            };
+            total_score += factor_score * factor.weight;
+        }
+
+        if total_score > 0.5 {
+            tracing::debug!("Manager considering aggressive tactics (score: {total_score})");
+        } else if total_score < -0.5 {
+            tracing::debug!("Manager considering defensive tactics (score: {total_score})");
+        }
+
+        manager.last_decision_tick = current_tick;
     }
 }
 
@@ -61,7 +58,7 @@ pub fn formation_change_system(mut query: Query<(&mut Team,)>) {
             | Formation::FiveThreeTwo => 11,
         };
 
-        println!("Formation: {:?}", team.formation);
+        tracing::debug!("Formation: {:?}", team.formation);
     }
 }
 
@@ -87,7 +84,7 @@ pub fn substitution_system(
         }
 
         if let Some((out, incoming)) = substitution_to_make {
-            println!("Substituting {out:?} with {incoming:?}");
+            tracing::info!("Substituting {out:?} with {incoming:?}");
             team.players.retain(|&e| e != out);
             team.substitutes.retain(|&e| e != incoming);
             team.players.push(incoming);
@@ -98,45 +95,43 @@ pub fn substitution_system(
 
 pub fn mentality_shift_system(
     mut query: Query<(&mut Team,)>,
-    match_query: Query<&Match>,
+    match_res: Res<Match>,
     clock_query: Query<&MatchClock>,
 ) {
     for (mut team,) in &mut query {
-        if let Ok(match_entity) = match_query.get_single() {
-            let Ok(clock) = clock_query.get_single() else {
-                continue;
-            };
-            let score_difference =
-                i32::from(match_entity.score.0) - i32::from(match_entity.score.1);
+        let Ok(clock) = clock_query.get_single() else {
+            continue;
+        };
+        let score_difference = i32::from(match_res.score.0) - i32::from(match_res.score.1);
 
-            // Use shared time utilities for consistent time remaining calculation (in minutes)
-            let time_remaining_mins = time::match_time_remaining_mins(clock);
+        // Use shared time utilities for consistent time remaining calculation (in minutes)
+        let time_remaining_mins = time::match_time_remaining_mins(clock);
 
-            let new_mentality = if score_difference >= 2 {
-                if time_remaining_mins < 15.0 {
-                    sim_components::Mentality::Defend
-                } else {
-                    sim_components::Mentality::Balance
-                }
-            } else if score_difference <= -2 {
-                sim_components::Mentality::Attack
-            } else if time_remaining_mins < 10.0 {
-                if score_difference < 0 {
-                    sim_components::Mentality::Attack
-                } else {
-                    sim_components::Mentality::Defend
-                }
+        let new_mentality = if score_difference >= 2 {
+            if time_remaining_mins < 15.0 {
+                sim_components::Mentality::Defend
             } else {
                 sim_components::Mentality::Balance
-            };
-
-            if team.mentality != new_mentality {
-                println!(
-                    "Mentality changed from {:?} to {:?}",
-                    team.mentality, new_mentality
-                );
-                team.mentality = new_mentality;
             }
+        } else if score_difference <= -2 {
+            sim_components::Mentality::Attack
+        } else if time_remaining_mins < 10.0 {
+            if score_difference < 0 {
+                sim_components::Mentality::Attack
+            } else {
+                sim_components::Mentality::Defend
+            }
+        } else {
+            sim_components::Mentality::Balance
+        };
+
+        if team.mentality != new_mentality {
+            tracing::info!(
+                "Mentality changed from {:?} to {:?}",
+                team.mentality,
+                new_mentality
+            );
+            team.mentality = new_mentality;
         }
     }
 }
@@ -159,8 +154,7 @@ mod tests {
     fn test_manager_decision_aggressive_tactics() {
         let mut world = World::new();
 
-        let match_entity = world.spawn(()).id();
-        world.entity_mut(match_entity).insert(Match {
+        world.insert_resource(Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
@@ -168,6 +162,7 @@ mod tests {
             state: MatchState::InPlay,
             seed: 12345,
         });
+        let match_entity = world.spawn(()).id();
         world.entity_mut(match_entity).insert(MatchClock {
             elapsed_ticks: 70 * 60,
             half: 2,
@@ -281,9 +276,7 @@ mod tests {
     fn test_mentality_shift_defensive() {
         let mut world = World::new();
 
-        let match_entity = world.spawn(()).id();
-        // 5 minutes remaining in match = 85 minutes total elapsed = 45 min (half 1) + 40 min (half 2)
-        world.entity_mut(match_entity).insert(Match {
+        world.insert_resource(Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
             away_team: Entity::PLACEHOLDER,
@@ -291,6 +284,8 @@ mod tests {
             state: MatchState::InPlay,
             seed: 12345,
         });
+        let match_entity = world.spawn(()).id();
+        // 5 minutes remaining in match = 85 minutes total elapsed = 45 min (half 1) + 40 min (half 2)
         world.entity_mut(match_entity).insert(MatchClock {
             elapsed_ticks: 40 * 60 * 60, // 40 minutes into second half
             half: 2,

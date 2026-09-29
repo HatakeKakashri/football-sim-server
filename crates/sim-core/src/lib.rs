@@ -44,6 +44,104 @@ pub struct Simulation {
     pub ball_entity: Entity,
 }
 
+/// Phase C ECS-shape polish (review §4.2): register every simulation system
+/// in one place, in the explicit per-tick order:
+/// `Perception → Decision → Execution → Physics → Possession → Rules → MatchAdmin`.
+///
+/// Each phase's systems live in their feature crate (`sim-ai-player`,
+/// `sim-physics`, `sim-rules`, `sim-ai-manager`); this function composes
+/// them into the schedule with the cross-phase ordering constraints the
+/// pipeline requires (per spec §3 read/write separation).
+///
+/// The chained-set configuration guarantees phase ordering; the per-phase
+/// `.chain()` inside each `add_systems` call enforces in-phase ordering
+/// (e.g. `apply_kick_velocity_system` must run before `ball_physics_system`
+/// so a kick decided this tick is integrated into position the same tick).
+fn register_systems(schedule: &mut Schedule) {
+    // Configure system sets for explicit ordering across phases.
+    schedule.configure_sets(
+        (
+            SimulationSet::Perception,
+            SimulationSet::Decision,
+            SimulationSet::Execution,
+            SimulationSet::Physics,
+            SimulationSet::Possession,
+            SimulationSet::Rules,
+            SimulationSet::MatchAdmin,
+        )
+            .chain(),
+    );
+
+    // Perception
+    schedule.add_systems(
+        (pitch_control_system, perception_system)
+            .chain()
+            .in_set(SimulationSet::Perception),
+    );
+
+    // Decision (no per-player time-slicing; spec §13 #15 deferred)
+    schedule.add_systems(
+        player_decision_system
+            .in_set(SimulationSet::Decision)
+            .after(SimulationSet::Perception),
+    );
+
+    // Execution
+    schedule.add_systems(
+        (player_action_execution_system, kick_execution_system)
+            .chain()
+            .in_set(SimulationSet::Execution)
+            .after(SimulationSet::Decision),
+    );
+
+    // Physics — kick-velocity must apply before ball_physics_system so the
+    // kick is integrated into position on the same tick.
+    schedule.add_systems(
+        (
+            apply_kick_velocity_system,
+            ball_physics_system,
+            player_movement_system,
+        )
+            .chain()
+            .in_set(SimulationSet::Physics)
+            .after(SimulationSet::Execution),
+    );
+
+    // Possession
+    schedule.add_systems(
+        possession_resolution_system
+            .in_set(SimulationSet::Possession)
+            .after(SimulationSet::Physics),
+    );
+
+    // Rules — out-of-bounds → goal → offside → foul → restart (spec §3).
+    schedule.add_systems(
+        (
+            out_of_bounds_system,
+            goal_detection_system,
+            offside_detection_system,
+            foul_detection_system,
+            restart_system,
+        )
+            .chain()
+            .in_set(SimulationSet::Rules)
+            .after(SimulationSet::Possession),
+    );
+
+    // MatchAdmin — added time → minimum players → substitutions → mentality.
+    schedule.add_systems(
+        (
+            added_time_calculation_system,
+            minimum_player_count_system,
+            substitution_system,
+            mentality_shift_system,
+        )
+            .chain()
+            .in_set(SimulationSet::MatchAdmin)
+            .after(SimulationSet::Rules),
+    );
+}
+
 impl Simulation {
     /// Build a new simulation with the standard pitch, systems and match.
     ///
@@ -67,93 +165,7 @@ impl Simulation {
         let mut schedule = Schedule::default();
         let original_seed = seed;
 
-        // Configure system sets for explicit ordering
-        schedule.configure_sets(
-            (
-                SimulationSet::Perception,
-                SimulationSet::Decision,
-                SimulationSet::Execution,
-                SimulationSet::Physics,
-                SimulationSet::Possession,
-                SimulationSet::Rules,
-                SimulationSet::MatchAdmin,
-            )
-                .chain(),
-        );
-
-        // Phase 0 substrate: register ONLY ball physics. No perception,
-        // decision, intent, execution, rules, or referee systems are wired —
-        // those belong to later phases.
-        schedule.add_systems(ball_physics_system.in_set(SimulationSet::Physics));
-
-        // Phase 1: register the perception → decision → execution → player
-        // movement chain alongside the existing ball physics. These run in the
-        // schedule so each tick advances all read/write-separation systems in
-        // order. Lifecycle runs *outside* the schedule (after `schedule.run`)
-        // because it mutates match state and needs the schedule to have already
-        // executed this tick.
-        schedule
-            // Perception
-            .add_systems(
-                (pitch_control_system, perception_system)
-                    .chain()
-                    .in_set(SimulationSet::Perception),
-            )
-            // Decision (no time-slicing)
-            .add_systems(
-                player_decision_system
-                    .in_set(SimulationSet::Decision)
-                    .after(SimulationSet::Perception),
-            )
-            // Execution
-            .add_systems(
-                (player_action_execution_system, kick_execution_system)
-                    .chain()
-                    .in_set(SimulationSet::Execution)
-                    .after(SimulationSet::Decision),
-            )
-            // Physics
-            .add_systems(
-                (
-                    apply_kick_velocity_system,
-                    ball_physics_system,
-                    player_movement_system,
-                )
-                    .chain()
-                    .in_set(SimulationSet::Physics)
-                    .after(SimulationSet::Execution),
-            )
-            // Possession
-            .add_systems(
-                possession_resolution_system
-                    .in_set(SimulationSet::Possession)
-                    .after(SimulationSet::Physics),
-            )
-            // Rules (explicitly chained)
-            .add_systems(
-                (
-                    out_of_bounds_system,
-                    goal_detection_system,
-                    offside_detection_system,
-                    foul_detection_system,
-                    restart_system,
-                )
-                    .chain()
-                    .in_set(SimulationSet::Rules)
-                    .after(SimulationSet::Possession),
-            )
-            // MatchAdmin
-            .add_systems(
-                (
-                    added_time_calculation_system,
-                    minimum_player_count_system,
-                    substitution_system,
-                    mentality_shift_system,
-                )
-                    .chain()
-                    .in_set(SimulationSet::MatchAdmin)
-                    .after(SimulationSet::Rules),
-            );
+        register_systems(&mut schedule);
 
         // Create match + home team; resolve ball entity for later use by the
         // lifecycle system and clock advancement.
@@ -293,17 +305,21 @@ impl Simulation {
             if let Some(t) = er.get::<Team>() {
                 mix(&mut h, u64::from(t.id.0));
             }
-            if let Some(m) = er.get::<Match>() {
-                // Get clock from the MatchClock component
-                if let Some(clock) = er.get::<MatchClock>() {
-                    mix(&mut h, clock.elapsed_ticks);
-                    mix(&mut h, u64::from(clock.half));
-                    mix(&mut h, clock.added_time_ticks);
-                }
-                mix(&mut h, match_state_discriminant(m.state));
-                mix(&mut h, u64::from(m.score.0));
-                mix(&mut h, u64::from(m.score.1));
+            if let Some(clock) = er.get::<MatchClock>() {
+                mix(&mut h, clock.elapsed_ticks);
+                mix(&mut h, u64::from(clock.half));
+                mix(&mut h, clock.added_time_ticks);
             }
+        }
+
+        // Phase C §4.3: `Match` is now a Resource, not a Component. Read
+        // its state from the resource so the hash still reflects match
+        // score and state (the per-entity branch above is a no-op now
+        // since no entity inserts `Match`).
+        if let Some(m) = self.world.get_resource::<Match>() {
+            mix(&mut h, match_state_discriminant(m.state));
+            mix(&mut h, u64::from(m.score.0));
+            mix(&mut h, u64::from(m.score.1));
         }
 
         // Mix the original seed so same-seed simulations hash identically.
@@ -453,14 +469,20 @@ impl Simulation {
             added_time_ticks: 0,
             is_running: true,
         };
-        world.entity_mut(match_entity).insert(Match {
+        let match_resource = Match {
             id: 1,
             home_team: home_team_entity,
             away_team: away_team_entity,
             score: (0, 0),
             state: MatchState::PreMatch,
             seed,
-        });
+        };
+        // Phase C §4.3: Match is now a Resource, no longer a Component on
+        // the entity. The match entity keeps its MatchClock component for
+        // backwards compatibility (lifecycle_system still uses the entity
+        // for clock reads); future Phase D work may move that to a
+        // resource too.
+        world.insert_resource(match_resource);
         world.entity_mut(match_entity).insert(initial_clock);
 
         (match_entity, home_team_entity)
@@ -476,15 +498,16 @@ impl Simulation {
     /// need `Stoppage`/`HalfTime`).
     pub fn apply_command(
         &mut self,
-        match_id: Entity,
+        _match_id: Entity,
         command: ManagerCommand,
     ) -> Result<(), String> {
-        // Get match component
+        // Phase C §4.3: Match is now a Resource. Validate using
+        // `world.resource::<Match>()` — the match_id parameter is retained
+        // for API compatibility but is no longer used to look up Match.
         let match_component = self
             .world
-            .entity(match_id)
-            .get::<Match>()
-            .ok_or("Match entity not found")?;
+            .resource::<Match>()
+            .clone();
 
         // Validate command based on current state
         match &command {
@@ -553,7 +576,7 @@ impl Simulation {
             ManagerCommand::Substitute { out, substitute } => {
                 // Implement substitution logic
                 // For now, just log it
-                println!("Substitution: {out:?} -> {substitute:?}");
+                tracing::info!("Substitution: {out:?} -> {substitute:?}");
             }
             ManagerCommand::ChangeMentality(mentality) => {
                 // Update team mentality
@@ -568,7 +591,7 @@ impl Simulation {
             }
             ManagerCommand::SetTactic(tactic) => {
                 // Store tactic somewhere (for now, just log)
-                println!("Tactic set: {tactic:?}");
+                tracing::info!("Tactic set: {tactic:?}");
             }
         }
 
@@ -579,14 +602,15 @@ impl Simulation {
     ///
     /// # Errors
     ///
-    /// Returns an error string if `match_id` is not a match entity.
-    pub fn get_state(&self, match_id: Entity) -> Result<MatchSnapshot, String> {
-        // Get match component
+    /// Returns an error string if no `Match` resource is registered. The
+    /// `match_id` parameter is retained for API compatibility but is no
+    /// longer used to locate the match (Phase C §4.3).
+    pub fn get_state(&self, _match_id: Entity) -> Result<MatchSnapshot, String> {
+        // Phase C §4.3: Match is now a Resource.
         let match_component = self
             .world
-            .entity(match_id)
-            .get::<Match>()
-            .ok_or("Match entity not found")?;
+            .resource::<Match>()
+            .clone();
 
         // Get ball entity
         let mut ball_view = BallView {
@@ -640,8 +664,8 @@ impl Simulation {
             }
         }
 
-        // Get clock view from MatchClock component
-        let clock_view = self.world.entity(match_id).get::<MatchClock>().map_or(
+        // Get clock view from MatchClock component on the match entity
+        let clock_view = self.world.entity(self.match_entity).get::<MatchClock>().map_or(
             ClockView {
                 elapsed_ticks: 0,
                 half: 1,
@@ -821,10 +845,8 @@ fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, wo
     const MAX_TRANSITIONS_PER_TICK: usize = 8;
 
     for _iteration in 0..MAX_TRANSITIONS_PER_TICK {
-        let current_state = world.entity(match_entity).get::<Match>().map(|m| m.state);
-        let Some(current_state) = current_state else {
-            return;
-        };
+        // Phase C §4.3: Match is now a Resource, read it from `world.resource`.
+        let current_state = world.resource::<Match>().state;
 
         let mut next_state = current_state;
         let mut new_clock: Option<MatchClock> = None;
@@ -928,9 +950,8 @@ fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, wo
         if next_state == current_state {
             // No further transitions this tick; stop iterating.
             return;
-        } else if let Some(mut m) = world.entity_mut(match_entity).get_mut::<Match>() {
-            m.state = next_state;
         }
+        world.resource_mut::<Match>().state = next_state;
     }
 }
 
@@ -1485,12 +1506,7 @@ mod tests {
                 if clock.half == 2 && !clock.is_running {
                     clock_paused_after_half = true;
                 }
-                state = sim
-                    .world
-                    .entity(me)
-                    .get::<Match>()
-                    .map(|m| m.state)
-                    .expect("match");
+                state = sim.world.resource::<Match>().state;
                 if state == MatchState::FullTime {
                     break;
                 }
@@ -1599,26 +1615,19 @@ mod tests {
             added_time_ticks: 3 * 60 * 60, // 3 minutes added time
             is_running: true,
         };
-        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
-            m.state = MatchState::InPlay;
-        }
+        sim.world.resource_mut::<Match>().state = MatchState::InPlay;
         sim.world.entity_mut(me).insert(clock);
 
         // Run until half-time transition (needs ~60 ticks to reach threshold)
         for _ in 0..100 {
             sim.tick();
-            let state = sim
-                .world
-                .entity(me)
-                .get::<Match>()
-                .map(|m| m.state)
-                .unwrap();
+            let state = sim.world.resource::<Match>().state;
             if state == MatchState::HalfTime {
                 break;
             }
         }
 
-        let m = sim.world.entity(me).get::<Match>().unwrap();
+        let m = sim.world.resource::<Match>();
         let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
         assert_eq!(m.state, MatchState::HalfTime);
         assert!(!clock.is_running);
@@ -1640,9 +1649,7 @@ mod tests {
             added_time_ticks: 0,
             is_running: false,
         };
-        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
-            m.state = MatchState::HalfTime;
-        }
+        sim.world.resource_mut::<Match>().state = MatchState::HalfTime;
         sim.world.entity_mut(me).insert(clock);
 
         // Insert HalfTimeEntryTick resource to trigger transition
@@ -1654,12 +1661,7 @@ mod tests {
         // The lifecycle system transitions HalfTime -> Kickoff -> InPlay in one tick
         for _ in 0..30 {
             sim.tick();
-            let state = sim
-                .world
-                .entity(me)
-                .get::<Match>()
-                .map(|m| m.state)
-                .unwrap();
+            let state = sim.world.resource::<Match>().state;
             // After transition, state will be InPlay (second half)
             if state == MatchState::InPlay {
                 break;
@@ -1669,7 +1671,7 @@ mod tests {
         // Verify clock was reset for second half and state is InPlay (half 2)
         // Note: tick_clock() runs after lifecycle_system(), so after one tick
         // the clock will be at 1 (it was reset to 0, then incremented).
-        let m = sim.world.entity(me).get::<Match>().unwrap();
+        let m = sim.world.resource::<Match>();
         let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
         assert_eq!(
             m.state,
@@ -1699,9 +1701,7 @@ mod tests {
             added_time_ticks: 0,
             is_running: true,
         };
-        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
-            m.state = MatchState::InPlay;
-        }
+        sim.world.resource_mut::<Match>().state = MatchState::InPlay;
         sim.world.entity_mut(me).insert(clock);
 
         // Run 60 ticks (1 second) - clock should advance
@@ -1759,9 +1759,7 @@ mod tests {
             added_time_ticks: 0,
             is_running: true,
         };
-        if let Some(mut m) = sim.world.get_mut::<Match>(me) {
-            m.state = MatchState::InPlay;
-        }
+        sim.world.resource_mut::<Match>().state = MatchState::InPlay;
         sim.world.entity_mut(me).insert(clock);
 
         // Get the clock and compute time remaining using shared utilities

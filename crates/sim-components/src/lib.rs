@@ -184,7 +184,18 @@ impl MatchClock {
     }
 }
 
-#[derive(Component, Debug, Clone)]
+/// Phase C §4.3 (ECS-shape polish, full): `Ball` is now a Resource,
+/// not a Component on an entity. There is exactly one ball per simulation,
+/// so the singleton-resource pattern removes the linear-scan ball
+/// lookups. The ball's `Position` and `Velocity` still live as Components
+/// on the dedicated ball entity — `Simulation::ball_entity` exposes the
+/// entity id, and systems that need both the ball state and its
+/// position read `Res<Ball>` for state and `world.entity_mut(ball_entity)`
+/// for position. This avoids the dual-writer problem (`Ball` is now the
+/// only writer for state/possessor/last-touched-by/kick_velocity/spin,
+/// while `Position`/`Velocity` are written exclusively by the physics
+/// systems on the entity).
+#[derive(Resource, Debug, Clone)]
 pub struct Ball {
     pub spin: f32,
     pub state: BallState,
@@ -201,6 +212,14 @@ pub struct Ball {
     /// (Execution set) and `ball_physics_system` (Physics set).
     pub kick_velocity: Option<Vec2>,
 }
+
+/// Phase C §4.3: tag component on the ball entity so systems can find it
+/// via Query without scanning `iter_entities()`. There is exactly one
+/// entity carrying `BallMarker` per match; its `Position`/`Velocity`
+/// components are written by `ball_physics_system`, while `Ball` (the
+/// Resource) holds state/possessor/last_touched_by/kick_velocity/spin.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct BallMarker;
 
 #[derive(Component, Debug, Clone)]
 pub struct Player {

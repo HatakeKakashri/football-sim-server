@@ -49,23 +49,22 @@ pub fn perception_system(
     mut queries: ParamSet<(
         Query<(Entity, &Position, &TeamIdComponent)>,
         Query<(Entity, &Position, &TeamIdComponent)>,
-        Query<(Entity, &Ball, &Position)>,
+        Query<&Position, With<sim_components::BallMarker>>,
         Query<&sim_components::MatchClock>,
         Query<&sim_components::Team>,
     )>,
     match_res: Res<sim_components::Match>,
+    ball_res: Res<sim_components::Ball>,
 ) {
-    // Get ball position and state via the Ball query — disjointness with
-    // the player queries is enforced by the ParamSet slot, not by Query
-    // filtering. We also read `Ball.possessor` but store only the
-    // `BallState` variant (Free / Possessed) in the snapshot; the real
-    // entity lives on `Ball.possessor`.
-    let (ball_position, ball_state) = {
+    // Phase C §4.3: Ball state lives on the `Ball` Resource. Ball position
+    // is queried from the entity carrying `BallMarker`.
+    let ball_state = ball_res.state;
+    let ball_position = {
         let q = queries.p2();
-        if let Ok((_ball_entity, ball, pos)) = q.get_single() {
-            (pos.0, ball.state)
+        if let Ok(pos) = q.get_single() {
+            pos.0
         } else {
-            (Vec2::zero(), BallState::Free)
+            Vec2::zero()
         }
     };
 
@@ -664,11 +663,8 @@ fn nearest_teammate_position(perception: &PerceptionSnapshot) -> Option<Vec2> {
 /// re-freeze as "possessed" by the original kicker.
 pub fn kick_execution_system(
     player_query: Query<(Entity, &Player, &PerceptionSnapshot, &Velocity)>,
-    mut ball_query: Query<&mut Ball>,
+    mut ball: ResMut<sim_components::Ball>,
 ) {
-    let Ok(mut ball) = ball_query.get_single_mut() else {
-        return;
-    };
     let Some(possessor) = ball.possessor else {
         return;
     };
@@ -1198,7 +1194,7 @@ mod tests {
     fn test_perception_records_real_entity_ids() {
         let mut world = World::new();
 
-        // Phase C §4.3: Match is a Resource required by `perception_system`.
+        // Phase C §4.3: Match and Ball are both Resources now.
         world.insert_resource(sim_components::Match {
             id: 1,
             home_team: Entity::PLACEHOLDER,
@@ -1206,6 +1202,13 @@ mod tests {
             score: (0, 0),
             state: sim_components::MatchState::InPlay,
             seed: 0,
+        });
+        world.insert_resource(sim_components::Ball {
+            spin: 0.0,
+            state: sim_components::BallState::Free,
+            possessor: None,
+            last_touched_by: None,
+            kick_velocity: None,
         });
 
         // Two opposing players within perception range.

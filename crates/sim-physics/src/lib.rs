@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, Player, Position, Velocity};
+use sim_components::{Ball, BallMarker, Player, Position, Velocity};
 use sim_math::{PitchDimensions, Vec2};
 
 /// Phase 2: RNG resource wrapper for stochastic gameplay outcomes.
@@ -194,15 +194,15 @@ impl PitchControlGrid {
 /// 5. Store the result back into the resource.
 pub fn pitch_control_system(
     mut grid: ResMut<PitchControlGrid>,
-    ball_query: Query<(&Ball, &Position)>,
+    ball_query: Query<&Position, With<sim_components::BallMarker>>,
     player_query: Query<(&Player, &Position)>,
 ) {
     // Snapshot player positions by team id (read-only).
     let mut home_players: Vec<(Vec2, f32)> = Vec::new();
     let mut away_players: Vec<(Vec2, f32)> = Vec::new();
 
-    // Query the ball position from the typed query.
-    let ball_pos_opt = ball_query.iter().next().map(|(_, p)| p.0);
+    // Query the ball position from the typed query (filtered by `BallMarker`).
+    let ball_pos_opt = ball_query.iter().next().map(|p| p.0);
 
     // Snapshot players by team id via Query.
     for (player, pos) in &player_query {
@@ -247,43 +247,45 @@ pub fn pitch_control_system(
 
 pub fn ball_physics_system(
     pitch: Res<PitchDimensions>,
-    mut query: Query<(&mut Position, &mut Velocity, &mut Ball)>,
+    mut ball_query: Query<(&mut Position, &mut Velocity), With<sim_components::BallMarker>>,
+    mut ball: ResMut<sim_components::Ball>,
 ) {
-    for (mut pos, mut vel, mut ball) in &mut query {
-        // Apply velocity
-        pos.0 += vel.0;
+    let Ok((mut pos, mut vel)) = ball_query.get_single_mut() else {
+        return;
+    };
+    // Apply velocity
+    pos.0 += vel.0;
 
-        // Apply damping
-        vel.0 *= BALL_DAMPING;
+    // Apply damping
+    vel.0 *= BALL_DAMPING;
 
-        // Clamp ball speed
-        vel.0 = vel.0.clamp_length(MAX_BALL_SPEED);
+    // Clamp ball speed
+    vel.0 = vel.0.clamp_length(MAX_BALL_SPEED);
 
-        // Boundary clamping
-        if pos.0.x < 0.0 {
-            pos.0.x = 0.0;
-            vel.0.x = -vel.0.x * 0.5; // Bounce with energy loss
-        } else if pos.0.x > pitch.width {
-            pos.0.x = pitch.width;
-            vel.0.x = -vel.0.x * 0.5;
-        }
+    // Boundary clamping
+    if pos.0.x < 0.0 {
+        pos.0.x = 0.0;
+        vel.0.x = -vel.0.x * 0.5; // Bounce with energy loss
+    } else if pos.0.x > pitch.width {
+        pos.0.x = pitch.width;
+        vel.0.x = -vel.0.x * 0.5;
+    }
 
-        if pos.0.y < 0.0 {
-            pos.0.y = 0.0;
-            vel.0.y = -vel.0.y * 0.5;
-        } else if pos.0.y > pitch.length {
-            pos.0.y = pitch.length;
-            vel.0.y = -vel.0.y * 0.5;
-        }
+    if pos.0.y < 0.0 {
+        pos.0.y = 0.0;
+        vel.0.y = -vel.0.y * 0.5;
+    } else if pos.0.y > pitch.length {
+        pos.0.y = pitch.length;
+        vel.0.y = -vel.0.y * 0.5;
+    }
 
-        // Update ball state based on velocity
-        if vel.0.length() > 0.1 {
-            ball.state = sim_components::BallState::InFlight;
-        } else if ball.possessor.is_some() {
-            ball.state = sim_components::BallState::Possessed;
-        } else {
-            ball.state = sim_components::BallState::Free;
-        }
+    // Update ball state based on velocity (single writer: ResMut<Ball>).
+    if vel.0.length() > 0.1 {
+        ball.state = sim_components::BallState::InFlight;
+    } else if ball.possessor.is_some() {
+        ball.state = sim_components::BallState::Possessed;
+    } else {
+        ball.state = sim_components::BallState::Free;
     }
 }
 
@@ -294,11 +296,15 @@ pub fn ball_physics_system(
 /// decided. The ordering also dodges the static query conflict with
 /// `kick_execution_system` (Execution set) that would otherwise arise from
 /// two systems both holding `&mut Velocity, &mut Ball` on the ball entity.
-pub fn apply_kick_velocity_system(mut query: Query<(&mut Velocity, &mut Ball)>) {
-    for (mut vel, mut ball) in &mut query {
-        if let Some(kick_vel) = ball.kick_velocity.take() {
-            vel.0 += kick_vel;
-        }
+pub fn apply_kick_velocity_system(
+    mut ball_query: Query<&mut Velocity, With<sim_components::BallMarker>>,
+    mut ball: ResMut<sim_components::Ball>,
+) {
+    let Ok(mut vel) = ball_query.get_single_mut() else {
+        return;
+    };
+    if let Some(kick_vel) = ball.kick_velocity.take() {
+        vel.0 += kick_vel;
     }
 }
 
@@ -354,7 +360,8 @@ mod tests {
             RoleComponent(sim_components::Role::CentralMidfielder),
         ));
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(Ball {
             spin: 0.0,
             state: sim_components::BallState::Free,
             possessor: None,

@@ -168,13 +168,9 @@ impl Simulation {
         register_systems(&mut schedule);
 
         // Create match + home team; resolve ball entity for later use by the
-        // lifecycle system and clock advancement.
-        let (match_entity, _home_team_entity) = Self::create_match(&mut world, seed);
-        let ball_entity = world
-            .iter_entities()
-            .map(|e| e.id())
-            .find(|e| world.entity(*e).get::<sim_components::Ball>().is_some())
-            .expect("Ball entity must exist after create_match");
+        // lifecycle system and clock advancement. Phase C §4.3: `Ball` is a
+        // Resource and the ball entity is tagged with `BallMarker`.
+        let (match_entity, _home_team_entity, ball_entity) = Self::create_match(&mut world, seed);
 
         Self {
             world,
@@ -232,7 +228,7 @@ impl Simulation {
     /// reached at different ticks must hash equal, which is what makes
     /// replay divergence detection meaningful.
     pub fn get_state_hash(&self) -> u64 {
-        use sim_components::{Ball, Match, Player, Position, Skill, Stamina, Team, Velocity};
+        use sim_components::{BallMarker, Match, Player, Position, Skill, Stamina, Team, Velocity};
 
         fn mix(h: &mut u64, v: u64) {
             // FNV-1a: XOR one byte at a time (little-endian) then multiply.
@@ -267,8 +263,10 @@ impl Simulation {
             if let Some(s) = er.get::<Skill>() {
                 mix(&mut h, u64::from(s.0.to_bits()));
             }
-            if let Some(b) = er.get::<Ball>() {
-                // Get position/velocity from components
+            if er.get::<sim_components::BallMarker>().is_some() {
+                // Phase C §4.3: ball is tagged with BallMarker. Mix
+                // position/velocity from components (still per-entity) and
+                // ball state from the Ball Resource below.
                 if let Some(pos) = er.get::<Position>() {
                     mix(&mut h, u64::from(pos.0.x.to_bits()));
                     mix(&mut h, u64::from(pos.0.y.to_bits()));
@@ -277,18 +275,6 @@ impl Simulation {
                     mix(&mut h, u64::from(vel.0.x.to_bits()));
                     mix(&mut h, u64::from(vel.0.y.to_bits()));
                 }
-                mix(&mut h, u64::from(b.spin.to_bits()));
-                mix(&mut h, ball_state_discriminant(b.state));
-                mix(
-                    &mut h,
-                    b.possessor
-                        .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
-                );
-                mix(
-                    &mut h,
-                    b.last_touched_by
-                        .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
-                );
             }
             if let Some(p) = er.get::<Player>() {
                 mix(&mut h, u64::from(p.team_id.0));
@@ -322,6 +308,25 @@ impl Simulation {
             mix(&mut h, u64::from(m.score.1));
         }
 
+        // Phase C §4.3: `Ball` is also a Resource — mix state/possessor/
+        // last_touched_by/spin from the resource so the hash reflects the
+        // dynamic ball state in addition to position/velocity (mixed per-
+        // entity above).
+        if let Some(b) = self.world.get_resource::<sim_components::Ball>() {
+            mix(&mut h, u64::from(b.spin.to_bits()));
+            mix(&mut h, ball_state_discriminant(b.state));
+            mix(
+                &mut h,
+                b.possessor
+                    .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
+            );
+            mix(
+                &mut h,
+                b.last_touched_by
+                    .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
+            );
+        }
+
         // Mix the original seed so same-seed simulations hash identically.
         mix(&mut h, self.original_seed);
 
@@ -332,23 +337,28 @@ impl Simulation {
         clippy::too_many_lines,
         reason = "one-shot match setup: ball, two 11-player squads, match entity"
     )]
-    pub fn create_match(world: &mut World, seed: u64) -> (Entity, Entity) {
+    pub fn create_match(world: &mut World, seed: u64) -> (Entity, Entity, Entity) {
         use sim_components::{
-            Ball, Match, MatchClock, MatchState, Player, Position, Team, TeamId, Velocity,
+            Ball, BallMarker, Match, MatchClock, MatchState, Player, Position, Team, TeamId,
+            Velocity,
         };
         use sim_math::Vec2;
 
-        // Create ball entity
+        // Create ball entity. Phase C §4.3: `Ball` is now a Resource, so the
+        // ball entity carries only `Position`, `Velocity`, and a `BallMarker`
+        // component (so systems can find it via Query without an
+        // `iter_entities` scan). `Ball` state lives in
+        // `world.resource::<Ball>()` and is the single source of truth for
+        // spin/state/possessor/last_touched_by/kick_velocity.
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
+        world.insert_resource(Ball {
             spin: 0.0,
             state: sim_components::BallState::Free,
             possessor: None,
             last_touched_by: None,
             kick_velocity: None,
         });
-        // Ball also carries Position + Velocity components so the registered
-        // ball_physics_system query (`Position, Velocity, Ball`) matches it.
+        world.entity_mut(ball_entity).insert(BallMarker);
         world
             .entity_mut(ball_entity)
             .insert(Position(Vec2::new(52.5, 34.0)));
@@ -485,7 +495,7 @@ impl Simulation {
         world.insert_resource(match_resource);
         world.entity_mut(match_entity).insert(initial_clock);
 
-        (match_entity, home_team_entity)
+        (match_entity, home_team_entity, ball_entity)
     }
 
     /// Apply a manager command to the given match.
@@ -612,28 +622,31 @@ impl Simulation {
             .resource::<Match>()
             .clone();
 
-        // Get ball entity
+        // Get ball state from the Resource, position/velocity from the entity.
+        let ball_res = self.world.resource::<sim_components::Ball>();
         let mut ball_view = BallView {
             position: [0.0, 0.0],
             velocity: [0.0, 0.0],
-            spin: 0.0,
-            state: sim_components::BallState::Free,
-            possessor: None,
+            spin: ball_res.spin,
+            state: ball_res.state,
+            possessor: ball_res.possessor.map(bevy_ecs::entity::Entity::to_bits),
         };
-
-        // Find ball entity and query components
-        for entity in self.world.iter_entities() {
-            if let Some(ball) = entity.get::<sim_components::Ball>() {
-                let pos = entity.get::<Position>().map(|p| p.0);
-                let vel = entity.get::<Velocity>().map(|v| v.0);
-                ball_view = BallView {
-                    position: [pos.map_or(0.0, |p| p.x), pos.map_or(0.0, |p| p.y)],
-                    velocity: [vel.map_or(0.0, |v| v.x), vel.map_or(0.0, |v| v.y)],
-                    spin: ball.spin,
-                    state: ball.state,
-                    possessor: ball.possessor.map(bevy_ecs::entity::Entity::to_bits),
-                };
-                break;
+        // Phase C §4.3: find the ball entity by `BallMarker` (the only
+        // entity carrying Position + Velocity but no Player).
+        let mut ball_entity_candidates: Vec<Entity> = self
+            .world
+            .iter_entities()
+            .map(|e| e.id())
+            .filter(|e| self.world.entity(*e).get::<sim_components::BallMarker>().is_some())
+            .collect();
+        ball_entity_candidates.sort_by_key(|e| e.to_bits());
+        if let Some(ball_entity) = ball_entity_candidates.first() {
+            let er = self.world.entity(*ball_entity);
+            if let Some(pos) = er.get::<Position>() {
+                ball_view.position = [pos.0.x, pos.0.y];
+            }
+            if let Some(vel) = er.get::<Velocity>() {
+                ball_view.velocity = [vel.0.x, vel.0.y];
             }
         }
 
@@ -925,15 +938,11 @@ fn lifecycle_system(match_entity: Entity, ball_entity: Entity, sim_tick: u64, wo
             if let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>() {
                 vel.0 = Vec2::zero();
             }
-            if let Some(mut ball) = world
-                .entity_mut(ball_entity)
-                .get_mut::<sim_components::Ball>()
-            {
-                ball.state = sim_components::BallState::Free;
-                // Drop any pending kick velocity — placement at the center
-                // spot must not be combined with an inbound kick impulse.
-                ball.kick_velocity = None;
-            }
+            // Phase C §4.3: Ball state lives on the Resource, not on the entity.
+            world.resource_mut::<sim_components::Ball>().state = sim_components::BallState::Free;
+            // Drop any pending kick velocity — placement at the center
+            // spot must not be combined with an inbound kick impulse.
+            world.resource_mut::<sim_components::Ball>().kick_velocity = None;
         }
         if apply_kickoff_impulse
             && let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>()

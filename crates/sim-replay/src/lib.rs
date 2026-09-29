@@ -63,7 +63,8 @@ pub fn replay_with_ticks(
     let mut simulation = Simulation::new(seed);
 
     // Create a match
-    let (match_entity, _home_team_entity) = Simulation::create_match(&mut simulation.world, seed);
+    let (match_entity, _home_team_entity, _ball_entity) =
+        Simulation::create_match(&mut simulation.world, seed);
 
     // Track state hash history
     let mut state_hash_history = Vec::new();
@@ -201,11 +202,13 @@ pub fn create_snapshot_from_simulation(
         .clone();
 
     let mut ball_position = [0.0f32; 2];
+    // Phase C §4.3: ball entity is identified by `BallMarker`. There is
+    // exactly one such entity per match; iterate to find it.
     for entity in simulation.world.iter_entities() {
-        if let Some(_ball) = entity.get::<Ball>() {
-            if let Some(pos) = entity.get::<Position>() {
-                ball_position = [pos.0.x, pos.0.y];
-            }
+        if entity.get::<sim_components::BallMarker>().is_some()
+            && let Some(pos) = entity.get::<Position>()
+        {
+            ball_position = [pos.0.x, pos.0.y];
             break;
         }
     }

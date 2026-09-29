@@ -47,81 +47,69 @@ pub struct PendingRestart {
 /// Does NOT reset ball position — that belongs to `restart_system`.
 pub fn out_of_bounds_system(
     mut commands: Commands,
-    mut ball_query: Query<(Entity, &Position, &Velocity, &mut Ball)>,
+    ball_query: Query<(Entity, &Position, &Velocity), With<sim_components::BallMarker>>,
     _current_tick: Res<CurrentTick>,
+    mut ball: ResMut<Ball>,
 ) {
     // Tolerance for "at boundary" detection (physics clamps to boundary)
     const OOB_TOLERANCE: f32 = 0.15;
     // Velocity threshold below which ball is considered "settled"
     const VELOCITY_THRESHOLD: f32 = 0.5;
 
-    // Collect entities that are at the boundary and need OOB classification
-    let mut oob_events: Vec<(Entity, BallOutOfBoundsType)> = Vec::new();
+    let Ok((ball_entity, position, velocity)) = ball_query.get_single() else {
+        return;
+    };
 
-    for (ball_entity, position, velocity, ball) in ball_query.iter() {
-        // Skip balls already dead or in flight (unless settling from flight)
-        if ball.state == BallState::Dead {
-            continue;
+    // Skip balls already dead or in flight (unless settling from flight)
+    if ball.state == BallState::Dead {
+        return;
+    }
+
+    let (x, y) = (position.0.x, position.0.y);
+    let speed = velocity.0.length();
+
+    // Only detect OOB for settled balls
+    if speed >= VELOCITY_THRESHOLD {
+        return;
+    }
+
+    // Check if ball is at/near any boundary
+    let at_left = x <= OOB_TOLERANCE;
+    let at_right = x >= PITCH_LENGTH - OOB_TOLERANCE;
+    let at_bottom = y <= OOB_TOLERANCE;
+    let at_top = y >= PITCH_WIDTH - OOB_TOLERANCE;
+    let at_goal_line = at_left || at_right;
+    let at_touchline = at_bottom || at_top;
+
+    if !at_goal_line && !at_touchline {
+        return; // Not at any boundary
+    }
+
+    let oob_type = if at_goal_line && at_touchline {
+        // Corner: ball at intersection of goal line and touchline.
+        // Check goal area first → GoalKick; otherwise → Corner.
+        if (GOAL_Y_MIN..=GOAL_Y_MAX).contains(&y) {
+            BallOutOfBoundsType::GoalKick
+        } else {
+            BallOutOfBoundsType::Corner
         }
-
-        let (x, y) = (position.0.x, position.0.y);
-        let speed = velocity.0.length();
-
-        // Only detect OOB for settled balls
-        if speed >= VELOCITY_THRESHOLD {
-            continue;
-        }
-
-        // Check if ball is at/near any boundary
-        let at_left = x <= OOB_TOLERANCE;
-        let at_right = x >= PITCH_LENGTH - OOB_TOLERANCE;
-        let at_bottom = y <= OOB_TOLERANCE;
-        let at_top = y >= PITCH_WIDTH - OOB_TOLERANCE;
-        let at_goal_line = at_left || at_right;
-        let at_touchline = at_bottom || at_top;
-
-        if !at_goal_line && !at_touchline {
-            continue; // Not at any boundary
-        }
-
-        // Corner: ball at intersection of goal line and touchline
-        // (both x and y boundaries simultaneously)
-        if at_goal_line && at_touchline {
-            // Check if in goal area - if so, it's a GoalKick, not Corner
-            if (GOAL_Y_MIN..=GOAL_Y_MAX).contains(&y) {
-                oob_events.push((ball_entity, BallOutOfBoundsType::GoalKick));
-            } else {
-                oob_events.push((ball_entity, BallOutOfBoundsType::Corner));
-            }
-            continue;
-        }
-
+    } else if at_goal_line {
         // Goal line (x=0 or x=105): goal area → GoalKick, outside → Corner
-        if at_goal_line {
-            if (GOAL_Y_MIN..=GOAL_Y_MAX).contains(&y) {
-                oob_events.push((ball_entity, BallOutOfBoundsType::GoalKick));
-            } else {
-                // Ball crossed goal line outside goal area → Corner
-                oob_events.push((ball_entity, BallOutOfBoundsType::Corner));
-            }
-            continue;
+        if (GOAL_Y_MIN..=GOAL_Y_MAX).contains(&y) {
+            BallOutOfBoundsType::GoalKick
+        } else {
+            BallOutOfBoundsType::Corner
         }
-
+    } else {
         // Touchline (y=0 or y=68): always ThrowIn
-        if at_touchline {
-            oob_events.push((ball_entity, BallOutOfBoundsType::ThrowIn));
-        }
-    }
+        BallOutOfBoundsType::ThrowIn
+    };
 
-    // Now apply the state changes (separate pass to avoid borrow conflict)
-    for (ball_entity, oob_type) in oob_events {
-        if let Ok((_, _, _, mut ball)) = ball_query.get_mut(ball_entity) {
-            ball.state = BallState::Dead;
-        }
-        commands
-            .entity(ball_entity)
-            .insert(RuleEvent::OutOfBounds(oob_type));
-    }
+    // Apply state changes
+    ball.state = BallState::Dead;
+    commands
+        .entity(ball_entity)
+        .insert(RuleEvent::OutOfBounds(oob_type));
 }
 
 /// Phase 3: Goal detection system (Law 10).
@@ -133,54 +121,51 @@ pub fn out_of_bounds_system(
 /// BUG FIX: Guards against repeat scoring by checking `BallState::Dead` first.
 pub fn goal_detection_system(
     mut commands: Commands,
-    mut ball_query: Query<(Entity, &Position, &mut Ball)>,
+    ball_query: Query<(Entity, &Position), With<sim_components::BallMarker>>,
     mut match_res: ResMut<Match>,
+    mut ball: ResMut<Ball>,
     current_tick: Res<CurrentTick>,
 ) {
     // First pass: collect goal events (avoid borrow conflicts)
     let mut goal_events: Vec<(Entity, sim_components::TeamId, (u8, u8))> = Vec::new();
 
-    for (ball_entity, ball_pos, ball) in ball_query.iter() {
-        // BUG FIX: Do NOT score if ball is already Dead
-        if ball.state == BallState::Dead {
-            continue;
-        }
+    let Ok((ball_entity, ball_pos)) = ball_query.get_single() else {
+        return;
+    };
 
+    // BUG FIX: Do NOT score if ball is already Dead
+    if ball.state != BallState::Dead {
         let in_goal_y = ball_pos.0.y >= GOAL_Y_MIN && ball_pos.0.y <= GOAL_Y_MAX;
 
-        if !in_goal_y {
-            continue;
-        }
-
-        // Away goal: ball at x <= 0 (left goal)
-        if ball_pos.0.x <= 0.0 {
-            match_res.score.1 += 1;
-            let final_score = match_res.score;
-            goal_events.push((ball_entity, sim_components::TeamId(1), final_score));
-            tracing::info!(
-                "GOAL scored by away team! Score: {}-{}",
-                final_score.0,
-                final_score.1
-            );
-        }
-        // Home goal: ball at x >= PITCH_LENGTH (right goal)
-        else if ball_pos.0.x >= PITCH_LENGTH {
-            match_res.score.0 += 1;
-            let final_score = match_res.score;
-            goal_events.push((ball_entity, sim_components::TeamId(0), final_score));
-            tracing::info!(
-                "GOAL scored by home team! Score: {}-{}",
-                final_score.0,
-                final_score.1
-            );
+        if in_goal_y {
+            // Away goal: ball at x <= 0 (left goal)
+            if ball_pos.0.x <= 0.0 {
+                match_res.score.1 += 1;
+                let final_score = match_res.score;
+                goal_events.push((ball_entity, sim_components::TeamId(1), final_score));
+                tracing::info!(
+                    "GOAL scored by away team! Score: {}-{}",
+                    final_score.0,
+                    final_score.1
+                );
+            }
+            // Home goal: ball at x >= PITCH_LENGTH (right goal)
+            else if ball_pos.0.x >= PITCH_LENGTH {
+                match_res.score.0 += 1;
+                let final_score = match_res.score;
+                goal_events.push((ball_entity, sim_components::TeamId(0), final_score));
+                tracing::info!(
+                    "GOAL scored by home team! Score: {}-{}",
+                    final_score.0,
+                    final_score.1
+                );
+            }
         }
     }
 
     // Second pass: apply state changes and emit events
     for (ball_entity, scorer_team, final_score) in goal_events {
-        if let Ok((_, _, mut ball)) = ball_query.get_mut(ball_entity) {
-            ball.state = BallState::Dead;
-        }
+        ball.state = BallState::Dead;
         commands.entity(ball_entity).insert(RuleEvent::Goal {
             scorer_team,
             score: final_score,
@@ -202,10 +187,11 @@ pub fn goal_detection_system(
 /// `PendingRestart` resource tracks the delayed kickoff restart timing.
 pub fn restart_system(
     mut commands: Commands,
-    mut ball_query: Query<(Entity, &mut Position, &mut Velocity, &mut Ball)>,
+    mut ball_query: Query<(Entity, &mut Position, &mut Velocity), With<sim_components::BallMarker>>,
     rule_event_query: Query<(Entity, &RuleEvent)>,
     current_tick: Res<CurrentTick>,
     pending_restart: Option<Res<PendingRestart>>,
+    mut ball: ResMut<Ball>,
 ) {
     // Handle KickoffRestart from goal (delayed by 60 ticks)
     if let Some(pr) = pending_restart
@@ -214,7 +200,7 @@ pub fn restart_system(
         && current_tick.0 >= pr.restart_tick
     {
         // Place ball at center spot
-        for (_, mut pos, mut vel, mut ball) in &mut ball_query {
+        if let Ok((_, mut pos, mut vel)) = ball_query.get_single_mut() {
             pos.0 = Vec2::new(CENTER_SPOT.0, CENTER_SPOT.1);
             vel.0 = Vec2::zero();
             ball.state = BallState::Free;
@@ -231,14 +217,10 @@ pub fn restart_system(
     // Handle OutOfBounds restarts by reading RuleEvent from entity
     let mut processed_entities: Vec<Entity> = Vec::new();
 
-    for (entity, mut pos, mut vel, mut ball) in &mut ball_query {
+    if let Ok((ball_entity, mut pos, mut vel)) = ball_query.get_single_mut() {
         // Only process Dead balls
-        if ball.state != BallState::Dead {
-            continue;
-        }
-
-        // Check if this entity has a RuleEvent
-        if let Ok((_, rule_event)) = rule_event_query.get(entity)
+        if ball.state == BallState::Dead
+            && let Ok((_, rule_event)) = rule_event_query.get(ball_entity)
             && let RuleEvent::OutOfBounds(oob_type) = rule_event
         {
             // Determine restart position based on OOB type and ball position
@@ -248,7 +230,7 @@ pub fn restart_system(
             ball.state = BallState::Free;
             // Drop any pending kick velocity — see goal-restart arm above.
             ball.kick_velocity = None;
-            processed_entities.push(entity);
+            processed_entities.push(ball_entity);
         }
     }
 
@@ -339,14 +321,15 @@ fn calculate_oob_restart_position(pos: Vec2, oob_type: BallOutOfBoundsType) -> V
 /// only how often a detected condition is printed — the detection logic
 /// itself (a known Phase-1-only stub per tasks.md) is untouched.
 pub fn offside_detection_system(
-    ball_query: Query<(&Position, &Ball)>,
-    player_query: Query<(Entity, &Position, &TeamIdComponent), Without<Ball>>,
+    ball_query: Query<&Position, With<sim_components::BallMarker>>,
+    player_query: Query<(Entity, &Position, &TeamIdComponent), Without<sim_components::BallMarker>>,
+    ball: Res<Ball>,
     mut tick_counter: Local<u32>,
 ) {
     *tick_counter += 1;
     let should_log = (*tick_counter).is_multiple_of(300);
 
-    let Ok((ball_pos, ball)) = ball_query.get_single() else {
+    let Ok(ball_pos) = ball_query.get_single() else {
         return;
     };
 
@@ -538,73 +521,76 @@ pub fn foul_detection_system(
 ///   considered to have touched it. Updated unconditionally (not gated
 ///   on `BallState::Free`) so that the last toucher is always current.
 pub fn possession_resolution_system(
-    mut ball_query: Query<(&Position, &mut Ball)>,
+    ball_query: Query<&Position, With<sim_components::BallMarker>>,
     player_query: Query<(Entity, &Player, &Position, &Skill), With<Player>>,
+    mut ball: ResMut<Ball>,
 ) {
-    for (ball_pos, mut ball) in &mut ball_query {
-        // --- Last-touch tracking (Law 11) ---
-        // Any player within 1.0 m of the ball is considered to have
-        // touched it. We update unconditionally so `last_touched_by`
-        // always reflects the most recent toucher.
-        let mut last_toucher: Option<(Entity, f32)> = None;
-        for (player_entity, _player, player_pos, _skill) in player_query.iter() {
-            let dist = ball_pos.0.distance(player_pos.0);
-            if dist <= 1.0 {
-                match last_toucher {
-                    Some((_, best_dist)) => {
-                        if dist < best_dist {
-                            last_toucher = Some((player_entity, dist));
-                        }
-                    }
-                    None => {
+    let Ok(ball_pos) = ball_query.get_single() else {
+        return;
+    };
+
+    // --- Last-touch tracking (Law 11) ---
+    // Any player within 1.0 m of the ball is considered to have
+    // touched it. We update unconditionally so `last_touched_by`
+    // always reflects the most recent toucher.
+    let mut last_toucher: Option<(Entity, f32)> = None;
+    for (player_entity, _player, player_pos, _skill) in player_query.iter() {
+        let dist = ball_pos.0.distance(player_pos.0);
+        if dist <= 1.0 {
+            match last_toucher {
+                Some((_, best_dist)) => {
+                    if dist < best_dist {
                         last_toucher = Some((player_entity, dist));
                     }
                 }
-            }
-        }
-        if let Some((toucher, _)) = last_toucher {
-            ball.last_touched_by = Some(toucher);
-        }
-
-        // --- Possession resolution ---
-        // Only resolve possession when the ball is currently free.
-        // Once possessed, possession is retained until the ball leaves
-        // the 1.5 m radius or another system clears it (e.g. OOB).
-        if ball.state != BallState::Free {
-            continue;
-        }
-
-        let mut closest_player: Option<(Entity, f32, f32)> = None;
-
-        for (player_entity, _player, player_pos, skill) in player_query.iter() {
-            let distance = ball_pos.0.distance(player_pos.0);
-            if distance < 1.5 {
-                if let Some((_, best_dist, best_skill)) = closest_player {
-                    let skill_diff = skill.0 - best_skill;
-                    if skill_diff > SKILL_TOLERANCE
-                        || (skill_diff <= SKILL_TOLERANCE && distance < best_dist)
-                    {
-                        closest_player = Some((player_entity, distance, skill.0));
-                    }
-                } else {
-                    closest_player = Some((player_entity, distance, skill.0));
+                None => {
+                    last_toucher = Some((player_entity, dist));
                 }
             }
         }
+    }
+    if let Some((toucher, _)) = last_toucher {
+        ball.last_touched_by = Some(toucher);
+    }
 
-        if let Some((entity, _, _)) = closest_player {
-            ball.possessor = Some(entity);
-            ball.state = BallState::Possessed;
-        } else {
-            ball.possessor = None;
-            ball.state = BallState::Free;
+    // --- Possession resolution ---
+    // Only resolve possession when the ball is currently free.
+    // Once possessed, possession is retained until the ball leaves
+    // the 1.5 m radius or another system clears it (e.g. OOB).
+    if ball.state != BallState::Free {
+        return;
+    }
+
+    let mut closest_player: Option<(Entity, f32, f32)> = None;
+
+    for (player_entity, _player, player_pos, skill) in player_query.iter() {
+        let distance = ball_pos.0.distance(player_pos.0);
+        if distance < 1.5 {
+            if let Some((_, best_dist, best_skill)) = closest_player {
+                let skill_diff = skill.0 - best_skill;
+                if skill_diff > SKILL_TOLERANCE
+                    || (skill_diff <= SKILL_TOLERANCE && distance < best_dist)
+                {
+                    closest_player = Some((player_entity, distance, skill.0));
+                }
+            } else {
+                closest_player = Some((player_entity, distance, skill.0));
+            }
         }
+    }
+
+    if let Some((entity, _, _)) = closest_player {
+        ball.possessor = Some(entity);
+        ball.state = BallState::Possessed;
+    } else {
+        ball.possessor = None;
+        ball.state = BallState::Free;
     }
 }
 
-pub const fn referee_advantage_system(ball_query: Query<&mut Ball>, match_res: Res<Match>) {
+pub const fn referee_advantage_system(ball_res: Res<Ball>, match_res: Res<Match>) {
     // Phase N: real advantage window logic
-    let _ = (ball_query, match_res);
+    let _ = (ball_res, match_res);
 }
 
 /// Added time granted per stoppage event, in seconds (0.5 min).
@@ -691,7 +677,9 @@ pub fn minimum_player_count_system(team_query: Query<&sim_components::Team>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim_components::{Player, RoleComponent, Skill, Stamina, TeamId};
+    use sim_components::{
+        BallMarker, Player, RoleComponent, Skill, Stamina, TeamId,
+    };
 
     /// Produces a test Ball at `pos` with the given `state`.
     /// All other fields are zeroed; `possessor` and `last_touched_by` are `None`.
@@ -712,9 +700,8 @@ mod tests {
         // Ball at bottom touchline (y=0, x=20) with low velocity - physics bounced it back
         // Throw-in: ball crosses touchline (y < 0 or y > PITCH_WIDTH)
         let ball_entity = world.spawn(()).id();
-        world
-            .entity_mut(ball_entity)
-            .insert(ball_fixture(Vec2::new(20.0, 0.0), BallState::Free));
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(ball_fixture(Vec2::new(20.0, 0.0), BallState::Free));
         world
             .entity_mut(ball_entity)
             .insert(Position(Vec2::new(20.0, 0.0)));
@@ -729,7 +716,7 @@ mod tests {
         world.insert_resource(CurrentTick(0));
         schedule.run(&mut world);
 
-        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        let ball = world.resource::<Ball>();
         assert_eq!(ball.state, BallState::Dead);
 
         let rule_event = world.entity(ball_entity).get::<RuleEvent>();
@@ -749,9 +736,8 @@ mod tests {
         // Ball at bottom-left corner (x=0.1, y=0.1) with low velocity
         // Both x and y are at the boundary, so it's a corner
         let ball_entity = world.spawn(()).id();
-        world
-            .entity_mut(ball_entity)
-            .insert(ball_fixture(Vec2::new(0.1, 0.1), BallState::Free));
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(ball_fixture(Vec2::new(0.1, 0.1), BallState::Free));
         world
             .entity_mut(ball_entity)
             .insert(Position(Vec2::new(0.1, 0.1)));
@@ -763,7 +749,7 @@ mod tests {
         world.insert_resource(CurrentTick(0));
         schedule.run(&mut world);
 
-        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        let ball = world.resource::<Ball>();
         assert_eq!(ball.state, BallState::Dead);
 
         let rule_event = world.entity(ball_entity).get::<RuleEvent>();
@@ -799,9 +785,8 @@ mod tests {
 
         // Create ball entity in home goal (x = 105.5, y = 34)
         let ball_entity = world.spawn(()).id();
-        world
-            .entity_mut(ball_entity)
-            .insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Free));
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(ball_fixture(Vec2::new(105.5, 34.0), BallState::Free));
         world
             .entity_mut(ball_entity)
             .insert(Position(Vec2::new(105.5, 34.0)));
@@ -817,7 +802,7 @@ mod tests {
         assert_eq!(m.score.0, 1);
         assert_eq!(m.score.1, 0);
 
-        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        let ball = world.resource::<Ball>();
         assert_eq!(ball.state, BallState::Dead);
 
         // Verify KickoffRestart was scheduled
@@ -847,9 +832,8 @@ mod tests {
 
         // Create ball entity in away goal (x = -0.5, y = 34)
         let ball_entity = world.spawn(()).id();
-        world
-            .entity_mut(ball_entity)
-            .insert(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
         world
             .entity_mut(ball_entity)
             .insert(Position(Vec2::new(-0.5, 34.0)));
@@ -888,9 +872,8 @@ mod tests {
 
         // Create ball entity in home goal with Dead state
         let ball_entity = world.spawn(()).id();
-        world
-            .entity_mut(ball_entity)
-            .insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
         world
             .entity_mut(ball_entity)
             .insert(Position(Vec2::new(105.5, 34.0)));
@@ -930,9 +913,8 @@ mod tests {
 
         // Create ball entity in Dead state (after a goal)
         let ball_entity = world.spawn(()).id();
-        world
-            .entity_mut(ball_entity)
-            .insert(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
         world
             .entity_mut(ball_entity)
             .insert(Position(Vec2::new(105.5, 34.0)));
@@ -940,11 +922,7 @@ mod tests {
         // Stage a pending kick velocity as if `kick_execution_system` had
         // run earlier in the same tick — without the clear, this would
         // survive into the next Physics tick.
-        world
-            .entity_mut(ball_entity)
-            .get_mut::<Ball>()
-            .unwrap()
-            .kick_velocity = Some(Vec2::new(15.0, 0.0));
+        world.resource_mut::<Ball>().kick_velocity = Some(Vec2::new(15.0, 0.0));
 
         // Set up pending restart for kickoff
         world.insert_resource(PendingRestart {
@@ -959,7 +937,7 @@ mod tests {
         world.insert_resource(CurrentTick(60));
         schedule.run(&mut world);
 
-        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        let ball = world.resource::<Ball>();
         let pos = world.entity(ball_entity).get::<Position>().unwrap();
         let vel = world.entity(ball_entity).get::<Velocity>().unwrap();
         assert_eq!(ball.state, BallState::Free);
@@ -984,9 +962,8 @@ mod tests {
 
         // Ball in goal area on left side
         let ball_entity = world.spawn(()).id();
-        world
-            .entity_mut(ball_entity)
-            .insert(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
         world
             .entity_mut(ball_entity)
             .insert(Position(Vec2::new(-0.5, 34.0)));
@@ -1010,7 +987,8 @@ mod tests {
         let mut world = World::new();
 
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(Ball {
             kick_velocity: None,
 
             spin: 0.0,
@@ -1046,7 +1024,7 @@ mod tests {
         schedule.add_systems(possession_resolution_system);
         schedule.run(&mut world);
 
-        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        let ball = world.resource::<Ball>();
         assert_eq!(ball.state, BallState::Possessed);
     }
 
@@ -1057,7 +1035,8 @@ mod tests {
         let mut world = World::new();
 
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(Ball {
             kick_velocity: None,
 
             spin: 0.0,
@@ -1093,7 +1072,7 @@ mod tests {
         schedule.add_systems(possession_resolution_system);
         schedule.run(&mut world);
 
-        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        let ball = world.resource::<Ball>();
         assert_eq!(ball.state, BallState::Possessed);
         assert_eq!(
             ball.possessor,
@@ -1110,7 +1089,8 @@ mod tests {
         let mut world = World::new();
 
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(Ball {
             kick_velocity: None,
 
             spin: 0.0,
@@ -1146,7 +1126,7 @@ mod tests {
         schedule.add_systems(possession_resolution_system);
         schedule.run(&mut world);
 
-        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        let ball = world.resource::<Ball>();
         assert_eq!(ball.state, BallState::Free);
         assert_eq!(
             ball.possessor, None,
@@ -1161,7 +1141,8 @@ mod tests {
         let mut world = World::new();
 
         let ball_entity = world.spawn(()).id();
-        world.entity_mut(ball_entity).insert(Ball {
+        world.entity_mut(ball_entity).insert(BallMarker);
+        world.insert_resource(Ball {
             kick_velocity: None,
 
             spin: 0.0,
@@ -1195,7 +1176,7 @@ mod tests {
         schedule.add_systems(possession_resolution_system);
         schedule.run(&mut world);
 
-        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        let ball = world.resource::<Ball>();
         assert_eq!(
             ball.last_touched_by,
             Some(player_a),
@@ -1212,7 +1193,10 @@ mod tests {
             let mut em = world.entity_mut(ball_entity);
             let mut pos = em.get_mut::<Position>().unwrap();
             pos.0 = Vec2::new(80.0, 34.0);
-            let mut ball = em.get_mut::<Ball>().unwrap();
+        }
+        // Phase C §4.3: Ball state lives on the Resource.
+        {
+            let mut ball = world.resource_mut::<Ball>();
             ball.state = BallState::Free;
             ball.possessor = None;
         }
@@ -1245,7 +1229,7 @@ mod tests {
 
         schedule.run(&mut world);
 
-        let ball = world.entity(ball_entity).get::<Ball>().unwrap();
+        let ball = world.resource::<Ball>();
         assert_eq!(
             ball.last_touched_by,
             Some(player_b),

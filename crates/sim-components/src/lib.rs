@@ -213,7 +213,7 @@ pub struct Ball {
 /// via Query without scanning `iter_entities()`. There is exactly one
 /// entity carrying `BallMarker` per match; its `Position`/`Velocity`
 /// components are written by `ball_physics_system`, while `Ball` (the
-/// Resource) holds state/possessor/last_touched_by/kick_velocity/spin.
+/// Resource) holds `state/possessor/last_touched_by/kick_velocity/spin`.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct BallMarker;
 

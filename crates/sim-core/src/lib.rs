@@ -151,6 +151,7 @@ impl Simulation {
     ///
     /// Panics if `create_match` does not spawn a ball entity, which would be
     /// an internal invariant violation.
+    #[must_use]
     pub fn new(seed: u64) -> Self {
         let mut world = World::new();
         // Phase 0 substrate: physics needs pitch dimensions. Insert the standard

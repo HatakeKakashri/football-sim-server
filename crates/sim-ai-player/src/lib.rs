@@ -70,7 +70,7 @@ pub enum Consideration {
 
 impl Consideration {
     #[must_use]
-    pub fn weight(&self) -> f32 {
+    pub const fn weight(&self) -> f32 {
         match self {
             Self::DistanceToTarget { weight, .. }
             | Self::DistanceToBall { weight, .. }

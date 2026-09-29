@@ -520,10 +520,7 @@ impl Simulation {
         // Phase C §4.3: Match is now a Resource. Validate using
         // `world.resource::<Match>()` — the match_id parameter is retained
         // for API compatibility but is no longer used to look up Match.
-        let match_component = self
-            .world
-            .resource::<Match>()
-            .clone();
+        let match_component = self.world.resource::<Match>().clone();
 
         // Validate command based on current state
         match &command {
@@ -623,10 +620,7 @@ impl Simulation {
     /// longer used to locate the match (Phase C §4.3).
     pub fn get_state(&self, _match_id: Entity) -> Result<MatchSnapshot, String> {
         // Phase C §4.3: Match is now a Resource.
-        let match_component = self
-            .world
-            .resource::<Match>()
-            .clone();
+        let match_component = self.world.resource::<Match>().clone();
 
         // Get ball state from the Resource, position/velocity from the entity.
         let ball_res = self.world.resource::<sim_components::Ball>();
@@ -643,7 +637,12 @@ impl Simulation {
             .world
             .iter_entities()
             .map(|e| e.id())
-            .filter(|e| self.world.entity(*e).get::<sim_components::BallMarker>().is_some())
+            .filter(|e| {
+                self.world
+                    .entity(*e)
+                    .get::<sim_components::BallMarker>()
+                    .is_some()
+            })
             .collect();
         ball_entity_candidates.sort_by_key(|e| e.to_bits());
         if let Some(ball_entity) = ball_entity_candidates.first() {
@@ -684,20 +683,24 @@ impl Simulation {
         }
 
         // Get clock view from MatchClock component on the match entity
-        let clock_view = self.world.entity(self.match_entity).get::<MatchClock>().map_or(
-            ClockView {
-                elapsed_ticks: 0,
-                half: 1,
-                added_time_ticks: 0,
-                is_running: false,
-            },
-            |clock| ClockView {
-                elapsed_ticks: clock.elapsed_ticks,
-                half: clock.half,
-                added_time_ticks: clock.added_time_ticks,
-                is_running: clock.is_running,
-            },
-        );
+        let clock_view = self
+            .world
+            .entity(self.match_entity)
+            .get::<MatchClock>()
+            .map_or(
+                ClockView {
+                    elapsed_ticks: 0,
+                    half: 1,
+                    added_time_ticks: 0,
+                    is_running: false,
+                },
+                |clock| ClockView {
+                    elapsed_ticks: clock.elapsed_ticks,
+                    half: clock.half,
+                    added_time_ticks: clock.added_time_ticks,
+                    is_running: clock.is_running,
+                },
+            );
 
         Ok(MatchSnapshot {
             tick: self.tick,
@@ -993,7 +996,7 @@ struct HalfTimeEntryTick {
 )]
 fn default_utility_brain() -> sim_ai_player::UtilityBrain {
     use sim_ai_core::ResponseCurve;
-    use sim_ai_player::{PlayerAction, PlayerConsideration};
+    use sim_ai_player::{Consideration, PlayerAction};
     use sim_components::Intent;
 
     const fn lin(min: f32, max: f32) -> ResponseCurve {
@@ -1017,8 +1020,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         // MoveToPosition — distance_to_target: closer = better.
         PlayerAction {
             intent: Intent::MoveToPosition(Vec2::new(52.5, 34.0)),
-            considerations: vec![PlayerConsideration {
-                name: "distance_to_target".to_string(),
+            considerations: vec![Consideration::DistanceToTarget {
                 weight: 1.0,
                 curve: lin(0.0, 30.0),
             }],
@@ -1027,8 +1029,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         PlayerAction {
             intent: Intent::ChaseBall,
             considerations: vec![
-                PlayerConsideration {
-                    name: "distance_to_ball".to_string(),
+                Consideration::DistanceToBall {
                     weight: 0.6,
                     // Step: score 0.8 if within 35 m (chasable range),
                     // 0.2 beyond. Far players still find ChaseBall
@@ -1040,13 +1041,11 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
                         above: 0.2,
                     },
                 },
-                PlayerConsideration {
-                    name: "stamina".to_string(),
+                Consideration::Stamina {
                     weight: 0.4,
                     curve: lin(0.0, 1.0),
                 },
-                PlayerConsideration {
-                    name: "pitch_control_at_ball".to_string(),
+                Consideration::PitchControlAtBall {
                     weight: 0.2,
                     curve: lin(0.0, 100.0),
                 },
@@ -1056,18 +1055,15 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         PlayerAction {
             intent: Intent::PassTo,
             considerations: vec![
-                PlayerConsideration {
-                    name: "pass_angle_clear".to_string(),
+                Consideration::PassAngleClear {
                     weight: 0.5,
                     curve: lin(0.0, 1.0),
                 },
-                PlayerConsideration {
-                    name: "teammate_distance".to_string(),
+                Consideration::TeammateDistance {
                     weight: 0.3,
                     curve: lin(0.0, 30.0),
                 },
-                PlayerConsideration {
-                    name: "teammate_space".to_string(),
+                Consideration::TeammateSpace {
                     weight: 0.2,
                     curve: lin(0.0, 20.0),
                 },
@@ -1077,20 +1073,17 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         PlayerAction {
             intent: Intent::ShootAtGoal(Vec2::new(105.0, 34.0)),
             considerations: vec![
-                PlayerConsideration {
-                    name: "distance_to_goal".to_string(),
+                Consideration::DistanceToGoal {
                     weight: 0.5,
                     // Closer is better — feed (35 - distance) so Linear gives
                     // 1.0 inside the box, 0.0 at 35 m+.
                     curve: lin(0.0, 35.0),
                 },
-                PlayerConsideration {
-                    name: "goal_angle".to_string(),
+                Consideration::GoalAngle {
                     weight: 0.3,
                     curve: lin(-1.0, 1.0),
                 },
-                PlayerConsideration {
-                    name: "defender_pressure".to_string(),
+                Consideration::DefenderPressure {
                     weight: 0.2,
                     curve: ResponseCurve::Step {
                         threshold: 1.0,
@@ -1104,13 +1097,11 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         PlayerAction {
             intent: Intent::Tackle(Entity::PLACEHOLDER),
             considerations: vec![
-                PlayerConsideration {
-                    name: "distance_to_opponent".to_string(),
+                Consideration::DistanceToOpponent {
                     weight: 0.6,
                     curve: log(2.0, 1.5),
                 },
-                PlayerConsideration {
-                    name: "skill_diff".to_string(),
+                Consideration::SkillDiff {
                     weight: 0.4,
                     curve: lin(-1.0, 1.0),
                 },
@@ -1120,13 +1111,11 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         PlayerAction {
             intent: Intent::MarkOpponent(Entity::PLACEHOLDER),
             considerations: vec![
-                PlayerConsideration {
-                    name: "distance_to_marked".to_string(),
+                Consideration::DistanceToMarked {
                     weight: 0.5,
                     curve: lin(0.0, 10.0),
                 },
-                PlayerConsideration {
-                    name: "defensive_position".to_string(),
+                Consideration::DefensivePosition {
                     weight: 0.5,
                     curve: step(0.5, 0.0, 1.0),
                 },
@@ -1136,13 +1125,11 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         PlayerAction {
             intent: Intent::Press(Entity::PLACEHOLDER),
             considerations: vec![
-                PlayerConsideration {
-                    name: "distance_to_press".to_string(),
+                Consideration::DistanceToPress {
                     weight: 0.6,
                     curve: log(8.0, 0.4),
                 },
-                PlayerConsideration {
-                    name: "stamina".to_string(),
+                Consideration::Stamina {
                     weight: 0.4,
                     curve: lin(0.0, 1.0),
                 },
@@ -1152,13 +1139,11 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         PlayerAction {
             intent: Intent::SupportRun,
             considerations: vec![
-                PlayerConsideration {
-                    name: "space_ahead".to_string(),
+                Consideration::SpaceAhead {
                     weight: 0.6,
                     curve: lin(0.0, 15.0),
                 },
-                PlayerConsideration {
-                    name: "teammate_ball".to_string(),
+                Consideration::TeammateBall {
                     weight: 0.4,
                     curve: step(0.5, 0.0, 1.0),
                 },
@@ -1169,8 +1154,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         // positive signal — i.e. when the player has nothing better to do.
         PlayerAction {
             intent: Intent::HoldPosition,
-            considerations: vec![PlayerConsideration {
-                name: "formation_discipline".to_string(),
+            considerations: vec![Consideration::FormationDiscipline {
                 weight: 1.0,
                 // Step: 0.5 always (a "default" score, not a "best").
                 curve: ResponseCurve::Step {

@@ -62,7 +62,7 @@ Instant events (`ph: "i"`), emitted only on the tick a change occurs (not every 
 
 | Event name | Args | Emitted when |
 |---|---|---|
-| `"state_change"` | `from`, `to` (`Free \| Possessed \| InFlight \| OutOfPlay \| Dead`) | `Ball.state` changes |
+| `"state_change"` | `from`, `to` (`Free \| Possessed \| InFlight \| Dead`) | `Ball.state` changes |
 | `"possession_change"` | `from` (entity id or `none`), `to` (entity id or `none`) | `Ball.possessor` changes |
 
 ## Referee Process — `Events` Thread

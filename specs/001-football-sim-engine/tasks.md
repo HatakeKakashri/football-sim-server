@@ -46,7 +46,7 @@
 - [X] T017 Implement Schedule in sim-core with explicit system chaining (perception → decision → intent → execution)
 - [X] T018 Implement PitchDimensions in sim-math with standard field measurements (105m x 68m)
 - [X] T019 Create base MatchState enum in sim-components per data-model.md (PreMatch, Kickoff, InPlay, Stoppage, HalfTime, FullTime)
-- [X] T020 Create base BallState enum in sim-components per data-model.md (Free, Possessed, InFlight, OutOfPlay, Dead)
+- [X] T020 Create base BallState enum in sim-components per data-model.md (Free, Possessed, InFlight, Dead)
 - [X] T021 Implement state hash computation in sim-core for determinism verification (include positions, velocities, stamina, ball state, score, clock; exclude timing)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel

@@ -66,14 +66,14 @@ Physics entity with position, velocity, spin, and state.
 | position | `Vec2` | Current position on pitch |
 | velocity | `Vec2` | Current velocity |
 | spin | `f32` | Ball spin (affects trajectory) |
-| state | `BallState` | Free, Possessed, InFlight, OutOfPlay, Dead |
+| state | `BallState` | Free, Possessed, InFlight, Dead |
 | possessor | `Option<Entity>` | Player possessing the ball (if any) |
 
 **State Transitions**: 
 - `Free → Possessed` (player picks up ball)
 - `Possessed → InFlight` (player kicks/passes)
 - `InFlight → Free` (ball lands)
-- `* → OutOfPlay` (ball leaves pitch)
+- `* → Dead` (ball leaves pitch or play is stopped)
 - `* → Dead` (foul, offside, goal)
 
 ### Team
@@ -218,7 +218,6 @@ enum BallState {
     Free,
     Possessed,
     InFlight,
-    OutOfPlay,
     Dead,
 }
 ```

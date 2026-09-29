@@ -44,7 +44,7 @@ Sourced from the existing `Ball` component.
 | x, y | `Ball.position` | Pitch coordinates |
 | vx, vy | `Ball.velocity` | Velocity components |
 | spin | `Ball.spin` | Affects trajectory |
-| state | `Ball.state` | `Free \| Possessed \| InFlight \| OutOfPlay \| Dead` |
+| state | `Ball.state` | `Free \| Possessed \| InFlight \| Dead` |
 | possessor | `Ball.possessor` | `Option<Entity>`, rendered as player id or absent |
 
 ### Decision Trace (per player, per recorded tick)

@@ -276,7 +276,6 @@ pub enum BallState {
     Free,
     Possessed(Entity),
     InFlight { from: Entity, aimed_at: Vec2 },
-    OutOfPlay,
     Dead,
 }
 ```
@@ -610,7 +609,6 @@ pub enum BallState {
     Free,
     Possessed(Entity),
     InFlight { from: Entity, aimed_at: Vec2 },
-    OutOfPlay,
     Dead,
 }
 pub struct Ball {

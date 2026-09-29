@@ -22,17 +22,18 @@ pub enum ResponseCurve {
 }
 
 impl ResponseCurve {
+    #[must_use]
     pub fn evaluate(&self, input: f32) -> f32 {
         match self {
-            ResponseCurve::Linear { min, max } => (input - min) / (max - min).clamp(0.0, 1.0),
-            ResponseCurve::Logistic {
+            Self::Linear { min, max } => (input - min) / (max - min).clamp(0.0, 1.0),
+            Self::Logistic {
                 midpoint,
                 steepness,
             } => {
                 let x = steepness * (input - midpoint);
                 1.0 / (1.0 + (-x).exp())
             }
-            ResponseCurve::Step {
+            Self::Step {
                 threshold,
                 below,
                 above,
@@ -47,12 +48,18 @@ impl ResponseCurve {
     }
 }
 
+/// Geometric mean via log-space sum, so long inputs can't underflow the product.
+#[must_use]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "slice length is far below 2^24, so the usize -> f32 cast is exact"
+)]
 pub fn geometric_mean(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    let product: f32 = values.iter().map(|v| v.max(1e-4)).product();
-    product.powf(1.0 / values.len() as f32)
+    let log_sum: f32 = values.iter().map(|v| v.max(1e-4).ln()).sum();
+    (log_sum / values.len() as f32).exp()
 }
 
 #[cfg(test)]

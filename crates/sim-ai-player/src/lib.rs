@@ -1,6 +1,9 @@
 use bevy_ecs::prelude::*;
 use sim_ai_core::{ResponseCurve, geometric_mean};
-use sim_components::{Ball, BallState, Intent, MatchClock, Player, Position, Skill, Stamina, Velocity, time};
+use sim_components::{
+    Ball, BallState, Intent, MatchClock, PerceptionSnapshot, Player, Position, RoleComponent,
+    Skill, Stamina, TeamIdComponent, Velocity, time,
+};
 use sim_math::Vec2;
 use sim_physics::{PitchControlGrid, SimRng};
 
@@ -27,10 +30,25 @@ pub struct PlayerConsideration {
     pub curve: ResponseCurve,
 }
 
+/// Convert a small count (nearby entities, at most a handful) to `f32`.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "counts here are tiny (<= 8 nearby entities), far below 2^24, so the cast is exact"
+)]
+const fn count_to_f32(n: usize) -> f32 {
+    n as f32
+}
+
+#[expect(
+    clippy::type_complexity,
+    clippy::too_many_lines,
+    reason = "Bevy ParamSet/Query signatures are inherently verbose; this system is one linear snapshot-then-build pass"
+)]
 pub fn perception_system(
+    mut commands: Commands,
     mut queries: ParamSet<(
-        Query<(Entity, &mut Player, &Position)>,
-        Query<(Entity, &Player, &Position)>,
+        Query<(Entity, &Position, &TeamIdComponent)>,
+        Query<(Entity, &Position, &TeamIdComponent)>,
         Query<(Entity, &Ball, &Position)>,
         Query<&sim_components::Match>,
         Query<&sim_components::MatchClock>,
@@ -51,20 +69,19 @@ pub fn perception_system(
         }
     };
 
-    // Snapshot all other players' (team_id, position) up front. This avoids
-    // holding p1 open while iterating p0 mutably, which ParamSet forbids.
-    // Phase 1 has 22 players so an O(n) snapshot per tick is fine.
-    let mut others: Vec<(sim_components::TeamId, Vec2)> = Vec::new();
+    // Snapshot all other players' (entity, team_id, position) up front. This
+    // avoids holding p1 open while iterating p0 mutably, which ParamSet
+    // forbids. Phase 1 has 22 players so an O(n) snapshot per tick is fine.
+    // The entity is needed so `NearbyEntity.entity` can carry the real id
+    // (downstream `Tackle` / `MarkOpponent` / `Press` intents reference it).
+    let mut others: Vec<(Entity, sim_components::TeamId, Vec2)> = Vec::new();
     {
         let q1 = queries.p1();
-        for (_e, other_player, other_pos) in q1.iter() {
-            others.push((other_player.team_id, other_pos.0));
+        for (other_entity, other_pos, other_team) in q1.iter() {
+            others.push((other_entity, other_team.0, other_pos.0));
         }
     }
 
-    // Phase 2: snapshot the single Match and all Teams up front. These are
-    // read-only resources used to fill in match-context fields on each
-    // player (score differential, time remaining, possession, mentality).
     // Phase 2: snapshot the single Match and MatchClock up front. These are
     // read-only resources used to fill in match-context fields on each
     // player (score differential, time remaining, possession, mentality).
@@ -79,10 +96,10 @@ pub fn perception_system(
         })
     };
     // Then get match info (score) from Match component.
-    let match_info: Option<(i8, f32, sim_components::TeamId, sim_components::TeamId)> = {
+    let match_info: Option<(i16, f32, sim_components::TeamId, sim_components::TeamId)> = {
         let q = queries.p3();
         q.iter().next().map(|m| {
-            let diff: i8 = (m.score.0 as i16 - m.score.1 as i16) as i8;
+            let diff = i16::from(m.score.0) - i16::from(m.score.1);
             // Use shared time utilities: match time remaining in seconds
             let time_remaining_secs = time::match_time_remaining_secs(&clock);
             (
@@ -93,7 +110,7 @@ pub fn perception_system(
             )
         })
     };
-    let (score_diff, time_remaining_secs, _home_id, _away_id) = match_info.unwrap_or((
+    let (_score_diff, _time_remaining_secs, _home_id, _away_id) = match_info.unwrap_or((
         0,
         90.0 * 60.0, // 90 minutes = 5400 seconds
         sim_components::TeamId(0),
@@ -119,37 +136,24 @@ pub fn perception_system(
 
     // Team possession share: for Phase 2 this is a deterministic placeholder
     // (0.5 / 0.5). It will become a real moving window of recent touches once
-    // Phase 3 / 5 add touch tracking. A non-constant value is required so the
-    // Player-side field carries meaning at the perception layer.
-    let home_possession = 0.5_f32;
-    let away_possession = 1.0_f32 - home_possession;
+    // Phase 3 / 5 add touch tracking.
 
-    // Now iterate players via the mutable query, building and applying the
-    // snapshot in one pass. Using `get_mut` per entity keeps each mutation
-    // window short and avoids holding a long-lived p0 iterator.
-    let entity_ids: Vec<bevy_ecs::prelude::Entity> = {
+    // Now iterate players via the mutable query, building and inserting
+    // PerceptionSnapshot as a Component.
+    let entity_data: Vec<(Entity, Vec2, sim_components::TeamId)> = {
         let q0 = queries.p0();
-        q0.iter().map(|(e, _, _)| e).collect()
+        q0.iter().map(|(e, pos, team)| (e, pos.0, team.0)).collect()
     };
-    for entity in entity_ids {
-        // Snapshot player_pos + team_id via an immutable get (read-only).
-        let snapshot_info = queries
-            .p0()
-            .get(entity)
-            .ok()
-            .map(|(_, p, pos)| (pos.0, p.team_id));
-        let Some((player_pos, team_id)) = snapshot_info else {
-            continue;
-        };
 
+    for (entity, player_pos, team_id) in entity_data {
         let mut nearby_teammates = smallvec::SmallVec::new();
         let mut nearby_opponents = smallvec::SmallVec::new();
-        for (other_team_id, other_pos) in &others {
+        for (other_entity, other_team_id, other_pos) in &others {
             let distance = player_pos.distance(*other_pos);
             if distance <= 20.0 {
                 let relative_position = *other_pos - player_pos;
                 let nearby_entity = sim_components::NearbyEntity {
-                    entity: Entity::PLACEHOLDER,
+                    entity: *other_entity,
                     distance,
                     relative_position,
                 };
@@ -196,28 +200,12 @@ pub fn perception_system(
             pitch_bounds,
         };
 
-        let team_possession = if team_id.0 == 0 {
-            home_possession
-        } else {
-            away_possession
-        };
-        let mentality_modifier = if team_id.0 < 2 {
-            mentality_by_team[team_id.0 as usize]
-        } else {
-            0.0
-        };
-
-        if let Ok((_, mut player, _)) = queries.p0().get_mut(entity) {
-            player.perception = Some(perception);
-            player.score_differential = score_diff;
-            player.time_remaining_secs = time_remaining_secs;
-            player.team_possession = team_possession;
-            player.mentality_modifier = mentality_modifier;
-        }
+        // Insert or update the PerceptionSnapshot component for this player
+        commands.entity(entity).insert(perception);
     }
 }
 
-pub fn consideration_scoring_system(_query: Query<(&mut Player, &Stamina, &Skill)>) {
+pub const fn consideration_scoring_system(_query: Query<(&mut Player, &Stamina, &Skill)>) {
     // Phase 2: real consideration scoring runs INSIDE `player_decision_system`
     // (so it can be gated on the per-player evaluation cadence without doing
     // redundant work). This system now exists as a no-op stub retained for
@@ -236,18 +224,23 @@ pub fn consideration_scoring_system(_query: Query<(&mut Player, &Stamina, &Skill
 /// 2. Pick the highest-scoring action; add the `hysteresis` bonus if it
 ///    matches the player's currently-active intent.
 /// 3. Commit the new intent to the Player.
+#[allow(clippy::type_complexity, reason = "Bevy Query signature")]
 pub fn player_decision_system(
-    mut query: Query<(&mut Player, &UtilityBrain)>,
+    mut query: Query<(
+        Entity,
+        &mut Player,
+        &UtilityBrain,
+        &PerceptionSnapshot,
+        &Stamina,
+        &Skill,
+        &RoleComponent,
+        &TeamIdComponent,
+    )>,
     pitch_control: Option<Res<PitchControlGrid>>,
 ) {
-    for (mut player, utility_brain) in query.iter_mut() {
-        // Need a perception snapshot to score considerations.
-        let Some(perception) = player.perception.clone() else {
-            // No perception yet (first tick after spawn): keep intent as-is
-            // (which may be None — execution system handles None safely).
-            continue;
-        };
-
+    for (_entity, mut player, utility_brain, perception, stamina, skill, _role, _team_id) in
+        &mut query
+    {
         // Evaluate each action.
         let mut best_action: Option<(Intent, f32)> = None;
 
@@ -261,9 +254,10 @@ pub fn player_decision_system(
                 // anything else falls back to a neutral 0.5.
                 let raw = compute_consideration_input(
                     &consideration.name,
-                    &player,
-                    &perception,
+                    perception,
                     &action.intent,
+                    stamina.0,
+                    skill.0,
                     pitch_control.as_deref(),
                 );
                 let score = consideration.curve.evaluate(raw).clamp(0.0, 1.0);
@@ -275,10 +269,10 @@ pub fn player_decision_system(
                 let baseline = 0.6;
                 if let Some((_, best)) = best_action {
                     if baseline > best {
-                        best_action = Some((action.intent.clone(), baseline));
+                        best_action = Some((action.intent, baseline));
                     }
                 } else {
-                    best_action = Some((action.intent.clone(), baseline));
+                    best_action = Some((action.intent, baseline));
                 }
                 continue;
             }
@@ -291,18 +285,18 @@ pub fn player_decision_system(
 
             // Apply hysteresis: if this action's intent type matches the
             // player's currently-active intent, add the bonus.
-            if let Some(current) = &player.intent {
-                if intent_kind(current) == intent_kind(&action.intent) {
-                    aggregate += utility_brain.hysteresis;
-                }
+            if let Some(current) = &player.intent
+                && intent_kind(current) == intent_kind(&action.intent)
+            {
+                aggregate += utility_brain.hysteresis;
             }
 
             if let Some((_, best)) = best_action {
                 if aggregate > best {
-                    best_action = Some((action.intent.clone(), aggregate));
+                    best_action = Some((action.intent, aggregate));
                 }
             } else {
-                best_action = Some((action.intent.clone(), aggregate));
+                best_action = Some((action.intent, aggregate));
             }
         }
 
@@ -319,7 +313,7 @@ pub fn player_decision_system(
 /// passing to player A vs. passing to player B should NOT receive a
 /// hysteresis bonus against each other (different actions of the same
 /// type would be unfair), so we match on the variant discriminant only.
-fn intent_kind(intent: &Intent) -> &'static str {
+const fn intent_kind(intent: &Intent) -> &'static str {
     match intent {
         Intent::MoveToPosition(_) => "MoveToPosition",
         Intent::PassTo => "PassTo",
@@ -339,11 +333,16 @@ fn intent_kind(intent: &Intent) -> &'static str {
 /// Phase 2 implements the considerations listed in §4a of the task spec;
 /// any unknown name returns a neutral 0.5 so a poorly-tuned brain still
 /// produces valid scores.
+#[expect(
+    clippy::too_many_lines,
+    reason = "flat name -> input lookup table; splitting it would only scatter the mapping"
+)]
 fn compute_consideration_input(
     name: &str,
-    player: &Player,
     perception: &sim_components::PerceptionSnapshot,
     intent: &Intent,
+    stamina: f32,
+    skill: f32,
     grid: Option<&PitchControlGrid>,
 ) -> f32 {
     match name {
@@ -363,17 +362,20 @@ fn compute_consideration_input(
         // distance_to_ball: feed raw metres. The brain uses a *decreasing*
         // Logistic (negative steepness) so closer = higher score and far
         // = small but nonzero score.
-        "distance_to_ball" => perception.self_position.distance(perception.ball_position),
-        "stamina" => player.stamina,
-        "pitch_control_at_ball" => grid
-            .map(|g| g.control_at(perception.ball_position.x, perception.ball_position.y) * 100.0)
-            .unwrap_or(50.0),
+        // (`ball_distance` / `self_to_ball` are aliases kept for older brains.)
+        "distance_to_ball" | "ball_distance" | "self_to_ball" => {
+            perception.self_position.distance(perception.ball_position)
+        }
+        "stamina" => stamina,
+        "pitch_control_at_ball" => grid.map_or(50.0, |g| {
+            g.control_at(perception.ball_position.x, perception.ball_position.y) * 100.0
+        }),
 
         // --- PassTo ---
         "pass_angle_clear" => {
             // For Phase 2: 1.0 if no opponent is between player and target,
             // linearly fading to 0.0 if a defender blocks the lane.
-            if let Intent::PassTo = intent {
+            if matches!(intent, Intent::PassTo) {
                 let lane_clear = !perception.nearby_opponents.iter().any(|opp| {
                     let dist = opp.distance;
                     dist < 8.0
@@ -393,7 +395,7 @@ fn compute_consideration_input(
                     .iter()
                     .map(|t| t.distance)
                     .sum::<f32>()
-                    / perception.nearby_teammates.len() as f32;
+                    / count_to_f32(perception.nearby_teammates.len());
                 30.0 - avg.min(30.0)
             }
         }
@@ -430,12 +432,13 @@ fn compute_consideration_input(
         }
         "defender_pressure" => {
             // Number of opponents within 5m * 1m penalty per opponent.
-            let n_close = perception
-                .nearby_opponents
-                .iter()
-                .filter(|o| o.distance <= 5.0)
-                .count() as f32;
-            n_close
+            count_to_f32(
+                perception
+                    .nearby_opponents
+                    .iter()
+                    .filter(|o| o.distance <= 5.0)
+                    .count(),
+            )
         }
 
         // --- Tackle ---
@@ -451,7 +454,7 @@ fn compute_consideration_input(
         }
         "skill_diff" => {
             // Player skill minus an average opponent skill (assume 0.7).
-            (player.skill - 0.7).clamp(-1.0, 1.0)
+            (skill - 0.7).clamp(-1.0, 1.0)
         }
 
         // --- MarkOpponent ---
@@ -525,14 +528,19 @@ fn compute_consideration_input(
         "formation_discipline" => 1.0,
 
         // --- Generic catch-alls ---
-        "ball_distance" => perception.self_position.distance(perception.ball_position),
-        "self_to_ball" => perception.self_position.distance(perception.ball_position),
         _ => 0.5,
     }
 }
 
 pub fn player_action_execution_system(
-    mut query: Query<(Entity, &mut Player, &mut Velocity)>,
+    mut query: Query<(
+        Entity,
+        &mut Player,
+        &mut Velocity,
+        &Stamina,
+        &Skill,
+        &PerceptionSnapshot,
+    )>,
     mut rng: ResMut<SimRng>,
 ) {
     // Phase 2: real steering for every action. Each arm turns the abstract
@@ -545,22 +553,18 @@ pub fn player_action_execution_system(
     // avoids the Position/Velocity conflict that arises from querying both
     // the player and the ball.
     //
-    // Also mirrors the new velocity back into `Player.velocity` so the
-    // snapshot/PlayerView readers (which read from the Player struct, not
-    // the Position/Velocity components) see fresh values.
-    //
     // Phase 3: stochastic outcomes for tackles, passes, and shots using RNG.
     // DETERMINISM: collect entities first and sort by Entity ID to ensure
     // stable RNG draw order across processes (spec §7, rule #22).
-    let mut entities: Vec<Entity> = query.iter().map(|(e, _, _)| e).collect();
+    let mut entities: Vec<Entity> = query.iter().map(|(e, _, _, _, _, _)| e).collect();
     entities.sort_by_key(|e| e.to_bits());
     for entity in entities {
-        let Ok((_entity, mut player, mut velocity)) = query.get_mut(entity) else {
+        let Ok((_entity, player, mut velocity, stamina, skill, perception)) = query.get_mut(entity)
+        else {
             continue;
         };
-        let Some(intent) = player.intent.clone() else {
+        let Some(intent) = player.intent else {
             velocity.0 = Vec2::zero();
-            player.velocity = Vec2::zero();
             continue;
         };
 
@@ -572,59 +576,53 @@ pub fn player_action_execution_system(
             Intent::Tackle(target) => {
                 // Tackle resolution: higher skill = higher success probability
                 // Roll against skill-based probability
-                let tackle_success_prob = player.skill.clamp(0.3, 0.9);
+                let tackle_success_prob = skill.0.clamp(0.3, 0.9);
                 let roll: f32 = rng.gen_f32();
                 if roll > tackle_success_prob {
                     // Tackle fails - player stumbles, moves slower
                     speed_modifier = 0.3;
-                
                 }
                 // Store target for potential later use
                 let _ = target;
             }
             Intent::PassTo => {
                 // Pass completion: probability based on distance and skill
-                let pass_distance = player.perception.as_ref()
-                    .and_then(|p| p.nearby_teammates.first().map(|t| t.distance))
-                    .unwrap_or(15.0);
+                let pass_distance = perception
+                    .nearby_teammates
+                    .first()
+                    .map_or(15.0, |t| t.distance);
                 // Longer passes = lower completion probability
-                let pass_prob = (1.0 - (pass_distance / 50.0).min(0.8)) * player.skill;
+                let pass_prob = (1.0 - (pass_distance / 50.0).min(0.8)) * skill.0;
                 let roll: f32 = rng.gen_f32();
                 if roll > pass_prob {
                     // Pass goes awry - add random deviation
                     speed_modifier = 0.7;
-                    direction_modifier = Vec2::new(
-                        rng.gen_range_f32(-2.0, 2.0),
-                        rng.gen_range_f32(-2.0, 2.0)
-                    );
-                
+                    direction_modifier =
+                        Vec2::new(rng.gen_range_f32(-2.0, 2.0), rng.gen_range_f32(-2.0, 2.0));
                 }
             }
             Intent::ShootAtGoal(_) => {
                 // Shot accuracy: skill and stamina affect accuracy
-                let accuracy = player.skill * (0.5 + 0.5 * player.stamina);
+                let accuracy = skill.0 * stamina.0.mul_add(0.5, 0.5);
                 let roll: f32 = rng.gen_f32();
                 if roll > accuracy {
                     // Shot misses - add deviation
                     speed_modifier = 0.8;
-                    direction_modifier = Vec2::new(
-                        rng.gen_range_f32(-3.0, 3.0),
-                        rng.gen_range_f32(-2.0, 2.0)
-                    );
-                
+                    direction_modifier =
+                        Vec2::new(rng.gen_range_f32(-3.0, 3.0), rng.gen_range_f32(-2.0, 2.0));
                 }
             }
             _ => {}
         }
 
-        let new_velocity = steer(&player, &intent);
+        let new_velocity = steer(perception, &intent);
         velocity.0 = new_velocity * speed_modifier + direction_modifier;
-        player.velocity = velocity.0;
     }
 }
 
-/// Speed imparted to the ball when a possessing player shoots or otherwise
-/// kicks it. Demo-scope simplification (see `kick_execution_system`): a flat
+/// Speed imparted to the ball when a possessing player shoots or kicks it.
+///
+/// Demo-scope simplification (see `kick_execution_system`): a flat
 /// speed per action type, not scaled by player skill/power.
 pub const KICK_SPEED_SHOT: f32 = 22.0;
 pub const KICK_SPEED_PASS: f32 = 14.0;
@@ -634,17 +632,16 @@ pub const KICK_SPEED_PASS: f32 = 14.0;
 /// rather than just continuing the ball in the passer's current heading.
 /// Mirrors the equivalent lookup `steer()` already uses to *move* a player
 /// toward the same teammate for a `PassTo` intent.
-fn nearest_teammate_position(player: &Player) -> Option<Vec2> {
-    player.perception.as_ref().and_then(|snap| {
-        snap.nearby_teammates
-            .iter()
-            .min_by(|a, b| {
-                a.distance
-                    .partial_cmp(&b.distance)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|t| t.relative_position + player.position)
-    })
+fn nearest_teammate_position(perception: &PerceptionSnapshot) -> Option<Vec2> {
+    perception
+        .nearby_teammates
+        .iter()
+        .min_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|t| t.relative_position + perception.self_position)
 }
 
 /// Turns a possessing player's intent into actual ball velocity.
@@ -676,40 +673,45 @@ fn nearest_teammate_position(player: &Player) -> Option<Vec2> {
 /// decelerates to rest before another player reaches it would silently
 /// re-freeze as "possessed" by the original kicker.
 pub fn kick_execution_system(
-    player_query: Query<(Entity, &Player)>,
-    mut ball_query: Query<(&mut Velocity, &mut Ball)>,
+    player_query: Query<(Entity, &Player, &PerceptionSnapshot, &Velocity)>,
+    mut ball_query: Query<&mut Ball>,
 ) {
-    let Ok((mut ball_velocity, mut ball)) = ball_query.get_single_mut() else {
+    let Ok(mut ball) = ball_query.get_single_mut() else {
         return;
     };
     let Some(possessor) = ball.possessor else {
         return;
     };
-    let Some((_, player)) = player_query.iter().find(|(e, _)| *e == possessor) else {
+    let Some((_, _, perception, player_vel)) =
+        player_query.iter().find(|(e, _, _, _)| *e == possessor)
+    else {
         return;
     };
-    let Some(intent) = &player.intent else {
+    let Some(intent) = player_query
+        .iter()
+        .find(|(e, _, _, _)| *e == possessor)
+        .and_then(|(_, p, _, _)| p.intent)
+    else {
         return;
     };
 
-    let kick = match intent {
+    let kick = match &intent {
         Intent::ShootAtGoal(target) => {
-            let dir = *target - player.position;
+            let dir = *target - perception.self_position;
             (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_SHOT))
         }
-        Intent::PassTo => nearest_teammate_position(player).and_then(|target| {
-            let dir = target - player.position;
+        Intent::PassTo => nearest_teammate_position(perception).and_then(|target| {
+            let dir = target - perception.self_position;
             (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_PASS))
         }),
         Intent::ChaseBall | Intent::Tackle(_) | Intent::Press(_) => {
-            (player.velocity.length() > 0.01)
-                .then(|| (player.velocity.normalized(), KICK_SPEED_PASS))
+            (player_vel.0.length() > 0.01).then(|| (player_vel.0.normalized(), KICK_SPEED_PASS))
         }
         _ => None,
     };
 
     if let Some((direction, speed)) = kick {
-        ball_velocity.0 = direction * speed;
+        ball.kick_velocity = Some(direction * speed);
         ball.possessor = None;
     }
 }
@@ -720,62 +722,53 @@ pub fn kick_execution_system(
 /// `nearby_opponents`), which carries their world position relative to the
 /// player at perception time. The ball position is read from the perception
 /// snapshot directly (the perception system writes it every tick).
-fn steer(player: &Player, intent: &Intent) -> Vec2 {
-    let player_pos = player.position;
-    let ball_pos = player
-        .perception
-        .as_ref()
-        .map(|p| p.ball_position)
-        .unwrap_or(player_pos);
+fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
+    let player_pos = perception.self_position;
+    let ball_pos = perception.ball_position;
     let ball_vel = Vec2::zero(); // Phase 2: ball velocity not yet exposed in perception.
 
-    let nearest_opponent_pos = |p: &Player| -> Option<Vec2> {
-        p.perception.as_ref().and_then(|snap| {
-            snap.nearby_opponents
-                .iter()
-                .min_by(|a, b| {
-                    a.distance
-                        .partial_cmp(&b.distance)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .map(|o| o.relative_position + player_pos)
-        })
+    let nearest_opponent_pos = || -> Option<Vec2> {
+        perception
+            .nearby_opponents
+            .iter()
+            .min_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|o| o.relative_position + player_pos)
     };
-    let nearest_teammate_pos = |p: &Player| -> Option<Vec2> {
-        p.perception.as_ref().and_then(|snap| {
-            snap.nearby_teammates
-                .iter()
-                .min_by(|a, b| {
-                    a.distance
-                        .partial_cmp(&b.distance)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .map(|t| t.relative_position + player_pos)
-        })
+    let nearest_teammate_pos = || -> Option<Vec2> {
+        perception
+            .nearby_teammates
+            .iter()
+            .min_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|t| t.relative_position + player_pos)
     };
 
     let (target, speed): (Vec2, f32) = match intent {
         Intent::MoveToPosition(target) => (*target, 5.0),
-        Intent::PassTo => (nearest_teammate_pos(player).unwrap_or(ball_pos), 8.0),
+        Intent::PassTo => (nearest_teammate_pos().unwrap_or(ball_pos), 8.0),
         Intent::ShootAtGoal(target) => (*target, 10.0),
-        Intent::Tackle(_) => (nearest_opponent_pos(player).unwrap_or(player_pos), 10.0),
+        Intent::Tackle(_) | Intent::Press(_) => {
+            (nearest_opponent_pos().unwrap_or(player_pos), 10.0)
+        }
         Intent::ChaseBall => (ball_pos, 8.0),
-        Intent::MarkOpponent(_) => (nearest_opponent_pos(player).unwrap_or(player_pos), 4.0),
+        Intent::MarkOpponent(_) => (nearest_opponent_pos().unwrap_or(player_pos), 4.0),
         Intent::Intercept => (ball_pos + ball_vel * 0.5, 9.0),
-        Intent::Press(_) => (nearest_opponent_pos(player).unwrap_or(player_pos), 10.0),
         Intent::HoldPosition => return Vec2::zero(),
         Intent::SupportRun => {
-            if let Some(perception) = &player.perception {
-                if let Some(worst) = perception.nearby_opponents.iter().min_by(|a, b| {
-                    a.distance
-                        .partial_cmp(&b.distance)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }) {
-                    let away = player_pos + (player_pos - worst.relative_position);
-                    (away, 5.0)
-                } else {
-                    return Vec2::zero();
-                }
+            if let Some(worst) = perception.nearby_opponents.iter().min_by(|a, b| {
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                let away = player_pos + (player_pos - worst.relative_position);
+                (away, 5.0)
             } else {
                 return Vec2::zero();
             }
@@ -813,20 +806,22 @@ mod tests {
         let player_entity = world.spawn(()).id();
         world.entity_mut(player_entity).insert(Player {
             team_id: TeamId(0),
-            position: Vec2::new(50.0, 34.0),
-            velocity: Vec2::zero(),
-            stamina: 0.2, // Low stamina
-            role: Role::Striker,
-            skill: 0.8,
             intent: None,
-            perception: None,
-            score_differential: 0,
-            time_remaining_secs: 5400.0,
-            team_possession: 0.5,
-            mentality_modifier: 0.0,
         });
+        world
+            .entity_mut(player_entity)
+            .insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(player_entity)
+            .insert(Velocity(Vec2::zero()));
         world.entity_mut(player_entity).insert(Stamina(0.2));
         world.entity_mut(player_entity).insert(Skill(0.8));
+        world
+            .entity_mut(player_entity)
+            .insert(RoleComponent(Role::Striker));
+        world
+            .entity_mut(player_entity)
+            .insert(TeamIdComponent(TeamId(0)));
 
         // Create utility brain with sprint action
         let utility_brain = UtilityBrain {
@@ -840,8 +835,9 @@ mod tests {
 
         // Phase 2: provide a minimal perception snapshot so
         // player_decision_system can run.
-        if let Some(mut p) = world.entity_mut(player_entity).get_mut::<Player>() {
-            p.perception = Some(sim_components::PerceptionSnapshot {
+        world
+            .entity_mut(player_entity)
+            .insert(sim_components::PerceptionSnapshot {
                 self_position: Vec2::new(50.0, 34.0),
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
@@ -855,7 +851,6 @@ mod tests {
                     distance_to_bottom: 34.0,
                 },
             });
-        }
 
         // Run systems
         let mut schedule = Schedule::default();
@@ -899,37 +894,40 @@ mod tests {
         let player_entity = world.spawn(()).id();
         world.entity_mut(player_entity).insert(Player {
             team_id: TeamId(0),
-            position: Vec2::new(50.0, 34.0),
-            velocity: Vec2::zero(),
-            stamina: 0.8,
-            role: Role::Striker,
-            skill: 0.8,
             intent: None,
-            perception: None,
-            score_differential: 0,
-            time_remaining_secs: 5400.0,
-            team_possession: 0.5,
-            mentality_modifier: 0.0,
         });
+        world
+            .entity_mut(player_entity)
+            .insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(player_entity)
+            .insert(Velocity(Vec2::zero()));
         world.entity_mut(player_entity).insert(Stamina(0.8));
         world.entity_mut(player_entity).insert(Skill(0.8));
+        world
+            .entity_mut(player_entity)
+            .insert(RoleComponent(Role::Striker));
+        world
+            .entity_mut(player_entity)
+            .insert(TeamIdComponent(TeamId(0)));
 
         // Create a teammate in better position
         let teammate_entity = world.spawn(()).id();
         world.entity_mut(teammate_entity).insert(Player {
             team_id: TeamId(0),
-            position: Vec2::new(80.0, 34.0), // Closer to goal
-            velocity: Vec2::zero(),
-            stamina: 0.9,
-            role: Role::Striker,
-            skill: 0.7,
             intent: None,
-            perception: None,
-            score_differential: 0,
-            time_remaining_secs: 5400.0,
-            team_possession: 0.5,
-            mentality_modifier: 0.0,
         });
+        world
+            .entity_mut(teammate_entity)
+            .insert(Position(Vec2::new(80.0, 34.0)));
+        world
+            .entity_mut(teammate_entity)
+            .insert(Velocity(Vec2::zero()));
+        world.entity_mut(teammate_entity).insert(Stamina(0.9));
+        world.entity_mut(teammate_entity).insert(Skill(0.7));
+        world
+            .entity_mut(teammate_entity)
+            .insert(RoleComponent(Role::Striker));
 
         // Create utility brain with pass action
         let utility_brain = UtilityBrain {
@@ -942,8 +940,9 @@ mod tests {
         world.entity_mut(player_entity).insert(utility_brain);
 
         // Phase 2: minimal perception snapshot for player_decision_system.
-        if let Some(mut p) = world.entity_mut(player_entity).get_mut::<Player>() {
-            p.perception = Some(sim_components::PerceptionSnapshot {
+        world
+            .entity_mut(player_entity)
+            .insert(sim_components::PerceptionSnapshot {
                 self_position: Vec2::new(50.0, 34.0),
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
@@ -957,7 +956,6 @@ mod tests {
                     distance_to_bottom: 34.0,
                 },
             });
-        }
 
         // Run systems
         let mut schedule = Schedule::default();
@@ -1001,30 +999,46 @@ mod tests {
         let attacker_entity = world.spawn(()).id();
         world.entity_mut(attacker_entity).insert(Player {
             team_id: TeamId(1),
-            position: Vec2::new(45.0, 34.0),
-            velocity: Vec2::zero(),
-            stamina: 0.8,
-            role: Role::Striker,
-            skill: 0.8,
             intent: Some(sim_components::Intent::ShootAtGoal(Vec2::new(105.0, 34.0))),
-            perception: None,
-            score_differential: 0,
-            time_remaining_secs: 5400.0,
-            team_possession: 0.5,
-            mentality_modifier: 0.0,
         });
+        world
+            .entity_mut(attacker_entity)
+            .insert(Position(Vec2::new(45.0, 34.0)));
+        world
+            .entity_mut(attacker_entity)
+            .insert(Velocity(Vec2::zero()));
+        world.entity_mut(attacker_entity).insert(Stamina(0.8));
+        world.entity_mut(attacker_entity).insert(Skill(0.8));
+        world
+            .entity_mut(attacker_entity)
+            .insert(RoleComponent(Role::Striker));
+        world
+            .entity_mut(attacker_entity)
+            .insert(TeamIdComponent(TeamId(1)));
 
         // Create a defender
         let defender_entity = world.spawn(()).id();
         world.entity_mut(defender_entity).insert(Player {
             team_id: TeamId(0),
-            position: Vec2::new(40.0, 34.0),
-            velocity: Vec2::zero(),
-            stamina: 0.9,
-            role: Role::CenterBack,
-            skill: 0.7,
             intent: None,
-            perception: Some(sim_components::PerceptionSnapshot {
+        });
+        world
+            .entity_mut(defender_entity)
+            .insert(Position(Vec2::new(40.0, 34.0)));
+        world
+            .entity_mut(defender_entity)
+            .insert(Velocity(Vec2::zero()));
+        world.entity_mut(defender_entity).insert(Stamina(0.9));
+        world.entity_mut(defender_entity).insert(Skill(0.7));
+        world
+            .entity_mut(defender_entity)
+            .insert(RoleComponent(Role::CenterBack));
+        world
+            .entity_mut(defender_entity)
+            .insert(TeamIdComponent(TeamId(0)));
+        world
+            .entity_mut(defender_entity)
+            .insert(sim_components::PerceptionSnapshot {
                 self_position: Vec2::new(40.0, 34.0),
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::smallvec![sim_components::NearbyEntity {
@@ -1041,12 +1055,7 @@ mod tests {
                     distance_to_top: 34.0,
                     distance_to_bottom: 34.0,
                 },
-            }),
-            score_differential: 0,
-            time_remaining_secs: 5400.0,
-            team_possession: 0.5,
-            mentality_modifier: 0.0,
-        });
+            });
 
         // Create utility brain with tackle action. Phase 2 decision cadence is
         let utility_brain = UtilityBrain {
@@ -1106,18 +1115,22 @@ mod tests {
         let player_entity = world.spawn(()).id();
         world.entity_mut(player_entity).insert(Player {
             team_id: TeamId(0),
-            position: Vec2::new(50.0, 34.0),
-            velocity: Vec2::zero(),
-            stamina: 1.0,
-            role: Role::Striker,
-            skill: 0.7,
             intent: None,
-            perception: None,
-            score_differential: 0,
-            time_remaining_secs: 5400.0,
-            team_possession: 0.5,
-            mentality_modifier: 0.0,
         });
+        world
+            .entity_mut(player_entity)
+            .insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(player_entity)
+            .insert(Velocity(Vec2::zero()));
+        world.entity_mut(player_entity).insert(Stamina(1.0));
+        world
+            .entity_mut(player_entity)
+            .insert(RoleComponent(Role::Striker));
+        world.entity_mut(player_entity).insert(Skill(0.7));
+        world
+            .entity_mut(player_entity)
+            .insert(TeamIdComponent(TeamId(0)));
         let brain = UtilityBrain {
             actions: vec![PlayerAction {
                 intent: sim_components::Intent::HoldPosition,
@@ -1132,8 +1145,9 @@ mod tests {
         world.entity_mut(player_entity).insert(brain);
 
         // Provide a minimal perception snapshot so decision_system can run.
-        if let Some(mut p) = world.entity_mut(player_entity).get_mut::<Player>() {
-            p.perception = Some(sim_components::PerceptionSnapshot {
+        world
+            .entity_mut(player_entity)
+            .insert(sim_components::PerceptionSnapshot {
                 self_position: Vec2::new(50.0, 34.0),
                 nearby_teammates: smallvec::SmallVec::new(),
                 nearby_opponents: smallvec::SmallVec::new(),
@@ -1147,7 +1161,6 @@ mod tests {
                     distance_to_bottom: 34.0,
                 },
             });
-        }
 
         // Insert a Match entity so player_decision_system can compute tick.
         let match_entity = world.spawn(()).id();
@@ -1194,5 +1207,63 @@ mod tests {
 
         let player = world.entity(player_entity).get::<Player>().unwrap();
         assert!(player.intent.is_some());
+    }
+
+    /// Regression: `PerceptionSnapshot.nearby_*[].entity` must carry the real
+    /// entity id, not `Entity::PLACEHOLDER`. Downstream `Tackle` /
+    /// `MarkOpponent` / `Press` intents reference this id.
+    #[test]
+    fn test_perception_records_real_entity_ids() {
+        let mut world = World::new();
+
+        // Two opposing players within perception range.
+        let home_player = world.spawn(()).id();
+        world.entity_mut(home_player).insert(Player {
+            team_id: TeamId(0),
+            intent: None,
+        });
+        world
+            .entity_mut(home_player)
+            .insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(home_player)
+            .insert(TeamIdComponent(TeamId(0)));
+
+        let away_player = world.spawn(()).id();
+        world.entity_mut(away_player).insert(Player {
+            team_id: TeamId(1),
+            intent: None,
+        });
+        world
+            .entity_mut(away_player)
+            .insert(Position(Vec2::new(55.0, 34.0)));
+        world
+            .entity_mut(away_player)
+            .insert(TeamIdComponent(TeamId(1)));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(perception_system);
+
+        schedule.run(&mut world);
+
+        let snapshot = world
+            .entity(home_player)
+            .get::<sim_components::PerceptionSnapshot>()
+            .expect("perception_system must insert a snapshot");
+
+        assert_eq!(
+            snapshot.nearby_opponents.len(),
+            1,
+            "home player should see the away player"
+        );
+        assert_eq!(
+            snapshot.nearby_opponents[0].entity, away_player,
+            "nearby_opponents[0].entity must be the real entity, not PLACEHOLDER"
+        );
+        assert_ne!(
+            snapshot.nearby_opponents[0].entity,
+            Entity::PLACEHOLDER,
+            "Entity::PLACEHOLDER must not leak into production perception snapshots"
+        );
     }
 }

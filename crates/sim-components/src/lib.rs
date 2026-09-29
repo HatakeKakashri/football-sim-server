@@ -4,6 +4,21 @@ use sim_math::Vec2;
 
 pub mod time;
 
+#[derive(Component, Debug, Clone)]
+pub struct PerceptionSnapshot {
+    pub self_position: Vec2,
+    pub nearby_teammates: smallvec::SmallVec<[NearbyEntity; 8]>,
+    pub nearby_opponents: smallvec::SmallVec<[NearbyEntity; 8]>,
+    pub ball_position: Vec2,
+    /// Ball state as observed by the perception system. This is a
+    /// `BallState` enum value (Free / Possessed / etc.), **not** an
+    /// `Entity`.  The actual possessor entity lives on `Ball.possessor`
+    /// and is read by systems that need the real entity reference.
+    pub ball_state: BallState,
+    pub goal_position: Vec2,
+    pub pitch_bounds: PitchBounds,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TeamId(pub u8);
 
@@ -106,22 +121,6 @@ pub enum Intent {
 }
 
 #[derive(Debug, Clone)]
-pub struct PerceptionSnapshot {
-    pub self_position: Vec2,
-    pub nearby_teammates: smallvec::SmallVec<[NearbyEntity; 8]>,
-    pub nearby_opponents: smallvec::SmallVec<[NearbyEntity; 8]>,
-    pub ball_position: Vec2,
-    /// Ball state as observed by the perception system. This is a
-    /// `BallState` enum value (Free / Possessed / etc.), **not** an
-    /// `Entity`.  The actual possessor entity lives on
-    /// `Ball.possessor` and is read by systems that need the real
-    /// entity reference (e.g. offside tracking).
-    pub ball_state: BallState,
-    pub goal_position: Vec2,
-    pub pitch_bounds: PitchBounds,
-}
-
-#[derive(Debug, Clone)]
 pub struct NearbyEntity {
     pub entity: Entity,
     pub distance: f32,
@@ -173,20 +172,20 @@ pub struct MatchClock {
 
 impl MatchClock {
     /// Returns elapsed time in seconds for display purposes.
+    #[must_use]
     pub fn elapsed_secs(&self) -> f32 {
-        self.elapsed_ticks as f32 / 60.0
+        time::ticks_to_secs_f32(self.elapsed_ticks)
     }
 
     /// Returns added time in seconds for display purposes.
+    #[must_use]
     pub fn added_time_secs(&self) -> f32 {
-        self.added_time_ticks as f32 / 60.0
+        time::ticks_to_secs_f32(self.added_time_ticks)
     }
 }
 
 #[derive(Component, Debug, Clone)]
 pub struct Ball {
-    pub position: Vec2,
-    pub velocity: Vec2,
     pub spin: f32,
     pub state: BallState,
     pub possessor: Option<Entity>,
@@ -197,45 +196,16 @@ pub struct Ball {
     /// the position of the second-to-last defender at the instant this
     /// player was the nearest to the ball.
     pub last_touched_by: Option<Entity>,
+    /// Pending velocity from a kick, to be applied in the Physics set.
+    /// This avoids static query conflicts between `kick_execution_system`
+    /// (Execution set) and `ball_physics_system` (Physics set).
+    pub kick_velocity: Option<Vec2>,
 }
 
 #[derive(Component, Debug, Clone)]
 pub struct Player {
     pub team_id: TeamId,
-    pub position: Vec2,
-    pub velocity: Vec2,
-    pub stamina: f32,
-    pub role: Role,
-    pub skill: f32,
     pub intent: Option<Intent>,
-    pub perception: Option<PerceptionSnapshot>,
-    // Phase 2: match-context fields written by the perception system each
-    // tick so that downstream decisions can reason about score state, clock,
-    // possession share, and tactical mentality without re-querying the world.
-    pub score_differential: i8,
-    /// Match time remaining in seconds (written by perception system).
-    pub time_remaining_secs: f32,
-    pub team_possession: f32,
-    pub mentality_modifier: f32,
-}
-
-impl Default for Player {
-    fn default() -> Self {
-        Self {
-            team_id: TeamId(0),
-            position: Vec2::zero(),
-            velocity: Vec2::zero(),
-            stamina: 1.0,
-            role: Role::CentralMidfielder,
-            skill: 0.5,
-            intent: None,
-            perception: None,
-            score_differential: 0,
-            time_remaining_secs: 90.0 * 60.0, // 90 minutes = 5400 seconds
-            team_possession: 0.5,
-            mentality_modifier: 0.0,
-        }
-    }
 }
 
 #[derive(Component, Debug, Clone)]

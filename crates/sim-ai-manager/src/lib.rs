@@ -1,3 +1,8 @@
+#![allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy system parameters (Query, Res, ...) must be taken by value; `&Query` is not a SystemParam"
+)]
+
 use bevy_ecs::prelude::*;
 use sim_components::{Manager, Match, MatchClock, Player, Stamina, Team, time};
 
@@ -6,7 +11,7 @@ pub fn manager_decision_system(
     match_query: Query<&Match>,
     clock_query: Query<&MatchClock>,
 ) {
-    for (mut manager, _team) in query.iter_mut() {
+    for (mut manager, _team) in &mut query {
         if let Ok(match_entity) = match_query.get_single() {
             let Ok(clock) = clock_query.get_single() else {
                 continue;
@@ -17,15 +22,16 @@ pub fn manager_decision_system(
                 continue;
             }
 
-            let score_difference = match_entity.score.0 as i32 - match_entity.score.1 as i32;
-            
+            let score_difference =
+                i16::from(match_entity.score.0) - i16::from(match_entity.score.1);
+
             // Use shared time utilities for consistent time remaining calculation
-            let time_remaining_secs = time::match_time_remaining_secs(&clock);
+            let time_remaining_secs = time::match_time_remaining_secs(clock);
 
             let mut total_score = 0.0;
             for factor in &manager.decision_table.factors {
                 let factor_score = match factor.name.as_str() {
-                    "score_difference" => (score_difference as f32 / 3.0).clamp(-1.0, 1.0),
+                    "score_difference" => (f32::from(score_difference) / 3.0).clamp(-1.0, 1.0),
                     "time_remaining" => (time_remaining_secs / (90.0 * 60.0)).clamp(0.0, 1.0),
                     _ => 0.0,
                 };
@@ -33,15 +39,9 @@ pub fn manager_decision_system(
             }
 
             if total_score > 0.5 {
-                println!(
-                    "Manager considering aggressive tactics (score: {})",
-                    total_score
-                );
+                println!("Manager considering aggressive tactics (score: {total_score})");
             } else if total_score < -0.5 {
-                println!(
-                    "Manager considering defensive tactics (score: {})",
-                    total_score
-                );
+                println!("Manager considering defensive tactics (score: {total_score})");
             }
 
             manager.last_decision_tick = current_tick;
@@ -50,13 +50,15 @@ pub fn manager_decision_system(
 }
 
 pub fn formation_change_system(mut query: Query<(&mut Team,)>) {
-    for (team,) in query.iter_mut() {
+    for (team,) in &mut query {
+        use sim_components::Formation;
+
         let _required_players = match team.formation {
-            sim_components::Formation::FourFourTwo => 11,
-            sim_components::Formation::FourThreeThree => 11,
-            sim_components::Formation::ThreeFiveTwo => 11,
-            sim_components::Formation::FourTwoThreeOne => 11,
-            sim_components::Formation::FiveThreeTwo => 11,
+            Formation::FourFourTwo
+            | Formation::FourThreeThree
+            | Formation::ThreeFiveTwo
+            | Formation::FourTwoThreeOne
+            | Formation::FiveThreeTwo => 11,
         };
 
         println!("Formation: {:?}", team.formation);
@@ -67,7 +69,7 @@ pub fn substitution_system(
     mut query: Query<(&mut Team,)>,
     player_query: Query<(&Player, &Stamina)>,
 ) {
-    for (mut team,) in query.iter_mut() {
+    for (mut team,) in &mut query {
         if team.substitutes.is_empty() {
             continue;
         }
@@ -75,18 +77,17 @@ pub fn substitution_system(
         let mut substitution_to_make: Option<(Entity, Entity)> = None;
 
         for player_entity in &team.players {
-            if let Ok((_player, stamina)) = player_query.get(*player_entity) {
-                if stamina.0 < 0.3 {
-                    if let Some(&substitute_entity) = team.substitutes.first() {
-                        substitution_to_make = Some((*player_entity, substitute_entity));
-                        break;
-                    }
-                }
+            if let Ok((_player, stamina)) = player_query.get(*player_entity)
+                && stamina.0 < 0.3
+                && let Some(&substitute_entity) = team.substitutes.first()
+            {
+                substitution_to_make = Some((*player_entity, substitute_entity));
+                break;
             }
         }
 
         if let Some((out, incoming)) = substitution_to_make {
-            println!("Substituting {:?} with {:?}", out, incoming);
+            println!("Substituting {out:?} with {incoming:?}");
             team.players.retain(|&e| e != out);
             team.substitutes.retain(|&e| e != incoming);
             team.players.push(incoming);
@@ -100,15 +101,16 @@ pub fn mentality_shift_system(
     match_query: Query<&Match>,
     clock_query: Query<&MatchClock>,
 ) {
-    for (mut team,) in query.iter_mut() {
+    for (mut team,) in &mut query {
         if let Ok(match_entity) = match_query.get_single() {
             let Ok(clock) = clock_query.get_single() else {
                 continue;
             };
-            let score_difference = match_entity.score.0 as i32 - match_entity.score.1 as i32;
-            
+            let score_difference =
+                i32::from(match_entity.score.0) - i32::from(match_entity.score.1);
+
             // Use shared time utilities for consistent time remaining calculation (in minutes)
-            let time_remaining_mins = time::match_time_remaining_mins(&clock);
+            let time_remaining_mins = time::match_time_remaining_mins(clock);
 
             let new_mentality = if score_difference >= 2 {
                 if time_remaining_mins < 15.0 {
@@ -118,16 +120,14 @@ pub fn mentality_shift_system(
                 }
             } else if score_difference <= -2 {
                 sim_components::Mentality::Attack
-            } else {
-                if time_remaining_mins < 10.0 {
-                    if score_difference < 0 {
-                        sim_components::Mentality::Attack
-                    } else {
-                        sim_components::Mentality::Defend
-                    }
+            } else if time_remaining_mins < 10.0 {
+                if score_difference < 0 {
+                    sim_components::Mentality::Attack
                 } else {
-                    sim_components::Mentality::Balance
+                    sim_components::Mentality::Defend
                 }
+            } else {
+                sim_components::Mentality::Balance
             };
 
             if team.mentality != new_mentality {
@@ -145,8 +145,8 @@ pub fn mentality_shift_system(
 mod tests {
     use super::*;
     use sim_components::{
-        DecisionFactor, Formation, MatchClock, MatchState, Mentality, Role, TeamId,
-        WeightedDecisionTable,
+        DecisionFactor, Formation, MatchClock, MatchState, Mentality, Position, Role,
+        RoleComponent, Skill, Stamina, TeamId, Velocity, WeightedDecisionTable,
     };
     use sim_math::Vec2;
 
@@ -229,35 +229,35 @@ mod tests {
 
         world.entity_mut(low_stamina_player).insert(Player {
             team_id: TeamId(0),
-            position: Vec2::new(50.0, 34.0),
-            velocity: Vec2::zero(),
-            stamina: 0.2,
-            role: Role::Striker,
-            skill: 0.8,
             intent: None,
-            perception: None,
-            score_differential: 0,
-            time_remaining_secs: 5400.0,
-            team_possession: 0.5,
-            mentality_modifier: 0.0,
         });
+        world
+            .entity_mut(low_stamina_player)
+            .insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(low_stamina_player)
+            .insert(Velocity(Vec2::zero()));
         world.entity_mut(low_stamina_player).insert(Stamina(0.2));
+        world
+            .entity_mut(low_stamina_player)
+            .insert(RoleComponent(Role::Striker));
+        world.entity_mut(low_stamina_player).insert(Skill(0.8));
 
         world.entity_mut(substitute_player).insert(Player {
             team_id: TeamId(0),
-            position: Vec2::new(50.0, 34.0),
-            velocity: Vec2::zero(),
-            stamina: 0.9,
-            role: Role::Striker,
-            skill: 0.7,
             intent: None,
-            perception: None,
-            score_differential: 0,
-            time_remaining_secs: 5400.0,
-            team_possession: 0.5,
-            mentality_modifier: 0.0,
         });
+        world
+            .entity_mut(substitute_player)
+            .insert(Position(Vec2::new(50.0, 34.0)));
+        world
+            .entity_mut(substitute_player)
+            .insert(Velocity(Vec2::zero()));
         world.entity_mut(substitute_player).insert(Stamina(0.9));
+        world
+            .entity_mut(substitute_player)
+            .insert(RoleComponent(Role::Striker));
+        world.entity_mut(substitute_player).insert(Skill(0.7));
 
         world.entity_mut(team_entity).insert(Team {
             id: TeamId(0),

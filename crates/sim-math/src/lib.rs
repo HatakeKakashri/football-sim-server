@@ -9,22 +9,27 @@ pub struct Vec2 {
 }
 
 impl Vec2 {
-    pub fn new(x: f32, y: f32) -> Self {
+    #[must_use]
+    pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
 
-    pub fn zero() -> Self {
+    #[must_use]
+    pub const fn zero() -> Self {
         Self { x: 0.0, y: 0.0 }
     }
 
+    #[must_use]
     pub fn length_squared(self) -> f32 {
-        self.x * self.x + self.y * self.y
+        self.y.mul_add(self.y, self.x * self.x)
     }
 
+    #[must_use]
     pub fn length(self) -> f32 {
         self.length_squared().sqrt()
     }
 
+    #[must_use]
     pub fn normalized(self) -> Self {
         let len = self.length();
         if len < f32::EPSILON {
@@ -34,18 +39,22 @@ impl Vec2 {
         }
     }
 
+    #[must_use]
     pub fn dot(self, other: Self) -> f32 {
-        self.x * other.x + self.y * other.y
+        self.y.mul_add(other.y, self.x * other.x)
     }
 
+    #[must_use]
     pub fn distance_squared(self, other: Self) -> f32 {
         (self - other).length_squared()
     }
 
+    #[must_use]
     pub fn distance(self, other: Self) -> f32 {
         (self - other).length()
     }
 
+    #[must_use]
     pub fn clamp_length(self, max_length: f32) -> Self {
         let len = self.length();
         if len > max_length {
@@ -170,7 +179,8 @@ pub struct Circle {
 }
 
 impl PitchDimensions {
-    pub fn standard() -> Self {
+    #[must_use]
+    pub const fn standard() -> Self {
         Self {
             width: 105.0,
             length: 68.0,
@@ -189,14 +199,17 @@ impl PitchDimensions {
         }
     }
 
-    pub fn width(&self) -> f32 {
+    #[must_use]
+    pub const fn width(&self) -> f32 {
         self.width
     }
 
-    pub fn length(&self) -> f32 {
+    #[must_use]
+    pub const fn length(&self) -> f32 {
         self.length
     }
 
+    #[must_use]
     pub fn contains(&self, point: Vec2) -> bool {
         point.x >= 0.0 && point.x <= self.width && point.y >= 0.0 && point.y <= self.length
     }

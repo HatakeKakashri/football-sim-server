@@ -3,6 +3,7 @@ use sim_components::{Ball, Position, Velocity};
 use sim_math::{PitchDimensions, Vec2};
 
 /// Phase 2: RNG resource wrapper for stochastic gameplay outcomes.
+///
 /// Inserted as a Bevy Resource so systems can access it via `ResMut<SimRng>`.
 /// Uses a simple, completely deterministic LCG (Linear Congruential Generator)
 /// to eliminate any external crate non-determinism across processes.
@@ -12,25 +13,40 @@ pub struct SimRng {
 }
 
 impl SimRng {
-    pub fn new(seed: u64) -> Self {
+    #[must_use]
+    pub const fn new(seed: u64) -> Self {
         // Use a non-zero seed; LCG with 0 would produce all zeros
-        Self { state: seed.wrapping_add(0x9E37_79B9_7F4A_7C15) }
+        Self {
+            state: seed.wrapping_add(0x9E37_79B9_7F4A_7C15),
+        }
     }
 
     /// Generate a random u64 using LCG (Numerical Recipes constants)
-    pub fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    pub const fn next_u64(&mut self) -> u64 {
+        self.state = self
+            .state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         self.state
     }
 
     /// Generate a random f32 in [0, 1)
+    ///
+    /// Uses the top 24 bits of the LCG (its low bits are the weakest). 24 bits
+    /// is exactly f32's mantissa width, so the conversion is exact and the
+    /// result can never round up to 1.0.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "value is < 2^24, exactly representable in f32"
+    )]
     pub fn gen_f32(&mut self) -> f32 {
-        (self.next_u64() >> 11) as f32 * (1.0 / 9007199254740992.0)  // 2^53
+        let bits = (self.next_u64() >> 40) as u32;
+        bits as f32 * (1.0 / 16_777_216.0) // 2^-24, exact
     }
 
     /// Generate a random f32 in [min, max)
     pub fn gen_range_f32(&mut self, min: f32, max: f32) -> f32 {
-        min + self.gen_f32() * (max - min)
+        self.gen_f32().mul_add(max - min, min)
     }
 }
 
@@ -38,8 +54,9 @@ pub const MAX_PLAYER_SPEED: f32 = 10.0;
 pub const MAX_BALL_SPEED: f32 = 30.0;
 pub const BALL_DAMPING: f32 = 0.99;
 
-/// Phase 2: pitch control grid constants. The grid covers the full pitch
-/// with 16 columns × 12 rows. Each cell stores the probability that the
+/// Phase 2: pitch control grid constants (16 columns × 12 rows).
+///
+/// The grid covers the full pitch. Each cell stores the probability that the
 /// attacking team wins that cell in a footrace against the defending team.
 pub const PITCH_CONTROL_COLS: usize = 16;
 pub const PITCH_CONTROL_ROWS: usize = 12;
@@ -48,7 +65,31 @@ pub const PITCH_CONTROL_BALL_SPEED: f32 = 20.0; // m/s — for free-ball traject
 pub const PITCH_CONTROL_STEEPNESS: f32 = 0.5; // logistic steepness (k)
 pub const PITCH_CONTROL_POSSESSION_RADIUS: f32 = 1.5; // m — within this radius, ball is "possessed"
 
-/// Phase 2 resource: pitch control grid. `cells[row][col]` stores the
+/// Convert a grid index or dimension to `f32`.
+///
+/// Grid sizes are tiny (16 × 12), far below 2^24, so the conversion is exact.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "grid indices/dimensions are far below 2^24, exactly representable in f32"
+)]
+const fn usize_to_f32(n: usize) -> f32 {
+    n as f32
+}
+
+/// Map a world coordinate onto a grid index along one axis, clamped to the grid.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "value is clamped to [0, count - 1] before the cast, so it is non-negative and in range"
+)]
+fn cell_index(coord: f32, extent: f32, count: usize) -> usize {
+    let scaled = (coord / extent) * usize_to_f32(count);
+    scaled.clamp(0.0, usize_to_f32(count.saturating_sub(1))) as usize
+}
+
+/// Phase 2 resource: pitch control grid.
+///
+/// `cells[row][col]` stores the
 /// probability P ∈ [0, 1] that the attacking side wins the race to that
 /// cell. Rows index the y-axis (north-south); columns index the x-axis
 /// (east-west). Pitch is `width × length = 105 × 68` (standard).
@@ -64,12 +105,13 @@ pub struct PitchControlGrid {
 impl PitchControlGrid {
     /// Standard 16 × 12 grid over a 105 m × 68 m pitch. `cell_width = 105/16`
     /// ≈ 6.5625 m and `cell_height = 68/12` ≈ 5.6667 m.
+    #[must_use]
     pub fn build_standard() -> Self {
         let pitch = PitchDimensions::standard();
         let cols = PITCH_CONTROL_COLS;
         let rows = PITCH_CONTROL_ROWS;
-        let cell_width = pitch.width / cols as f32;
-        let cell_height = pitch.length / rows as f32;
+        let cell_width = pitch.width / usize_to_f32(cols);
+        let cell_height = pitch.length / usize_to_f32(rows);
         let cells = vec![vec![0.5_f32; cols]; rows];
         Self {
             cells,
@@ -80,7 +122,7 @@ impl PitchControlGrid {
         }
     }
 
-    /// P_control(x, y) = 1 / (1 + exp(-k * (t_def - t_att))) where t is the
+    /// `P_control(x`, y) = 1 / (1 + exp(-k * (`t_def` - `t_att`))) where t is the
     /// minimum time-of-arrival across the supplied set. Larger values
     /// indicate the attacker can reach the cell first.
     ///
@@ -99,7 +141,7 @@ impl PitchControlGrid {
             .map(|(pos, speed)| {
                 let dx = pos.x - x;
                 let dy = pos.y - y;
-                (dx * dx + dy * dy).sqrt() / *speed
+                dx.hypot(dy) / *speed
             })
             .fold(f32::INFINITY, f32::min);
         let t_def = defenders
@@ -107,7 +149,7 @@ impl PitchControlGrid {
             .map(|(pos, speed)| {
                 let dx = pos.x - x;
                 let dy = pos.y - y;
-                (dx * dx + dy * dy).sqrt() / *speed
+                dx.hypot(dy) / *speed
             })
             .fold(f32::INFINITY, f32::min);
         let diff = t_def - t_att;
@@ -117,17 +159,18 @@ impl PitchControlGrid {
     /// Look up the cached control value at world coordinates `(x, y)` by
     /// mapping them onto grid indices. Out-of-bounds coordinates are
     /// clamped to the nearest cell.
+    #[must_use]
     pub fn control_at(&self, x: f32, y: f32) -> f32 {
         let pitch = PitchDimensions::standard();
-        let cx = ((x / pitch.width) * self.cols as f32).clamp(0.0, (self.cols - 1) as f32) as usize;
-        let cy =
-            ((y / pitch.length) * self.rows as f32).clamp(0.0, (self.rows - 1) as f32) as usize;
+        let cx = cell_index(x, pitch.width, self.cols);
+        let cy = cell_index(y, pitch.length, self.rows);
         self.cells[cy][cx]
     }
 }
 
-/// Phase 2 system: recompute the pitch control grid. Runs every tick
-/// (cheap: 16 × 12 = 192 cell evaluations). Reads world state (players +
+/// Phase 2 system: recompute the pitch control grid.
+///
+/// Runs every tick (cheap: 16 × 12 = 192 cell evaluations). Reads world state (players +
 /// ball) and writes the `PitchControlGrid` resource. Does NOT mutate any
 /// component, so it is safe to run before decision/execution systems.
 ///
@@ -136,7 +179,10 @@ impl PitchControlGrid {
 /// don't conflict with this system's exclusive access.
 ///
 /// Logic per spec §3:
-/// 1. Find all home-team and away-team players via `Player.team_id`.
+/// 1. Partition players by team via `Player.team_id` (still on the Player
+///    component after the Phase B ECS migration); pull each player's world
+///    position from the `Position` component (no longer a field of
+///    `Player`).
 /// 2. Identify the ball "possessor": the player within 1.5 m of the ball.
 /// 3. If possessed: attacker = possessor's team (top-3 by distance to ball),
 ///    defender = opposing team (top-3 by distance to ball).
@@ -153,11 +199,11 @@ pub fn pitch_control_system(world: &mut World) {
     // Find ball position by iterating entities.
     let mut ball_pos_opt: Option<Vec2> = None;
     for entity in world.iter_entities() {
-        if entity.get::<sim_components::Ball>().is_some() {
-            if let Some(p) = entity.get::<Position>() {
-                ball_pos_opt = Some(p.0);
-                break;
-            }
+        if entity.get::<sim_components::Ball>().is_some()
+            && let Some(p) = entity.get::<Position>()
+        {
+            ball_pos_opt = Some(p.0);
+            break;
         }
     }
 
@@ -179,8 +225,8 @@ pub fn pitch_control_system(world: &mut World) {
     let sort_by_ball = |set: &mut Vec<(Vec2, f32)>, bp: Option<Vec2>| {
         if let Some(bp) = bp {
             set.sort_by(|(a, _), (b, _)| {
-                let da = (a.x - bp.x) * (a.x - bp.x) + (a.y - bp.y) * (a.y - bp.y);
-                let db = (b.x - bp.x) * (b.x - bp.x) + (b.y - bp.y) * (b.y - bp.y);
+                let da = (a.y - bp.y).mul_add(a.y - bp.y, (a.x - bp.x) * (a.x - bp.x));
+                let db = (b.y - bp.y).mul_add(b.y - bp.y, (b.x - bp.x) * (b.x - bp.x));
                 da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
             });
         }
@@ -198,14 +244,13 @@ pub fn pitch_control_system(world: &mut World) {
     // (instead of taking `ResMut<PitchControlGrid>` directly) so that other
     // systems on the same schedule can take `Res<PitchControlGrid>` without
     // a conflict error.
-    let mut grid = match world.get_resource_mut::<PitchControlGrid>() {
-        Some(g) => g,
-        None => return,
+    let Some(mut grid) = world.get_resource_mut::<PitchControlGrid>() else {
+        return;
     };
     for row in 0..grid.rows {
         for col in 0..grid.cols {
-            let x = (col as f32 + 0.5) * grid.cell_width;
-            let y = (row as f32 + 0.5) * grid.cell_height;
+            let x = (usize_to_f32(col) + 0.5) * grid.cell_width;
+            let y = (usize_to_f32(row) + 0.5) * grid.cell_height;
             grid.cells[row][col] =
                 grid.cell_score(x, y, &attackers, &defenders, PITCH_CONTROL_STEEPNESS);
         }
@@ -216,7 +261,7 @@ pub fn ball_physics_system(
     pitch: Res<PitchDimensions>,
     mut query: Query<(&mut Position, &mut Velocity, &mut Ball)>,
 ) {
-    for (mut pos, mut vel, mut ball) in query.iter_mut() {
+    for (mut pos, mut vel, mut ball) in &mut query {
         // Apply velocity
         pos.0 += vel.0;
 
@@ -254,11 +299,26 @@ pub fn ball_physics_system(
     }
 }
 
+/// Apply any pending kick velocity to the ball's velocity.
+///
+/// Runs at the **start** of the Physics set, before `ball_physics_system`,
+/// so the kick is integrated into position on the same tick the kick is
+/// decided. The ordering also dodges the static query conflict with
+/// `kick_execution_system` (Execution set) that would otherwise arise from
+/// two systems both holding `&mut Velocity, &mut Ball` on the ball entity.
+pub fn apply_kick_velocity_system(mut query: Query<(&mut Velocity, &mut Ball)>) {
+    for (mut vel, mut ball) in &mut query {
+        if let Some(kick_vel) = ball.kick_velocity.take() {
+            vel.0 += kick_vel;
+        }
+    }
+}
+
 pub fn player_movement_system(
     pitch: Res<PitchDimensions>,
     mut query: Query<(&mut Position, &mut Velocity)>,
 ) {
-    for (mut pos, mut vel) in query.iter_mut() {
+    for (mut pos, mut vel) in &mut query {
         // Clamp velocity to max speed
         vel.0 = vel.0.clamp_length(MAX_PLAYER_SPEED);
 

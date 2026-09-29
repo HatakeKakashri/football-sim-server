@@ -84,11 +84,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if full_match {
                 loop {
                     sim.tick();
-                    if let Some(m) = sim.world.get::<sim_components::Match>(match_entity) {
-                        if m.state == sim_components::MatchState::FullTime {
-                            println!("[Tick {:06}] FullTime reached", sim.tick);
-                            break;
-                        }
+                    if let Some(m) = sim.world.get::<sim_components::Match>(match_entity)
+                        && m.state == sim_components::MatchState::FullTime
+                    {
+                        println!("[Tick {:06}] FullTime reached", sim.tick);
+                        break;
                     }
                     // Safety net
                     if sim.tick > 400_000 {
@@ -99,10 +99,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 for _ in 0..ticks {
                     sim.tick();
-                    if let Some(m) = sim.world.get::<sim_components::Match>(match_entity) {
-                        if m.state == sim_components::MatchState::FullTime {
-                            break;
-                        }
+                    if let Some(m) = sim.world.get::<sim_components::Match>(match_entity)
+                        && m.state == sim_components::MatchState::FullTime
+                    {
+                        break;
                     }
                 }
             }

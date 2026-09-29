@@ -19,22 +19,34 @@ pub const HALFTIME_BREAK_TICKS: u64 = 18;
 pub const TOTAL_MATCH_TICKS: u64 = 2 * HALF_LENGTH_TICKS + HALFTIME_BREAK_TICKS;
 
 /// Convert ticks to seconds (floor division).
-pub fn ticks_to_secs(ticks: u64) -> u64 {
+#[must_use]
+pub const fn ticks_to_secs(ticks: u64) -> u64 {
     ticks / TICKS_PER_SECOND
 }
 
 /// Convert ticks to seconds as f32.
+#[must_use]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "f32 is exact up to 2^24 ticks (~77 h at 60 Hz); a match is ~324k ticks"
+)]
 pub fn ticks_to_secs_f32(ticks: u64) -> f32 {
     ticks as f32 / TICKS_PER_SECOND as f32
 }
 
 /// Convert ticks to minutes as f32.
+#[must_use]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "SECONDS_PER_MINUTE is 60, exactly representable in f32"
+)]
 pub fn ticks_to_mins_f32(ticks: u64) -> f32 {
     ticks_to_secs_f32(ticks) / SECONDS_PER_MINUTE as f32
 }
 
 /// Convert seconds to ticks.
-pub fn secs_to_ticks(secs: u64) -> u64 {
+#[must_use]
+pub const fn secs_to_ticks(secs: u64) -> u64 {
     secs * TICKS_PER_SECOND
 }
 
@@ -42,7 +54,8 @@ pub fn secs_to_ticks(secs: u64) -> u64 {
 ///
 /// The `elapsed_ticks` field resets to 0 at the start of each half.
 /// This function returns the cumulative elapsed time across both halves.
-pub fn total_match_elapsed_ticks(clock: &MatchClock) -> u64 {
+#[must_use]
+pub const fn total_match_elapsed_ticks(clock: &MatchClock) -> u64 {
     if clock.half == 1 {
         clock.elapsed_ticks
     } else {
@@ -53,18 +66,21 @@ pub fn total_match_elapsed_ticks(clock: &MatchClock) -> u64 {
 /// Compute match time remaining in ticks.
 ///
 /// Returns the total match ticks remaining (including added time for current half).
-pub fn match_time_remaining_ticks(clock: &MatchClock) -> u64 {
+#[must_use]
+pub const fn match_time_remaining_ticks(clock: &MatchClock) -> u64 {
     let total_elapsed = total_match_elapsed_ticks(clock);
     let effective_match_ticks = 2 * HALF_LENGTH_TICKS + clock.added_time_ticks;
     effective_match_ticks.saturating_sub(total_elapsed)
 }
 
 /// Compute match time remaining in seconds.
+#[must_use]
 pub fn match_time_remaining_secs(clock: &MatchClock) -> f32 {
     ticks_to_secs_f32(match_time_remaining_ticks(clock))
 }
 
 /// Compute match time remaining in minutes as f32.
+#[must_use]
 pub fn match_time_remaining_mins(clock: &MatchClock) -> f32 {
     ticks_to_mins_f32(match_time_remaining_ticks(clock))
 }
@@ -72,39 +88,46 @@ pub fn match_time_remaining_mins(clock: &MatchClock) -> f32 {
 /// Compute half time remaining in ticks.
 ///
 /// Returns the current half's remaining ticks (including added time).
-pub fn half_time_remaining_ticks(clock: &MatchClock) -> u64 {
+#[must_use]
+pub const fn half_time_remaining_ticks(clock: &MatchClock) -> u64 {
     let half_elapsed = clock.elapsed_ticks;
     let half_total_with_added = HALF_LENGTH_TICKS + clock.added_time_ticks;
     half_total_with_added.saturating_sub(half_elapsed)
 }
 
 /// Compute half time remaining in seconds.
+#[must_use]
 pub fn half_time_remaining_secs(clock: &MatchClock) -> f32 {
     ticks_to_secs_f32(half_time_remaining_ticks(clock))
 }
 
 /// Compute half time remaining in minutes as f32.
+#[must_use]
 pub fn half_time_remaining_mins(clock: &MatchClock) -> f32 {
     ticks_to_mins_f32(half_time_remaining_ticks(clock))
 }
 
 /// Check if the match clock is in the first half.
-pub fn is_first_half(clock: &MatchClock) -> bool {
+#[must_use]
+pub const fn is_first_half(clock: &MatchClock) -> bool {
     clock.half == 1
 }
 
 /// Check if the match clock is in the second half.
-pub fn is_second_half(clock: &MatchClock) -> bool {
+#[must_use]
+pub const fn is_second_half(clock: &MatchClock) -> bool {
     clock.half >= 2
 }
 
 /// Check if the match has reached half-time (first half ended, not yet second half kickoff).
-pub fn is_half_time(clock: &MatchClock) -> bool {
+#[must_use]
+pub const fn is_half_time(clock: &MatchClock) -> bool {
     clock.half == 1 && clock.elapsed_ticks >= HALF_LENGTH_TICKS + clock.added_time_ticks
 }
 
 /// Check if the match has reached full-time.
-pub fn is_full_time(clock: &MatchClock) -> bool {
+#[must_use]
+pub const fn is_full_time(clock: &MatchClock) -> bool {
     clock.half >= 2 && clock.elapsed_ticks >= HALF_LENGTH_TICKS + clock.added_time_ticks
 }
 
@@ -116,7 +139,10 @@ mod tests {
     fn test_constants() {
         assert_eq!(TICKS_PER_SECOND, 60);
         assert_eq!(HALF_LENGTH_TICKS, 45 * 60 * 60); // 162,000
-        assert_eq!(TOTAL_MATCH_TICKS, 2 * HALF_LENGTH_TICKS + HALFTIME_BREAK_TICKS);
+        assert_eq!(
+            TOTAL_MATCH_TICKS,
+            2 * HALF_LENGTH_TICKS + HALFTIME_BREAK_TICKS
+        );
     }
 
     #[test]
@@ -150,7 +176,10 @@ mod tests {
             added_time_ticks: 0,
             is_running: true,
         };
-        assert_eq!(total_match_elapsed_ticks(&clock), HALF_LENGTH_TICKS + 20 * 60 * 60);
+        assert_eq!(
+            total_match_elapsed_ticks(&clock),
+            HALF_LENGTH_TICKS + 20 * 60 * 60
+        );
     }
 
     #[test]
@@ -171,7 +200,10 @@ mod tests {
             added_time_ticks: 0,
             is_running: true,
         };
-        assert_eq!(match_time_remaining_ticks(&clock), 2 * HALF_LENGTH_TICKS - 30 * 60 * 60);
+        assert_eq!(
+            match_time_remaining_ticks(&clock),
+            2 * HALF_LENGTH_TICKS - 30 * 60 * 60
+        );
 
         // 20 minutes into second half
         let clock = MatchClock {
@@ -180,7 +212,10 @@ mod tests {
             added_time_ticks: 0,
             is_running: true,
         };
-        assert_eq!(match_time_remaining_ticks(&clock), HALF_LENGTH_TICKS - 20 * 60 * 60);
+        assert_eq!(
+            match_time_remaining_ticks(&clock),
+            HALF_LENGTH_TICKS - 20 * 60 * 60
+        );
 
         // With added time in first half
         let clock = MatchClock {
@@ -189,7 +224,10 @@ mod tests {
             added_time_ticks: 3 * 60 * 60,
             is_running: true,
         };
-        assert_eq!(match_time_remaining_ticks(&clock), HALF_LENGTH_TICKS + 3 * 60 * 60);
+        assert_eq!(
+            match_time_remaining_ticks(&clock),
+            HALF_LENGTH_TICKS + 3 * 60 * 60
+        );
     }
 
     #[test]
@@ -378,7 +416,10 @@ mod tests {
             is_running: true,
         };
         // Match time remaining = 90 min + 2 min = 92 min
-        assert_eq!(match_time_remaining_ticks(&clock), HALF_LENGTH_TICKS + 2 * 60 * 60);
+        assert_eq!(
+            match_time_remaining_ticks(&clock),
+            HALF_LENGTH_TICKS + 2 * 60 * 60
+        );
 
         // Second half with 4 min added time, at 45 min
         let clock = MatchClock {
@@ -519,6 +560,9 @@ mod tests {
             is_running: true,
         };
         // Total elapsed = 45 min (half 1) + 15 min (half 2) = 60 min
-        assert_eq!(total_match_elapsed_ticks(&clock), HALF_LENGTH_TICKS + 15 * 60 * 60);
+        assert_eq!(
+            total_match_elapsed_ticks(&clock),
+            HALF_LENGTH_TICKS + 15 * 60 * 60
+        );
     }
 }

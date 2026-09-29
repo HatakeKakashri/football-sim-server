@@ -1,7 +1,7 @@
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_components::{
-    Ball, BallState, CardColor, ManagerCommand, Match, MatchClock, Player, Role, TeamId,
+    Ball, BallState, CardColor, ManagerCommand, Match, MatchClock, Player, Position, Role, TeamId,
 };
 use sim_core::Simulation;
 
@@ -35,7 +35,8 @@ impl Default for SnapshotConfig {
 }
 
 impl ReplaySession {
-    pub fn new(seed: u64) -> Self {
+    #[must_use]
+    pub const fn new(seed: u64) -> Self {
         Self {
             seed,
             commands: Vec::new(),
@@ -202,16 +203,20 @@ pub fn create_snapshot_from_simulation(
 
     let mut ball_position = [0.0f32; 2];
     for entity in simulation.world.iter_entities() {
-        if let Some(ball) = entity.get::<Ball>() {
-            ball_position = [ball.position.x, ball.position.y];
+        if let Some(_ball) = entity.get::<Ball>() {
+            if let Some(pos) = entity.get::<Position>() {
+                ball_position = [pos.0.x, pos.0.y];
+            }
             break;
         }
     }
 
     let mut player_positions = Vec::new();
     for entity in simulation.world.iter_entities() {
-        if let Some(player) = entity.get::<Player>() {
-            player_positions.push(([player.position.x, player.position.y], player.team_id));
+        if let Some(player) = entity.get::<Player>()
+            && let Some(pos) = entity.get::<Position>()
+        {
+            player_positions.push(([pos.0.x, pos.0.y], player.team_id));
         }
     }
 

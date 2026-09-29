@@ -162,4 +162,26 @@ mod tests {
         assert_eq!(Score::new(0.5), Score::new(0.5));
         assert_ne!(Score::new(0.5), Score::new(0.4));
     }
+
+    #[test]
+    fn test_linear_response_handles_max_eq_min() {
+        // Phase E PR 2 regression: before the fix, the Linear arm clamped
+        // `(max - min)` (the wrong operand) so `max == min` produced NaN/inf.
+        // After the fix, the denominator is `(max - min).max(f32::EPSILON)`
+        // and the result is clamped via `Score::new`, so a degenerate
+        // `max == min` linear curve returns `Score::ZERO` instead of NaN.
+        let degenerate = ResponseCurve::Linear { min: 0.5, max: 0.5 };
+        let score = degenerate.evaluate(0.5);
+        assert!(!score.raw().is_nan(), "Linear with max==min returned NaN");
+        assert_eq!(score, Score::ZERO);
+    }
+
+    #[test]
+    fn test_linear_response_clamped_at_unit_interval() {
+        // Linear curve that overshoots its bounds should still return a
+        // valid Score in [0,1] rather than raw f32.
+        let curve = ResponseCurve::Linear { min: 0.0, max: 1.0 };
+        assert_eq!(curve.evaluate(2.0), Score::ONE);
+        assert_eq!(curve.evaluate(-2.0), Score::ZERO);
+    }
 }

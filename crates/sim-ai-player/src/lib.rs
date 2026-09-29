@@ -94,7 +94,7 @@ impl Consideration {
     }
 
     #[must_use]
-    pub fn curve(&self) -> ResponseCurve {
+    pub const fn curve(&self) -> &ResponseCurve {
         match self {
             Self::DistanceToTarget { curve, .. }
             | Self::DistanceToBall { curve, .. }
@@ -113,7 +113,7 @@ impl Consideration {
             | Self::DistanceToPress { curve, .. }
             | Self::SpaceAhead { curve, .. }
             | Self::TeammateBall { curve, .. }
-            | Self::FormationDiscipline { curve, .. } => curve.clone(),
+            | Self::FormationDiscipline { curve, .. } => curve,
         }
     }
 
@@ -131,6 +131,10 @@ impl Consideration {
     /// to use the split `Intent(MovementIntent | ActionIntent)` shape.
     /// For PR 3 they operate on the flat `Intent` enum.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "flat name -> input lookup table; splitting it would only scatter the mapping"
+    )]
     pub fn raw_input(&self, ctx: &ConsiderationContext) -> f32 {
         match *self {
             Self::DistanceToTarget { .. } => {

@@ -374,9 +374,11 @@ pub fn offside_detection_system(
         let closer_than_defender = dir.closer_than(pos.0.x, second_last_defender_x);
 
         if closer_than_ball && closer_than_defender && should_log {
-            println!(
+            tracing::debug!(
                 "OFFSIDE position detected: player at ({:.1}, {:.1}), toucher team {}",
-                pos.0.x, pos.0.y, toucher_team_id
+                pos.0.x,
+                pos.0.y,
+                toucher_team_id
             );
         }
     }

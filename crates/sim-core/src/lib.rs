@@ -228,7 +228,7 @@ impl Simulation {
     /// reached at different ticks must hash equal, which is what makes
     /// replay divergence detection meaningful.
     pub fn get_state_hash(&self) -> u64 {
-        use sim_components::{BallMarker, Match, Player, Position, Skill, Stamina, Team, Velocity};
+        use sim_components::{Match, Player, Position, Skill, Stamina, Team, Velocity};
 
         fn mix(h: &mut u64, v: u64) {
             // FNV-1a: XOR one byte at a time (little-endian) then multiply.

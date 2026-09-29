@@ -1,7 +1,7 @@
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_components::{
-    Ball, BallState, CardColor, ManagerCommand, Match, MatchClock, Player, Position, Role, TeamId,
+    BallState, CardColor, ManagerCommand, Match, MatchClock, Player, Position, Role, TeamId,
 };
 use sim_core::Simulation;
 

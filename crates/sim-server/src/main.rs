@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     // Safety net
                     if sim.tick > 400_000 {
-                        eprintln!("Warning: Exceeded 400k ticks without reaching FullTime");
+                        tracing::warn!("Exceeded 400k ticks without reaching FullTime");
                         break;
                     }
                 }
@@ -162,7 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let (cmd_tick, cmd) = &sorted_commands[next_command_index];
                     if *cmd_tick == tick {
                         if let Err(e) = sim.apply_command(match_entity, cmd.clone()) {
-                            eprintln!("Warning: command at tick {tick} failed: {e}");
+                            tracing::warn!("command at tick {tick} failed: {e}");
                         }
                         next_command_index += 1;
                     } else {

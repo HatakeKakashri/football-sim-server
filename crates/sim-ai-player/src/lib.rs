@@ -1,8 +1,8 @@
 use bevy_ecs::prelude::*;
 use sim_ai_core::{ResponseCurve, geometric_mean};
 use sim_components::{
-    Ball, BallState, Intent, MatchClock, PerceptionSnapshot, Player, Position, RoleComponent,
-    Skill, Stamina, TeamIdComponent, Velocity, time,
+    Intent, MatchClock, PerceptionSnapshot, Player, Position, RoleComponent, Skill, Stamina,
+    TeamIdComponent, Velocity, time,
 };
 use sim_math::Vec2;
 use sim_physics::{PitchControlGrid, SimRng};

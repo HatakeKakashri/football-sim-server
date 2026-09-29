@@ -1,5 +1,5 @@
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallMarker, Player, Position, Velocity};
+use sim_components::{Player, Position, Velocity};
 use sim_math::{PitchDimensions, Vec2};
 
 /// Phase 2: RNG resource wrapper for stochastic gameplay outcomes.
@@ -329,7 +329,9 @@ pub fn player_movement_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim_components::{Ball, Player, Position, RoleComponent, TeamId, Velocity};
+    use sim_components::{
+        Ball, BallMarker, Player, Position, RoleComponent, TeamId, Velocity,
+    };
 
     /// The `pitch_control_system` (Phase 2 ECS-shape polish: §2.5) must
     /// succeed when invoked as a normal Bevy system (not via

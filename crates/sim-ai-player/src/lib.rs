@@ -40,6 +40,95 @@ pub struct UtilityBrain {
     pub hysteresis: f32,
 }
 
+/// One consideration in a player's utility brain. Each variant carries its
+/// own `weight` and `ResponseCurve`. The dispatcher (`raw_input`) is
+/// exhaustive: adding a new variant forces a match-arm update at compile
+/// time, so a brain template that references a typo'd consideration fails
+/// at compile time instead of silently scoring 0.5 (the old string-dispatch
+/// behaviour).
+#[derive(Debug, Clone)]
+pub enum Consideration {
+    DistanceToTarget { weight: f32, curve: ResponseCurve },
+    DistanceToBall { weight: f32, curve: ResponseCurve },
+    Stamina { weight: f32, curve: ResponseCurve },
+    PitchControlAtBall { weight: f32, curve: ResponseCurve },
+    PassAngleClear { weight: f32, curve: ResponseCurve },
+    TeammateDistance { weight: f32, curve: ResponseCurve },
+    TeammateSpace { weight: f32, curve: ResponseCurve },
+    DistanceToGoal { weight: f32, curve: ResponseCurve },
+    GoalAngle { weight: f32, curve: ResponseCurve },
+    DefenderPressure { weight: f32, curve: ResponseCurve },
+    DistanceToOpponent { weight: f32, curve: ResponseCurve },
+    SkillDiff { weight: f32, curve: ResponseCurve },
+    DistanceToMarked { weight: f32, curve: ResponseCurve },
+    DefensivePosition { weight: f32, curve: ResponseCurve },
+    DistanceToPress { weight: f32, curve: ResponseCurve },
+    SpaceAhead { weight: f32, curve: ResponseCurve },
+    TeammateBall { weight: f32, curve: ResponseCurve },
+    FormationDiscipline { weight: f32, curve: ResponseCurve },
+}
+
+impl Consideration {
+    #[must_use]
+    pub fn weight(&self) -> f32 {
+        match self {
+            Self::DistanceToTarget { weight, .. }
+            | Self::DistanceToBall { weight, .. }
+            | Self::Stamina { weight, .. }
+            | Self::PitchControlAtBall { weight, .. }
+            | Self::PassAngleClear { weight, .. }
+            | Self::TeammateDistance { weight, .. }
+            | Self::TeammateSpace { weight, .. }
+            | Self::DistanceToGoal { weight, .. }
+            | Self::GoalAngle { weight, .. }
+            | Self::DefenderPressure { weight, .. }
+            | Self::DistanceToOpponent { weight, .. }
+            | Self::SkillDiff { weight, .. }
+            | Self::DistanceToMarked { weight, .. }
+            | Self::DefensivePosition { weight, .. }
+            | Self::DistanceToPress { weight, .. }
+            | Self::SpaceAhead { weight, .. }
+            | Self::TeammateBall { weight, .. }
+            | Self::FormationDiscipline { weight, .. } => *weight,
+        }
+    }
+
+    #[must_use]
+    pub fn curve(&self) -> ResponseCurve {
+        match self {
+            Self::DistanceToTarget { curve, .. }
+            | Self::DistanceToBall { curve, .. }
+            | Self::Stamina { curve, .. }
+            | Self::PitchControlAtBall { curve, .. }
+            | Self::PassAngleClear { curve, .. }
+            | Self::TeammateDistance { curve, .. }
+            | Self::TeammateSpace { curve, .. }
+            | Self::DistanceToGoal { curve, .. }
+            | Self::GoalAngle { curve, .. }
+            | Self::DefenderPressure { curve, .. }
+            | Self::DistanceToOpponent { curve, .. }
+            | Self::SkillDiff { curve, .. }
+            | Self::DistanceToMarked { curve, .. }
+            | Self::DefensivePosition { curve, .. }
+            | Self::DistanceToPress { curve, .. }
+            | Self::SpaceAhead { curve, .. }
+            | Self::TeammateBall { curve, .. }
+            | Self::FormationDiscipline { curve, .. } => curve.clone(),
+        }
+    }
+}
+
+/// Bundles the data the dispatcher would otherwise take as five
+/// parameters. Held behind a reference so callers can keep their
+/// perception snapshots on the stack.
+pub struct ConsiderationContext<'a> {
+    pub perception: &'a PerceptionSnapshot,
+    pub intent: &'a Intent,
+    pub stamina: f32,
+    pub skill: f32,
+    pub grid: Option<&'a PitchControlGrid>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PlayerAction {
     pub intent: Intent,
@@ -249,10 +338,7 @@ pub const fn consideration_scoring_system(_query: Query<(&mut Player, &Stamina, 
 /// the 6 slots without any team-partition bias (spec §10 "individual
 /// players can still be time-sliced … that staggering has no
 /// team-level bias").
-#[allow(
-    clippy::type_complexity,
-    reason = "Bevy Query signature"
-)]
+#[allow(clippy::type_complexity, reason = "Bevy Query signature")]
 pub fn player_decision_system(
     mut query: Query<(
         Entity,
@@ -271,10 +357,7 @@ pub fn player_decision_system(
     // Snapshot the clock once per system run (Bevy lets us borrow the
     // Query here even though `query` is a separate Query — disjoint
     // access on different component sets).
-    let elapsed_ticks = clock_q
-        .iter()
-        .next()
-        .map_or(0, |c| c.elapsed_ticks);
+    let elapsed_ticks = clock_q.iter().next().map_or(0, |c| c.elapsed_ticks);
     let phase_slot = elapsed_ticks % DECISION_CADENCE_TICKS;
 
     for (entity, mut player, utility_brain, perception, stamina, skill, _role, _team_id) in
@@ -838,7 +921,11 @@ mod tests {
     /// incrementing the match clock each iteration. Every player is
     /// guaranteed at least one evaluation regardless of which slot
     /// their entity id hashes into. Returns the final `elapsed_ticks`.
-    fn run_one_cadence_window(world: &mut World, schedule: &mut Schedule, match_entity: Entity) -> u64 {
+    fn run_one_cadence_window(
+        world: &mut World,
+        schedule: &mut Schedule,
+        match_entity: Entity,
+    ) -> u64 {
         for _ in 0..DECISION_CADENCE_TICKS {
             if let Some(mut clock) = world
                 .entity_mut(match_entity)
@@ -1331,13 +1418,9 @@ mod tests {
                 world.entity_mut(e).insert(Position(Vec2::new(50.0, 34.0)));
                 world.entity_mut(e).insert(Velocity(Vec2::zero()));
                 world.entity_mut(e).insert(Stamina(1.0));
-                world
-                    .entity_mut(e)
-                    .insert(RoleComponent(Role::Striker));
+                world.entity_mut(e).insert(RoleComponent(Role::Striker));
                 world.entity_mut(e).insert(Skill(0.7));
-                world
-                    .entity_mut(e)
-                    .insert(TeamIdComponent(TeamId(team)));
+                world.entity_mut(e).insert(TeamIdComponent(TeamId(team)));
                 let brain = UtilityBrain {
                     actions: vec![PlayerAction {
                         intent: sim_components::Intent::HoldPosition,
@@ -1350,20 +1433,22 @@ mod tests {
                     hysteresis: 0.1,
                 };
                 world.entity_mut(e).insert(brain);
-                world.entity_mut(e).insert(sim_components::PerceptionSnapshot {
-                    self_position: Vec2::new(50.0, 34.0),
-                    nearby_teammates: smallvec::SmallVec::new(),
-                    nearby_opponents: smallvec::SmallVec::new(),
-                    ball_position: Vec2::new(52.5, 34.0),
-                    ball_state: sim_components::BallState::Free,
-                    goal_position: Vec2::new(105.0, 34.0),
-                    pitch_bounds: sim_components::PitchBounds {
-                        distance_to_left: 50.0,
-                        distance_to_right: 55.0,
-                        distance_to_top: 34.0,
-                        distance_to_bottom: 34.0,
-                    },
-                });
+                world
+                    .entity_mut(e)
+                    .insert(sim_components::PerceptionSnapshot {
+                        self_position: Vec2::new(50.0, 34.0),
+                        nearby_teammates: smallvec::SmallVec::new(),
+                        nearby_opponents: smallvec::SmallVec::new(),
+                        ball_position: Vec2::new(52.5, 34.0),
+                        ball_state: sim_components::BallState::Free,
+                        goal_position: Vec2::new(105.0, 34.0),
+                        pitch_bounds: sim_components::PitchBounds {
+                            distance_to_left: 50.0,
+                            distance_to_right: 55.0,
+                            distance_to_top: 34.0,
+                            distance_to_bottom: 34.0,
+                        },
+                    });
                 player_entities.push(e);
             }
         }
@@ -1471,5 +1556,43 @@ mod tests {
             Entity::PLACEHOLDER,
             "Entity::PLACEHOLDER must not leak into production perception snapshots"
         );
+    }
+
+    /// PR 3: the new `Consideration` enum must replace the string-dispatch
+    /// `compute_consideration_input`. `DistanceToTarget` falls back to
+    /// distance-to-ball when the intent has no target (e.g. `HoldPosition`),
+    /// so we feed a snapshot where the player is 2.5m from the ball. The
+    /// raw input is `30 - 2.5 = 27.5`, which the brief asserts is in
+    /// `(25, 30)`.
+    #[test]
+    fn test_consideration_distance_to_target() {
+        let perception = sim_components::PerceptionSnapshot {
+            self_position: Vec2::new(50.0, 34.0),
+            nearby_teammates: Default::default(),
+            nearby_opponents: Default::default(),
+            ball_position: Vec2::new(52.5, 34.0),
+            ball_state: sim_components::BallState::Free,
+            goal_position: Vec2::new(105.0, 34.0),
+            pitch_bounds: sim_components::PitchBounds {
+                distance_to_left: 50.0,
+                distance_to_right: 55.0,
+                distance_to_top: 34.0,
+                distance_to_bottom: 34.0,
+            },
+        };
+        let intent = sim_components::Intent::HoldPosition;
+        let c = Consideration::DistanceToTarget {
+            weight: 1.0,
+            curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
+        };
+        let ctx = ConsiderationContext {
+            perception: &perception,
+            intent: &intent,
+            stamina: 1.0,
+            skill: 0.7,
+            grid: None,
+        };
+        let raw = c.raw_input(&ctx);
+        assert!(raw > 25.0 && raw < 30.0, "raw input was {raw}");
     }
 }

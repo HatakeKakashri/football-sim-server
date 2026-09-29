@@ -116,6 +116,180 @@ impl Consideration {
             | Self::FormationDiscipline { curve, .. } => curve.clone(),
         }
     }
+
+    /// Compute the raw, unnormalized input for this consideration. The
+    /// returned value is fed into `self.curve()` by the caller (typically
+    /// `player_decision_system`) which then multiplies by the weight.
+    ///
+    /// `ctx.grid` is `None` when the perception snapshot was built
+    /// without a pitch-control grid; the relevant consideration falls
+    /// back to a neutral value in that case. Per arm the semantics
+    /// mirror the original `compute_consideration_input` string dispatch
+    /// 1:1.
+    ///
+    /// PR 4 will rewrite the `DistanceToTarget` / `PassAngleClear` arms
+    /// to use the split `Intent(MovementIntent | ActionIntent)` shape.
+    /// For PR 3 they operate on the flat `Intent` enum.
+    #[must_use]
+    pub fn raw_input(&self, ctx: &ConsiderationContext) -> f32 {
+        match *self {
+            Self::DistanceToTarget { .. } => {
+                let d = if let sim_components::Intent::MoveToPosition(target) = ctx.intent {
+                    ctx.perception.self_position.distance(*target)
+                } else {
+                    ctx.perception
+                        .self_position
+                        .distance(ctx.perception.ball_position)
+                };
+                30.0 - d.min(30.0)
+            }
+            Self::DistanceToBall { .. } => ctx
+                .perception
+                .self_position
+                .distance(ctx.perception.ball_position),
+            Self::Stamina { .. } => ctx.stamina,
+            Self::PitchControlAtBall { .. } => ctx.grid.map_or(50.0, |g| {
+                g.control_at(
+                    ctx.perception.ball_position.x,
+                    ctx.perception.ball_position.y,
+                ) * 100.0
+            }),
+            Self::PassAngleClear { .. } => {
+                if matches!(ctx.intent, sim_components::Intent::PassTo) {
+                    let lane_clear = !ctx
+                        .perception
+                        .nearby_opponents
+                        .iter()
+                        .any(|opp| opp.distance < 8.0);
+                    if lane_clear { 1.0 } else { 0.4 }
+                } else {
+                    0.5
+                }
+            }
+            Self::TeammateDistance { .. } => {
+                if ctx.perception.nearby_teammates.is_empty() {
+                    0.0
+                } else {
+                    let avg: f32 = ctx
+                        .perception
+                        .nearby_teammates
+                        .iter()
+                        .map(|t| t.distance)
+                        .sum::<f32>()
+                        / count_to_f32(ctx.perception.nearby_teammates.len());
+                    30.0 - avg.min(30.0)
+                }
+            }
+            Self::TeammateSpace { .. } => {
+                let nearest_opp = ctx
+                    .perception
+                    .nearby_opponents
+                    .iter()
+                    .map(|o| o.distance)
+                    .fold(f32::INFINITY, f32::min);
+                let space_m = if nearest_opp.is_finite() {
+                    nearest_opp
+                } else {
+                    20.0
+                };
+                20.0 - space_m.min(20.0)
+            }
+            Self::DistanceToGoal { .. } => {
+                35.0 - ctx
+                    .perception
+                    .self_position
+                    .distance(ctx.perception.goal_position)
+            }
+            Self::GoalAngle { .. } => {
+                let to_ball = ctx.perception.ball_position - ctx.perception.self_position;
+                let to_goal = ctx.perception.goal_position - ctx.perception.self_position;
+                let dot = to_ball.dot(to_goal);
+                let mags = to_ball.length() * to_goal.length();
+                if mags > 1e-3 {
+                    (dot / mags).clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                }
+            }
+            Self::DefenderPressure { .. } => count_to_f32(
+                ctx.perception
+                    .nearby_opponents
+                    .iter()
+                    .filter(|o| o.distance <= 5.0)
+                    .count(),
+            ),
+            Self::DistanceToOpponent { .. } => {
+                5.0 - ctx
+                    .perception
+                    .nearby_opponents
+                    .iter()
+                    .map(|o| o.distance)
+                    .fold(f32::INFINITY, f32::min)
+                    .min(5.0)
+            }
+            Self::SkillDiff { .. } => (ctx.skill - 0.7).clamp(-1.0, 1.0),
+            Self::DistanceToMarked { .. } => {
+                10.0 - ctx
+                    .perception
+                    .nearby_opponents
+                    .iter()
+                    .map(|o| o.distance)
+                    .fold(f32::INFINITY, f32::min)
+                    .min(10.0)
+            }
+            Self::DefensivePosition { .. } => {
+                let own_goal_x = 0.0_f32;
+                let ball_x = ctx.perception.ball_position.x;
+                let player_x = ctx.perception.self_position.x;
+                if player_x <= ball_x && player_x >= own_goal_x {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Self::DistanceToPress { .. } => {
+                12.0 - ctx
+                    .perception
+                    .nearby_opponents
+                    .iter()
+                    .map(|o| o.distance)
+                    .fold(f32::INFINITY, f32::min)
+                    .min(12.0)
+            }
+            Self::SpaceAhead { .. } => {
+                let forward = ctx.perception.ball_position.x > ctx.perception.self_position.x;
+                let opp_in_front = ctx
+                    .perception
+                    .nearby_opponents
+                    .iter()
+                    .filter(|o| {
+                        if forward {
+                            o.relative_position.x > 0.0
+                        } else {
+                            o.relative_position.x < 0.0
+                        }
+                    })
+                    .map(|o| o.distance)
+                    .fold(f32::INFINITY, f32::min);
+                let d = if opp_in_front.is_finite() {
+                    opp_in_front
+                } else {
+                    15.0
+                };
+                15.0 - d.min(15.0)
+            }
+            Self::TeammateBall { .. } => {
+                let has = ctx.perception.nearby_teammates.iter().any(|t| {
+                    let dist_to_ball = (t.relative_position + ctx.perception.self_position
+                        - ctx.perception.ball_position)
+                        .length();
+                    dist_to_ball < 2.0
+                });
+                if has { 1.0 } else { 0.0 }
+            }
+            Self::FormationDiscipline { .. } => 1.0,
+        }
+    }
 }
 
 /// Bundles the data the dispatcher would otherwise take as five
@@ -132,18 +306,7 @@ pub struct ConsiderationContext<'a> {
 #[derive(Debug, Clone)]
 pub struct PlayerAction {
     pub intent: Intent,
-    pub considerations: Vec<PlayerConsideration>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PlayerConsideration {
-    pub name: String,
-    pub weight: f32,
-    /// Raw, unnormalized value to feed into the curve. Phase 2 decisions
-    /// pre-compute this per-tick from the player's perception snapshot and
-    /// current world state. Storing it on the action lets the decision
-    /// system stay pure (no recomputation of perception during scoring).
-    pub curve: ResponseCurve,
+    pub considerations: Vec<Consideration>,
 }
 
 /// Convert a small count (nearby entities, at most a handful) to `f32`.
@@ -378,18 +541,17 @@ pub fn player_decision_system(
 
             for consideration in &action.considerations {
                 // Compute the raw input for this consideration from the
-                // player's perception + world state. For Phase 2 we only
-                // implement a small, generic set of named considerations;
-                // anything else falls back to a neutral 0.5.
-                let raw = compute_consideration_input(
-                    &consideration.name,
+                // player's perception + world state. The exhaustive enum
+                // replaces the old string-dispatch fallthrough.
+                let ctx = ConsiderationContext {
                     perception,
-                    &action.intent,
-                    stamina.0,
-                    skill.0,
-                    pitch_control.as_deref(),
-                );
-                let score = consideration.curve.evaluate(raw).raw();
+                    intent: &action.intent,
+                    stamina: stamina.0,
+                    skill: skill.0,
+                    grid: pitch_control.as_deref(),
+                };
+                let raw = consideration.raw_input(&ctx);
+                let score = consideration.curve().evaluate(raw).raw();
                 consideration_scores.push(score);
             }
 
@@ -455,209 +617,6 @@ const fn intent_kind(intent: &Intent) -> &'static str {
         Intent::HoldPosition => "HoldPosition",
         Intent::SupportRun => "SupportRun",
         Intent::TrackBack => "TrackBack",
-    }
-}
-
-/// Compute the raw, unnormalized input value for a named consideration.
-/// Phase 2 implements the considerations listed in §4a of the task spec;
-/// any unknown name returns a neutral 0.5 so a poorly-tuned brain still
-/// produces valid scores.
-#[expect(
-    clippy::too_many_lines,
-    reason = "flat name -> input lookup table; splitting it would only scatter the mapping"
-)]
-fn compute_consideration_input(
-    name: &str,
-    perception: &sim_components::PerceptionSnapshot,
-    intent: &Intent,
-    stamina: f32,
-    skill: f32,
-    grid: Option<&PitchControlGrid>,
-) -> f32 {
-    match name {
-        // --- MoveToPosition ---
-        "distance_to_target" => {
-            // Closer to target = higher score. Compute raw distance, then
-            // convert to closeness so the Linear curve rises when nearer.
-            let d = if let Intent::MoveToPosition(target) = intent {
-                perception.self_position.distance(*target)
-            } else {
-                perception.self_position.distance(perception.ball_position)
-            };
-            30.0 - d.min(30.0)
-        }
-
-        // --- ChaseBall ---
-        // distance_to_ball: feed raw metres. The brain uses a *decreasing*
-        // Logistic (negative steepness) so closer = higher score and far
-        // = small but nonzero score.
-        // (`ball_distance` / `self_to_ball` are aliases kept for older brains.)
-        "distance_to_ball" | "ball_distance" | "self_to_ball" => {
-            perception.self_position.distance(perception.ball_position)
-        }
-        "stamina" => stamina,
-        "pitch_control_at_ball" => grid.map_or(50.0, |g| {
-            g.control_at(perception.ball_position.x, perception.ball_position.y) * 100.0
-        }),
-
-        // --- PassTo ---
-        "pass_angle_clear" => {
-            // For Phase 2: 1.0 if no opponent is between player and target,
-            // linearly fading to 0.0 if a defender blocks the lane.
-            if matches!(intent, Intent::PassTo) {
-                let lane_clear = !perception.nearby_opponents.iter().any(|opp| {
-                    let dist = opp.distance;
-                    dist < 8.0
-                });
-                if lane_clear { 1.0 } else { 0.4 }
-            } else {
-                0.5
-            }
-        }
-        "teammate_distance" => {
-            // Closer teammate = higher score. Feed (30 - avg_distance).
-            if perception.nearby_teammates.is_empty() {
-                0.0
-            } else {
-                let avg: f32 = perception
-                    .nearby_teammates
-                    .iter()
-                    .map(|t| t.distance)
-                    .sum::<f32>()
-                    / count_to_f32(perception.nearby_teammates.len());
-                30.0 - avg.min(30.0)
-            }
-        }
-        "teammate_space" => {
-            // More space around the player = higher score. Feed the inverse
-            // of nearest-opponent distance: closer opponent = lower score.
-            let nearest_opp = perception
-                .nearby_opponents
-                .iter()
-                .map(|o| o.distance)
-                .fold(f32::INFINITY, f32::min);
-            let space_m = if nearest_opp.is_finite() {
-                nearest_opp
-            } else {
-                20.0
-            };
-            20.0 - space_m.min(20.0)
-        }
-
-        // --- ShootAtGoal ---
-        "distance_to_goal" => 35.0 - perception.self_position.distance(perception.goal_position),
-        "goal_angle" => {
-            // Cosine of the angle between (player→ball) and (player→goal).
-            // 1.0 = straight at goal, 0.0 = wide.
-            let to_ball = perception.ball_position - perception.self_position;
-            let to_goal = perception.goal_position - perception.self_position;
-            let dot = to_ball.dot(to_goal);
-            let mags = to_ball.length() * to_goal.length();
-            if mags > 1e-3 {
-                (dot / mags).clamp(-1.0, 1.0)
-            } else {
-                0.0
-            }
-        }
-        "defender_pressure" => {
-            // Number of opponents within 5m * 1m penalty per opponent.
-            count_to_f32(
-                perception
-                    .nearby_opponents
-                    .iter()
-                    .filter(|o| o.distance <= 5.0)
-                    .count(),
-            )
-        }
-
-        // --- Tackle ---
-        // Closer opponent = higher score. Feed the inverse so the curve
-        // (which rises monotonically) gets bigger values for closer targets.
-        "distance_to_opponent" => {
-            5.0 - perception
-                .nearby_opponents
-                .iter()
-                .map(|o| o.distance)
-                .fold(f32::INFINITY, f32::min)
-                .min(5.0)
-        }
-        "skill_diff" => {
-            // Player skill minus an average opponent skill (assume 0.7).
-            (skill - 0.7).clamp(-1.0, 1.0)
-        }
-
-        // --- MarkOpponent ---
-        "distance_to_marked" => {
-            10.0 - perception
-                .nearby_opponents
-                .iter()
-                .map(|o| o.distance)
-                .fold(f32::INFINITY, f32::min)
-                .min(10.0)
-        }
-        "defensive_position" => {
-            // 1.0 if between ball position and own goal line, 0.0 otherwise.
-            let own_goal_x = 0.0_f32;
-            let ball_x = perception.ball_position.x;
-            let player_x = perception.self_position.x;
-            if player_x <= ball_x && player_x >= own_goal_x {
-                1.0
-            } else {
-                0.0
-            }
-        }
-
-        // --- Press ---
-        "distance_to_press" => {
-            12.0 - perception
-                .nearby_opponents
-                .iter()
-                .map(|o| o.distance)
-                .fold(f32::INFINITY, f32::min)
-                .min(12.0)
-        }
-
-        // --- SupportRun ---
-        "space_ahead" => {
-            // More open space ahead = higher score. Compute nearest opponent
-            // in front, then feed (15 - distance) so the Linear curve gives
-            // a higher score when the space ahead is open.
-            let forward = perception.ball_position.x > perception.self_position.x;
-            let opp_in_front = perception
-                .nearby_opponents
-                .iter()
-                .filter(|o| {
-                    if forward {
-                        o.relative_position.x > 0.0
-                    } else {
-                        o.relative_position.x < 0.0
-                    }
-                })
-                .map(|o| o.distance)
-                .fold(f32::INFINITY, f32::min);
-            let d = if opp_in_front.is_finite() {
-                opp_in_front
-            } else {
-                15.0
-            };
-            15.0 - d.min(15.0)
-        }
-        "teammate_ball" => {
-            // 1.0 if a teammate is within 2m of the ball.
-            let has = perception.nearby_teammates.iter().any(|t| {
-                let dist_to_ball = (t.relative_position + perception.self_position
-                    - perception.ball_position)
-                    .length();
-                dist_to_ball < 2.0
-            });
-            if has { 1.0 } else { 0.0 }
-        }
-
-        // --- HoldPosition ---
-        "formation_discipline" => 1.0,
-
-        // --- Generic catch-alls ---
-        _ => 0.5,
     }
 }
 
@@ -1297,8 +1256,7 @@ mod tests {
         let brain = UtilityBrain {
             actions: vec![PlayerAction {
                 intent: sim_components::Intent::HoldPosition,
-                considerations: vec![PlayerConsideration {
-                    name: "formation_discipline".to_string(),
+                considerations: vec![Consideration::FormationDiscipline {
                     weight: 1.0,
                     curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
                 }],
@@ -1424,8 +1382,7 @@ mod tests {
                 let brain = UtilityBrain {
                     actions: vec![PlayerAction {
                         intent: sim_components::Intent::HoldPosition,
-                        considerations: vec![PlayerConsideration {
-                            name: "formation_discipline".to_string(),
+                        considerations: vec![Consideration::FormationDiscipline {
                             weight: 1.0,
                             curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
                         }],

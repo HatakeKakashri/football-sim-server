@@ -65,7 +65,6 @@ pub enum BallState {
     Free,
     Possessed,
     InFlight,
-    OutOfPlay,
     Dead,
 }
 

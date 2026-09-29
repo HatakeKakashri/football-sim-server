@@ -807,8 +807,7 @@ const fn ball_state_discriminant(s: sim_components::BallState) -> u64 {
         B::Free => 0,
         B::Possessed => 1,
         B::InFlight => 2,
-        B::OutOfPlay => 3,
-        B::Dead => 4,
+        B::Dead => 3,
     }
 }
 

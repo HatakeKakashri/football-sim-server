@@ -295,7 +295,17 @@ mod tests {
         assert_eq!(state.players.len(), 22);
     }
 
+    /// Runs a full 90-minute match (324,000 ticks at 60 Hz). This test is
+    /// 2-3 orders of magnitude slower than every other test in the
+    /// workspace — minutes vs. milliseconds — and is the dominant cost
+    /// in `cargo test`. It is `#[ignore]`d by default; run explicitly
+    /// when verifying end-to-end correctness:
+    ///
+    /// ```text
+    /// cargo test -p sim-server --lib -- --ignored test_end_to_end_full_match_simulation
+    /// ```
     #[test]
+    #[ignore = "full-match test is minutes-long; run only when verifying end-to-end behaviour"]
     fn test_end_to_end_full_match_simulation() {
         let mut server = ServerSimulation::new(42);
 

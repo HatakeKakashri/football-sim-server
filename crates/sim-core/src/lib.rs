@@ -1490,7 +1490,17 @@ mod tests {
     /// `--full-match` CLI budget of 324 000 ticks) eventually drives `state`
     /// to `FullTime`, transitions through `half == 2`, and the clock
     /// pauses/resets at half-time.
+    /// Runs a full 90-minute match (up to 330 000 ticks at 60 Hz). This test
+    /// is 2-3 orders of magnitude slower than every other test in the
+    /// workspace — minutes vs. milliseconds — and is the dominant cost
+    /// in `cargo test`. It is `#[ignore]`d by default; run explicitly
+    /// when verifying end-to-end correctness:
+    ///
+    /// ```text
+    /// cargo test -p sim-core --lib -- --ignored test_full_match_reaches_full_time
+    /// ```
     #[test]
+    #[ignore = "full-match test is minutes-long; run only when verifying end-to-end behaviour"]
     fn test_full_match_reaches_full_time() {
         let mut sim = Simulation::new(7);
         let me = sim.match_entity;

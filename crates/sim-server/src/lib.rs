@@ -166,7 +166,7 @@ impl ServerSimulation {
     /// the test API; with `Match` as a Resource, callers should generally
     /// read `simulation.world.resource::<Match>()` directly.
     #[allow(dead_code, reason = "kept for test API backwards compatibility")]
-    fn get_match_entity(&self) -> Result<bevy_ecs::prelude::Entity, CommandError> {
+    const fn get_match_entity(&self) -> Result<bevy_ecs::prelude::Entity, CommandError> {
         Ok(self.simulation.match_entity)
     }
 
@@ -261,7 +261,6 @@ mod tests {
     #[test]
     fn test_validation_valid_command_accepted() {
         let mut server = ServerSimulation::new(12345);
-        let match_entity = server.simulation.match_entity;
 
         // Set match state to InPlay (Phase C §4.3: Match is now a Resource).
         server

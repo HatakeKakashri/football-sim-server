@@ -621,7 +621,7 @@ pub fn player_decision_system(
 /// `Action(ActionIntent)`. The returned label is preserved exactly so
 /// hysteresis matching against previously-decided intents does not
 /// regress. (`PR 4b` adds a parity test that asserts this.)
-fn intent_kind(intent: &Intent) -> &'static str {
+const fn intent_kind(intent: &Intent) -> &'static str {
     match intent {
         Intent::Movement(MovementIntent::MoveToPosition(_)) => "MoveToPosition",
         Intent::Movement(MovementIntent::HoldPosition) => "HoldPosition",
@@ -717,9 +717,8 @@ pub fn player_action_execution_system(
                         Vec2::new(rng.gen_range_f32(-3.0, 3.0), rng.gen_range_f32(-2.0, 2.0));
                 }
             }
-            Intent::Movement(_)
-            | Intent::Action(ActionIntent::MarkOpponent(_))
-            | Intent::Action(ActionIntent::Press(_)) => {}
+            Intent::Movement(_) |
+Intent::Action(ActionIntent::MarkOpponent(_) | ActionIntent::Press(_)) => {}
         }
 
         let new_velocity = steer(perception, &intent);
@@ -810,9 +809,8 @@ pub fn kick_execution_system(
                 (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_PASS))
             })
         }
-        Intent::Movement(MovementIntent::ChaseBall)
-        | Intent::Action(ActionIntent::Tackle(_))
-        | Intent::Action(ActionIntent::Press(_)) => {
+        Intent::Movement(MovementIntent::ChaseBall) |
+Intent::Action(ActionIntent::Tackle(_) | ActionIntent::Press(_)) => {
             (player_vel.0.length() > 0.01).then(|| (player_vel.0.normalized(), KICK_SPEED_PASS))
         }
         Intent::Movement(_) | Intent::Action(ActionIntent::MarkOpponent(_)) => None,
@@ -878,7 +876,7 @@ fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
         Intent::Movement(MovementIntent::TrackBack) => (Vec2::new(0.0, 34.0), 6.0),
         Intent::Action(ActionIntent::PassTo) => (nearest_teammate_pos().unwrap_or(ball_pos), 8.0),
         Intent::Action(ActionIntent::ShootAtGoal(target)) => (*target, 10.0),
-        Intent::Action(ActionIntent::Tackle(_)) | Intent::Action(ActionIntent::Press(_)) => {
+        Intent::Action(ActionIntent::Tackle(_) | ActionIntent::Press(_)) => {
             (nearest_opponent_pos().unwrap_or(player_pos), 10.0)
         }
         Intent::Action(ActionIntent::MarkOpponent(_)) => {

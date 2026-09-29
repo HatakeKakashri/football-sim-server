@@ -651,7 +651,11 @@ pub fn match_duration_enforcement_system(
         let half = clock_query.get_single().map_or(1, |c| c.half);
         if half == 1 {
             match_res.state = sim_components::MatchState::HalfTime;
-            tracing::info!("Half time! Score: {}-{}", match_res.score.0, match_res.score.1);
+            tracing::info!(
+                "Half time! Score: {}-{}",
+                match_res.score.0,
+                match_res.score.1
+            );
         } else {
             match_res.state = sim_components::MatchState::FullTime;
             tracing::info!(
@@ -679,9 +683,7 @@ pub fn minimum_player_count_system(team_query: Query<&sim_components::Team>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim_components::{
-        BallMarker, Player, RoleComponent, Skill, Stamina, TeamId,
-    };
+    use sim_components::{BallMarker, Player, RoleComponent, Skill, Stamina, TeamId};
 
     /// Produces a test Ball at `pos` with the given `state`.
     /// All other fields are zeroed; `possessor` and `last_touched_by` are `None`.

@@ -148,9 +148,6 @@ pub struct Stamina(pub f32);
 pub struct Skill(pub f32);
 
 #[derive(Component, Debug, Clone)]
-pub struct BallStateComponent(pub BallState);
-
-#[derive(Component, Debug, Clone)]
 pub struct TeamIdComponent(pub TeamId);
 
 #[derive(Component, Debug, Clone)]

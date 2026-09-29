@@ -104,19 +104,62 @@ pub enum RuleEvent {
     },
 }
 
+/// Top-level intent tag.
+///
+/// An `Intent` is either a movement (which steers the player towards a
+/// target point or formation slot) or an action (which commits the
+/// player to a discrete tactical action like passing, tackling, or
+/// marking).
+///
+/// The split lets `player_action_execution_system` and other dispatch
+/// sites match on the coarse kind (`IntentKind`) when they don't care
+/// about the specific variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intent {
+    Movement(MovementIntent),
+    Action(ActionIntent),
+}
+
+/// Movement-style intents: move the player somewhere or settle into a
+/// formation slot. These never commit to a discrete ball-affecting action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MovementIntent {
     MoveToPosition(Vec2),
+    HoldPosition,
+    ChaseBall,
+    Intercept,
+    SupportRun,
+    TrackBack,
+}
+
+/// Action-style intents: commit the player to a tactical action. Most of
+/// these will resolve into a kick, tackle, or marking assignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActionIntent {
     PassTo,
     ShootAtGoal(Vec2),
     Tackle(Entity),
-    ChaseBall,
     MarkOpponent(Entity),
-    Intercept,
     Press(Entity),
-    HoldPosition,
-    SupportRun,
-    TrackBack,
+}
+
+impl Intent {
+    /// Coarse two-way tag: does this intent move the player, or commit to
+    /// an action? Useful for sites that don't care about the specific
+    /// variant.
+    #[must_use]
+    pub const fn kind(&self) -> IntentKind {
+        match *self {
+            Self::Movement(_) => IntentKind::Movement,
+            Self::Action(_) => IntentKind::Action,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntentKind {
+    Movement,
+    Action,
 }
 
 #[derive(Debug, Clone)]

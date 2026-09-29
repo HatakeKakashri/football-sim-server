@@ -997,7 +997,7 @@ struct HalfTimeEntryTick {
 fn default_utility_brain() -> sim_ai_player::UtilityBrain {
     use sim_ai_core::ResponseCurve;
     use sim_ai_player::{Consideration, PlayerAction};
-    use sim_components::Intent;
+    use sim_components::{ActionIntent, Intent, MovementIntent};
 
     const fn lin(min: f32, max: f32) -> ResponseCurve {
         ResponseCurve::Linear { min, max }
@@ -1019,7 +1019,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
     let actions = vec![
         // MoveToPosition — distance_to_target: closer = better.
         PlayerAction {
-            intent: Intent::MoveToPosition(Vec2::new(52.5, 34.0)),
+            intent: Intent::Movement(MovementIntent::MoveToPosition(Vec2::new(52.5, 34.0))),
             considerations: vec![Consideration::DistanceToTarget {
                 weight: 1.0,
                 curve: lin(0.0, 30.0),
@@ -1027,7 +1027,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         },
         // ChaseBall — distance_to_ball, stamina, pitch control at ball.
         PlayerAction {
-            intent: Intent::ChaseBall,
+            intent: Intent::Movement(MovementIntent::ChaseBall),
             considerations: vec![
                 Consideration::DistanceToBall {
                     weight: 0.6,
@@ -1053,7 +1053,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         },
         // PassTo — open passing lane, reasonable teammate distance, space.
         PlayerAction {
-            intent: Intent::PassTo,
+            intent: Intent::Action(ActionIntent::PassTo),
             considerations: vec![
                 Consideration::PassAngleClear {
                     weight: 0.5,
@@ -1071,7 +1071,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         },
         // ShootAtGoal — distance sweet-spot, angle, low pressure.
         PlayerAction {
-            intent: Intent::ShootAtGoal(Vec2::new(105.0, 34.0)),
+            intent: Intent::Action(ActionIntent::ShootAtGoal(Vec2::new(105.0, 34.0))),
             considerations: vec![
                 Consideration::DistanceToGoal {
                     weight: 0.5,
@@ -1095,7 +1095,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         },
         // Tackle — close + skill advantage.
         PlayerAction {
-            intent: Intent::Tackle(Entity::PLACEHOLDER),
+            intent: Intent::Action(ActionIntent::Tackle(Entity::PLACEHOLDER)),
             considerations: vec![
                 Consideration::DistanceToOpponent {
                     weight: 0.6,
@@ -1109,7 +1109,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         },
         // MarkOpponent — close to marked, between opponent and own goal.
         PlayerAction {
-            intent: Intent::MarkOpponent(Entity::PLACEHOLDER),
+            intent: Intent::Action(ActionIntent::MarkOpponent(Entity::PLACEHOLDER)),
             considerations: vec![
                 Consideration::DistanceToMarked {
                     weight: 0.5,
@@ -1123,7 +1123,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         },
         // Press — close-range press + stamina.
         PlayerAction {
-            intent: Intent::Press(Entity::PLACEHOLDER),
+            intent: Intent::Action(ActionIntent::Press(Entity::PLACEHOLDER)),
             considerations: vec![
                 Consideration::DistanceToPress {
                     weight: 0.6,
@@ -1137,7 +1137,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         },
         // SupportRun — open space ahead + teammate on the ball.
         PlayerAction {
-            intent: Intent::SupportRun,
+            intent: Intent::Movement(MovementIntent::SupportRun),
             considerations: vec![
                 Consideration::SpaceAhead {
                     weight: 0.6,
@@ -1153,7 +1153,7 @@ fn default_utility_brain() -> sim_ai_player::UtilityBrain {
         // below the cap so it only wins when no other action has strong
         // positive signal — i.e. when the player has nothing better to do.
         PlayerAction {
-            intent: Intent::HoldPosition,
+            intent: Intent::Movement(MovementIntent::HoldPosition),
             considerations: vec![Consideration::FormationDiscipline {
                 weight: 1.0,
                 // Step: 0.5 always (a "default" score, not a "best").

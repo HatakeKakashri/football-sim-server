@@ -1,8 +1,8 @@
 use bevy_ecs::prelude::*;
 use sim_ai_core::{ResponseCurve, geometric_mean};
 use sim_components::{
-    Intent, MatchClock, PerceptionSnapshot, Player, Position, RoleComponent, Skill, Stamina,
-    TeamIdComponent, Velocity, time,
+    ActionIntent, Intent, MatchClock, MovementIntent, PerceptionSnapshot, Player, Position,
+    RoleComponent, Skill, Stamina, TeamIdComponent, Velocity, time,
 };
 use sim_math::Vec2;
 use sim_physics::{PitchControlGrid, SimRng};
@@ -138,7 +138,10 @@ impl Consideration {
     pub fn raw_input(&self, ctx: &ConsiderationContext) -> f32 {
         match *self {
             Self::DistanceToTarget { .. } => {
-                let d = if let sim_components::Intent::MoveToPosition(target) = ctx.intent {
+                let d = if let sim_components::Intent::Movement(
+                    sim_components::MovementIntent::MoveToPosition(target),
+                ) = ctx.intent
+                {
                     ctx.perception.self_position.distance(*target)
                 } else {
                     ctx.perception
@@ -159,7 +162,10 @@ impl Consideration {
                 ) * 100.0
             }),
             Self::PassAngleClear { .. } => {
-                if matches!(ctx.intent, sim_components::Intent::PassTo) {
+                if matches!(
+                    ctx.intent,
+                    sim_components::Intent::Action(sim_components::ActionIntent::PassTo)
+                ) {
                     let lane_clear = !ctx
                         .perception
                         .nearby_opponents
@@ -598,7 +604,9 @@ pub fn player_decision_system(
         if let Some((intent, _score)) = best_action {
             player.intent = Some(intent);
         } else if player.intent.is_none() {
-            player.intent = Some(sim_components::Intent::HoldPosition);
+            player.intent = Some(sim_components::Intent::Movement(
+                sim_components::MovementIntent::HoldPosition,
+            ));
         }
     }
 }
@@ -608,19 +616,24 @@ pub fn player_decision_system(
 /// passing to player A vs. passing to player B should NOT receive a
 /// hysteresis bonus against each other (different actions of the same
 /// type would be unfair), so we match on the variant discriminant only.
-const fn intent_kind(intent: &Intent) -> &'static str {
+///
+/// Phase E PR 4 split `Intent` into `Movement(MovementIntent)` and
+/// `Action(ActionIntent)`. The returned label is preserved exactly so
+/// hysteresis matching against previously-decided intents does not
+/// regress. (`PR 4b` adds a parity test that asserts this.)
+fn intent_kind(intent: &Intent) -> &'static str {
     match intent {
-        Intent::MoveToPosition(_) => "MoveToPosition",
-        Intent::PassTo => "PassTo",
-        Intent::ShootAtGoal(_) => "ShootAtGoal",
-        Intent::Tackle(_) => "Tackle",
-        Intent::ChaseBall => "ChaseBall",
-        Intent::MarkOpponent(_) => "MarkOpponent",
-        Intent::Intercept => "Intercept",
-        Intent::Press(_) => "Press",
-        Intent::HoldPosition => "HoldPosition",
-        Intent::SupportRun => "SupportRun",
-        Intent::TrackBack => "TrackBack",
+        Intent::Movement(MovementIntent::MoveToPosition(_)) => "MoveToPosition",
+        Intent::Movement(MovementIntent::HoldPosition) => "HoldPosition",
+        Intent::Movement(MovementIntent::ChaseBall) => "ChaseBall",
+        Intent::Movement(MovementIntent::Intercept) => "Intercept",
+        Intent::Movement(MovementIntent::SupportRun) => "SupportRun",
+        Intent::Movement(MovementIntent::TrackBack) => "TrackBack",
+        Intent::Action(ActionIntent::PassTo) => "PassTo",
+        Intent::Action(ActionIntent::ShootAtGoal(_)) => "ShootAtGoal",
+        Intent::Action(ActionIntent::Tackle(_)) => "Tackle",
+        Intent::Action(ActionIntent::MarkOpponent(_)) => "MarkOpponent",
+        Intent::Action(ActionIntent::Press(_)) => "Press",
     }
 }
 
@@ -665,7 +678,7 @@ pub fn player_action_execution_system(
         let mut direction_modifier = Vec2::zero();
 
         match &intent {
-            Intent::Tackle(target) => {
+            Intent::Action(ActionIntent::Tackle(target)) => {
                 // Tackle resolution: higher skill = higher success probability
                 // Roll against skill-based probability
                 let tackle_success_prob = skill.0.clamp(0.3, 0.9);
@@ -677,7 +690,7 @@ pub fn player_action_execution_system(
                 // Store target for potential later use
                 let _ = target;
             }
-            Intent::PassTo => {
+            Intent::Action(ActionIntent::PassTo) => {
                 // Pass completion: probability based on distance and skill
                 let pass_distance = perception
                     .nearby_teammates
@@ -693,7 +706,7 @@ pub fn player_action_execution_system(
                         Vec2::new(rng.gen_range_f32(-2.0, 2.0), rng.gen_range_f32(-2.0, 2.0));
                 }
             }
-            Intent::ShootAtGoal(_) => {
+            Intent::Action(ActionIntent::ShootAtGoal(_)) => {
                 // Shot accuracy: skill and stamina affect accuracy
                 let accuracy = skill.0 * stamina.0.mul_add(0.5, 0.5);
                 let roll: f32 = rng.gen_f32();
@@ -704,7 +717,9 @@ pub fn player_action_execution_system(
                         Vec2::new(rng.gen_range_f32(-3.0, 3.0), rng.gen_range_f32(-2.0, 2.0));
                 }
             }
-            _ => {}
+            Intent::Movement(_)
+            | Intent::Action(ActionIntent::MarkOpponent(_))
+            | Intent::Action(ActionIntent::Press(_)) => {}
         }
 
         let new_velocity = steer(perception, &intent);
@@ -785,18 +800,22 @@ pub fn kick_execution_system(
     };
 
     let kick = match &intent {
-        Intent::ShootAtGoal(target) => {
+        Intent::Action(ActionIntent::ShootAtGoal(target)) => {
             let dir = *target - perception.self_position;
             (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_SHOT))
         }
-        Intent::PassTo => nearest_teammate_position(perception).and_then(|target| {
-            let dir = target - perception.self_position;
-            (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_PASS))
-        }),
-        Intent::ChaseBall | Intent::Tackle(_) | Intent::Press(_) => {
+        Intent::Action(ActionIntent::PassTo) => {
+            nearest_teammate_position(perception).and_then(|target| {
+                let dir = target - perception.self_position;
+                (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_PASS))
+            })
+        }
+        Intent::Movement(MovementIntent::ChaseBall)
+        | Intent::Action(ActionIntent::Tackle(_))
+        | Intent::Action(ActionIntent::Press(_)) => {
             (player_vel.0.length() > 0.01).then(|| (player_vel.0.normalized(), KICK_SPEED_PASS))
         }
-        _ => None,
+        Intent::Movement(_) | Intent::Action(ActionIntent::MarkOpponent(_)) => None,
     };
 
     if let Some((direction, speed)) = kick {
@@ -840,17 +859,11 @@ fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
     };
 
     let (target, speed): (Vec2, f32) = match intent {
-        Intent::MoveToPosition(target) => (*target, 5.0),
-        Intent::PassTo => (nearest_teammate_pos().unwrap_or(ball_pos), 8.0),
-        Intent::ShootAtGoal(target) => (*target, 10.0),
-        Intent::Tackle(_) | Intent::Press(_) => {
-            (nearest_opponent_pos().unwrap_or(player_pos), 10.0)
-        }
-        Intent::ChaseBall => (ball_pos, 8.0),
-        Intent::MarkOpponent(_) => (nearest_opponent_pos().unwrap_or(player_pos), 4.0),
-        Intent::Intercept => (ball_pos + ball_vel * 0.5, 9.0),
-        Intent::HoldPosition => return Vec2::zero(),
-        Intent::SupportRun => {
+        Intent::Movement(MovementIntent::MoveToPosition(target)) => (*target, 5.0),
+        Intent::Movement(MovementIntent::ChaseBall) => (ball_pos, 8.0),
+        Intent::Movement(MovementIntent::Intercept) => (ball_pos + ball_vel * 0.5, 9.0),
+        Intent::Movement(MovementIntent::HoldPosition) => return Vec2::zero(),
+        Intent::Movement(MovementIntent::SupportRun) => {
             if let Some(worst) = perception.nearby_opponents.iter().min_by(|a, b| {
                 a.distance
                     .partial_cmp(&b.distance)
@@ -862,7 +875,15 @@ fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
                 return Vec2::zero();
             }
         }
-        Intent::TrackBack => (Vec2::new(0.0, 34.0), 6.0),
+        Intent::Movement(MovementIntent::TrackBack) => (Vec2::new(0.0, 34.0), 6.0),
+        Intent::Action(ActionIntent::PassTo) => (nearest_teammate_pos().unwrap_or(ball_pos), 8.0),
+        Intent::Action(ActionIntent::ShootAtGoal(target)) => (*target, 10.0),
+        Intent::Action(ActionIntent::Tackle(_)) | Intent::Action(ActionIntent::Press(_)) => {
+            (nearest_opponent_pos().unwrap_or(player_pos), 10.0)
+        }
+        Intent::Action(ActionIntent::MarkOpponent(_)) => {
+            (nearest_opponent_pos().unwrap_or(player_pos), 4.0)
+        }
     };
 
     let direction = target - player_pos;
@@ -939,7 +960,9 @@ mod tests {
         // Create utility brain with sprint action
         let utility_brain = UtilityBrain {
             actions: vec![PlayerAction {
-                intent: sim_components::Intent::MoveToPosition(Vec2::new(100.0, 34.0)),
+                intent: sim_components::Intent::Movement(
+                    sim_components::MovementIntent::MoveToPosition(Vec2::new(100.0, 34.0)),
+                ),
                 considerations: vec![],
             }],
             hysteresis: 0.1,
@@ -1048,7 +1071,7 @@ mod tests {
         // Create utility brain with pass action
         let utility_brain = UtilityBrain {
             actions: vec![PlayerAction {
-                intent: sim_components::Intent::PassTo,
+                intent: sim_components::Intent::Action(sim_components::ActionIntent::PassTo),
                 considerations: vec![],
             }],
             hysteresis: 0.1,
@@ -1118,7 +1141,9 @@ mod tests {
         let attacker_entity = world.spawn(()).id();
         world.entity_mut(attacker_entity).insert(Player {
             team_id: TeamId(1),
-            intent: Some(sim_components::Intent::ShootAtGoal(Vec2::new(105.0, 34.0))),
+            intent: Some(sim_components::Intent::Action(
+                sim_components::ActionIntent::ShootAtGoal(Vec2::new(105.0, 34.0)),
+            )),
         });
         world
             .entity_mut(attacker_entity)
@@ -1179,7 +1204,9 @@ mod tests {
         // Create utility brain with tackle action. Phase 2 decision cadence is
         let utility_brain = UtilityBrain {
             actions: vec![PlayerAction {
-                intent: sim_components::Intent::Tackle(attacker_entity),
+                intent: sim_components::Intent::Action(sim_components::ActionIntent::Tackle(
+                    attacker_entity,
+                )),
                 considerations: vec![],
             }],
             hysteresis: 0.1,
@@ -1259,7 +1286,9 @@ mod tests {
             .insert(TeamIdComponent(TeamId(0)));
         let brain = UtilityBrain {
             actions: vec![PlayerAction {
-                intent: sim_components::Intent::HoldPosition,
+                intent: sim_components::Intent::Movement(
+                    sim_components::MovementIntent::HoldPosition,
+                ),
                 considerations: vec![Consideration::FormationDiscipline {
                     weight: 1.0,
                     curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
@@ -1385,7 +1414,9 @@ mod tests {
                 world.entity_mut(e).insert(TeamIdComponent(TeamId(team)));
                 let brain = UtilityBrain {
                     actions: vec![PlayerAction {
-                        intent: sim_components::Intent::HoldPosition,
+                        intent: sim_components::Intent::Movement(
+                            sim_components::MovementIntent::HoldPosition,
+                        ),
                         considerations: vec![Consideration::FormationDiscipline {
                             weight: 1.0,
                             curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
@@ -1541,7 +1572,7 @@ mod tests {
                 distance_to_bottom: 34.0,
             },
         };
-        let intent = sim_components::Intent::HoldPosition;
+        let intent = sim_components::Intent::Movement(sim_components::MovementIntent::HoldPosition);
         let c = Consideration::DistanceToTarget {
             weight: 1.0,
             curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },

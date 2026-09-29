@@ -7,6 +7,33 @@ use sim_components::{
 use sim_math::Vec2;
 use sim_physics::{PitchControlGrid, SimRng};
 
+/// Default decision cadence: every N physics ticks a given player is
+/// re-evaluated. Spec §13 #15, default N=6 → ~10 Hz at 60 Hz physics.
+/// Each player maps to a deterministic slot in `0..N` (see
+/// `player_stagger_slot`), so the guard is
+/// `(elapsed_ticks % N) == player_stagger_slot(entity)`.
+pub const DECISION_CADENCE_TICKS: u64 = 6;
+
+/// Counter incremented by `player_decision_system` each time a player
+/// is actually evaluated (i.e. passed the cadence guard). Used by tests
+/// to assert the cadence is in effect; not used by gameplay code.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct DecisionEvaluationCount(pub u64);
+
+/// Map an entity to one of `DECISION_CADENCE_TICKS` decision-cadence
+/// slots. Uses a SplitMix64 finalize on the entity's packed id bits so
+/// 22 players distribute roughly evenly across the N slots without a
+/// roster-index pass. Stable for a given entity id (Bevy entity ids are
+/// dense u32 indices, allocated deterministically).
+const fn player_stagger_slot(entity: Entity) -> u64 {
+    let bits = entity.to_bits() as u64;
+    // SplitMix64 finalize — well-trodden; uniform in [0, 2^64).
+    let z = (bits ^ (bits >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    let z = z ^ (z >> 31);
+    z % DECISION_CADENCE_TICKS
+}
+
 #[derive(Component, Debug, Clone)]
 pub struct UtilityBrain {
     pub actions: Vec<PlayerAction>,
@@ -213,7 +240,19 @@ pub const fn consideration_scoring_system(_query: Query<(&mut Player, &Stamina, 
 /// 2. Pick the highest-scoring action; add the `hysteresis` bonus if it
 ///    matches the player's currently-active intent.
 /// 3. Commit the new intent to the Player.
-#[allow(clippy::type_complexity, reason = "Bevy Query signature")]
+///
+/// Phase D (CODEBASE_REVIEW §7): per-player decision cadence. A player is
+/// evaluated only when `(elapsed_ticks % DECISION_CADENCE_TICKS) ==
+/// player_stagger_slot(entity)`. This decouples decision cost from the
+/// 60 Hz physics tick (spec §10: ~10 Hz decision cadence). The
+/// stagger is by `entity.to_bits()`, which spreads 22 players across
+/// the 6 slots without any team-partition bias (spec §10 "individual
+/// players can still be time-sliced … that staggering has no
+/// team-level bias").
+#[allow(
+    clippy::type_complexity,
+    reason = "Bevy Query signature"
+)]
 pub fn player_decision_system(
     mut query: Query<(
         Entity,
@@ -226,10 +265,28 @@ pub fn player_decision_system(
         &TeamIdComponent,
     )>,
     pitch_control: Option<Res<PitchControlGrid>>,
+    clock_q: Query<&sim_components::MatchClock>,
+    mut eval_count: ResMut<DecisionEvaluationCount>,
 ) {
-    for (_entity, mut player, utility_brain, perception, stamina, skill, _role, _team_id) in
+    // Snapshot the clock once per system run (Bevy lets us borrow the
+    // Query here even though `query` is a separate Query — disjoint
+    // access on different component sets).
+    let elapsed_ticks = clock_q
+        .iter()
+        .next()
+        .map_or(0, |c| c.elapsed_ticks);
+    let phase_slot = elapsed_ticks % DECISION_CADENCE_TICKS;
+
+    for (entity, mut player, utility_brain, perception, stamina, skill, _role, _team_id) in
         &mut query
     {
+        // Phase D: cadence guard. Skip if not on this player's slot.
+        if player_stagger_slot(entity) != phase_slot {
+            continue;
+        }
+        // Player passed the guard — count this evaluation.
+        eval_count.0 += 1;
+
         // Evaluate each action.
         let mut best_action: Option<(Intent, f32)> = None;
 
@@ -777,6 +834,26 @@ mod tests {
     use super::*;
     use sim_components::{Role, TeamId};
 
+    /// Phase D helper: run a schedule for one full cadence window,
+    /// incrementing the match clock each iteration. Every player is
+    /// guaranteed at least one evaluation regardless of which slot
+    /// their entity id hashes into. Returns the final `elapsed_ticks`.
+    fn run_one_cadence_window(world: &mut World, schedule: &mut Schedule, match_entity: Entity) -> u64 {
+        for _ in 0..DECISION_CADENCE_TICKS {
+            if let Some(mut clock) = world
+                .entity_mut(match_entity)
+                .get_mut::<sim_components::MatchClock>()
+            {
+                clock.elapsed_ticks += 1;
+            }
+            schedule.run(world);
+        }
+        world
+            .entity(match_entity)
+            .get::<sim_components::MatchClock>()
+            .map_or(0, |c| c.elapsed_ticks)
+    }
+
     #[test]
     fn test_player_ai_plugin() {
         // Placeholder test
@@ -852,6 +929,8 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 0,
         });
+        // Phase D: player_decision_system requires this resource.
+        world.insert_resource(DecisionEvaluationCount::default());
         world
             .entity_mut(match_entity)
             .insert(sim_components::MatchClock {
@@ -861,8 +940,11 @@ mod tests {
                 is_running: true,
             });
 
-        // Run schedule
-        schedule.run(&mut world);
+        // Run schedule.
+        // Phase D: drive a full cadence window (6 ticks) so the player
+        // is guaranteed at least one evaluation regardless of which
+        // slot their entity id hashes into.
+        run_one_cadence_window(&mut world, &mut schedule, match_entity);
 
         // Check that player has an intent
         let player = world.entity(player_entity).get::<Player>().unwrap();
@@ -955,6 +1037,8 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 0,
         });
+        // Phase D: player_decision_system requires this resource.
+        world.insert_resource(DecisionEvaluationCount::default());
         world
             .entity_mut(match_entity)
             .insert(sim_components::MatchClock {
@@ -964,8 +1048,11 @@ mod tests {
                 is_running: true,
             });
 
-        // Run schedule
-        schedule.run(&mut world);
+        // Run schedule.
+        // Phase D: drive a full cadence window (6 ticks) so the player
+        // is guaranteed at least one evaluation regardless of which
+        // slot their entity id hashes into.
+        run_one_cadence_window(&mut world, &mut schedule, match_entity);
 
         // Check that player has a pass intent
         let player = world.entity(player_entity).get::<Player>().unwrap();
@@ -1058,6 +1145,8 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 0,
         });
+        // Phase D: player_decision_system requires this resource.
+        world.insert_resource(DecisionEvaluationCount::default());
         world
             .entity_mut(match_entity)
             .insert(sim_components::MatchClock {
@@ -1072,20 +1161,27 @@ mod tests {
         schedule.add_systems(consideration_scoring_system);
         schedule.add_systems(player_decision_system);
 
-        // Run schedule
-        schedule.run(&mut world);
+        // Run schedule.
+        // Phase D: drive a full cadence window (6 ticks) so the player
+        // is guaranteed at least one evaluation regardless of which
+        // slot their entity id hashes into.
+        run_one_cadence_window(&mut world, &mut schedule, match_entity);
 
         // Check that defender has tackle intent
         let defender = world.entity(defender_entity).get::<Player>().unwrap();
         assert!(defender.intent.is_some());
     }
 
-    /// Phase 2 verification: per-player decision cadence means the same
-    /// player is NOT re-evaluated every tick. With evaluation_interval = 6,
-    /// a player whose entity id modulo 6 == 0 only evaluates on ticks
-    /// whose tick % 6 == 0. We loop 100 ticks and assert that the
-    /// consideration-evaluation cost stays bounded (no panic / no infinite
-    /// work).
+    /// Phase D (CODEBASE_REVIEW §7): per-player decision cadence.
+    ///
+    /// The decision system MUST evaluate a given player only on the ticks
+    /// where `(elapsed_ticks % DECISION_CADENCE_TICKS) == player_slot(entity)`,
+    /// per spec §13 #15 (default N=6 → ~10 Hz at 60 Hz physics).
+    ///
+    /// We drive 60 ticks with a single player. The player's slot is
+    /// deterministic (depends only on entity id), so over 60 ticks the
+    /// player should be evaluated exactly 10 times (60 / cadence 6).
+    /// Before Phase D, the guard was missing and the count was 60.
     #[test]
     fn test_decision_cadence_does_not_re_evaluate_every_tick() {
         use sim_ai_core::ResponseCurve;
@@ -1152,6 +1248,8 @@ mod tests {
             state: sim_components::MatchState::InPlay,
             seed: 0,
         });
+        // Phase D: player_decision_system requires this resource.
+        world.insert_resource(DecisionEvaluationCount::default());
         world
             .entity_mut(match_entity)
             .insert(sim_components::MatchClock {
@@ -1164,10 +1262,11 @@ mod tests {
         let mut schedule = Schedule::default();
         schedule.add_systems(player_decision_system);
 
-        // Drive the match clock forward by 6 ticks so the player's
-        // evaluation interval (= 6) elapses and decision_system runs at
-        // least once. Then verify intent was set.
-        for _ in 0..6 {
+        // Drive 60 ticks total. The first 6 are the warm-up phase
+        // (pre-Phase D the test looped 6 ticks then 100 more); with
+        // cadence = 6, exactly 60 / 6 = 10 of those ticks should be
+        // a player's evaluation tick.
+        for _ in 0..60 {
             if let Some(mut clock) = world
                 .entity_mut(match_entity)
                 .get_mut::<sim_components::MatchClock>()
@@ -1177,14 +1276,126 @@ mod tests {
             schedule.run(&mut world);
         }
 
-        // Run the schedule many more times — must not panic, must be cheap
-        // (decision cadence spreads evaluation).
-        for _ in 0..100 {
-            schedule.run(&mut world);
-        }
+        // Phase D assertion: exactly 10 evaluations over 60 ticks at
+        // cadence 6. Before Phase D this count was 60 (every tick).
+        let eval_count = world.resource::<DecisionEvaluationCount>().0;
+        assert_eq!(
+            eval_count, 10,
+            "expected exactly 10 evaluations over 60 ticks at cadence 6, got {eval_count}"
+        );
 
         let player = world.entity(player_entity).get::<Player>().unwrap();
         assert!(player.intent.is_some());
+    }
+
+    /// Phase D regression: the cadence counter must not fire on ticks that
+    /// do not match a player's slot. Spawning 22 players (a full roster)
+    /// and driving 60 ticks should produce exactly 60 evaluations total
+    /// (60 ticks × 1 evaluation per tick, with each tick evaluating
+    /// roughly 22/6 ≈ 3-4 players) — and crucially NOT 22 × 60 = 1320.
+    #[test]
+    fn test_cadence_full_roster_load_distribution() {
+        use sim_ai_core::ResponseCurve;
+        let mut world = World::new();
+
+        // Insert Match as Resource (Phase C §4.3).
+        world.insert_resource(sim_components::Match {
+            id: 1,
+            home_team: Entity::PLACEHOLDER,
+            away_team: Entity::PLACEHOLDER,
+            score: (0, 0),
+            state: sim_components::MatchState::InPlay,
+            seed: 0,
+        });
+
+        // MatchClock on a single entity, as the production code does.
+        let match_entity = world.spawn(()).id();
+        world
+            .entity_mut(match_entity)
+            .insert(sim_components::MatchClock {
+                elapsed_ticks: 0,
+                half: 1,
+                added_time_ticks: 0,
+                is_running: true,
+            });
+
+        // 22-player roster (Phase 3 default), 11 per team.
+        let mut player_entities = Vec::new();
+        for team in 0..2u8 {
+            for _ in 0..11 {
+                let e = world.spawn(()).id();
+                world.entity_mut(e).insert(Player {
+                    team_id: TeamId(team),
+                    intent: None,
+                });
+                world.entity_mut(e).insert(Position(Vec2::new(50.0, 34.0)));
+                world.entity_mut(e).insert(Velocity(Vec2::zero()));
+                world.entity_mut(e).insert(Stamina(1.0));
+                world
+                    .entity_mut(e)
+                    .insert(RoleComponent(Role::Striker));
+                world.entity_mut(e).insert(Skill(0.7));
+                world
+                    .entity_mut(e)
+                    .insert(TeamIdComponent(TeamId(team)));
+                let brain = UtilityBrain {
+                    actions: vec![PlayerAction {
+                        intent: sim_components::Intent::HoldPosition,
+                        considerations: vec![PlayerConsideration {
+                            name: "formation_discipline".to_string(),
+                            weight: 1.0,
+                            curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
+                        }],
+                    }],
+                    hysteresis: 0.1,
+                };
+                world.entity_mut(e).insert(brain);
+                world.entity_mut(e).insert(sim_components::PerceptionSnapshot {
+                    self_position: Vec2::new(50.0, 34.0),
+                    nearby_teammates: smallvec::SmallVec::new(),
+                    nearby_opponents: smallvec::SmallVec::new(),
+                    ball_position: Vec2::new(52.5, 34.0),
+                    ball_state: sim_components::BallState::Free,
+                    goal_position: Vec2::new(105.0, 34.0),
+                    pitch_bounds: sim_components::PitchBounds {
+                        distance_to_left: 50.0,
+                        distance_to_right: 55.0,
+                        distance_to_top: 34.0,
+                        distance_to_bottom: 34.0,
+                    },
+                });
+                player_entities.push(e);
+            }
+        }
+
+        world.insert_resource(DecisionEvaluationCount::default());
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(player_decision_system);
+
+        // Drive 60 ticks.
+        for _ in 0..60 {
+            if let Some(mut clock) = world
+                .entity_mut(match_entity)
+                .get_mut::<sim_components::MatchClock>()
+            {
+                clock.elapsed_ticks += 1;
+            }
+            schedule.run(&mut world);
+        }
+
+        let eval_count = world.resource::<DecisionEvaluationCount>().0;
+        // Each tick of the 60 must evaluate at least one player (since
+        // slots cycle through 0..6 every 6 ticks), but never all 22.
+        // Pre-Phase D count was 60 × 22 = 1320.
+        assert!(
+            (60..=300).contains(&eval_count),
+            "expected evaluation count in [60, 300] (per-tick ≥1, far below 1320); got {eval_count}"
+        );
+        assert!(
+            eval_count < 22 * 60,
+            "expected far fewer evaluations than full every-tick roster (got {eval_count})"
+        );
     }
 
     /// Regression: `PerceptionSnapshot.nearby_*[].entity` must carry the real

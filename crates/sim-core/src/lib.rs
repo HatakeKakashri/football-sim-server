@@ -79,7 +79,9 @@ fn register_systems(schedule: &mut Schedule) {
             .in_set(SimulationSet::Perception),
     );
 
-    // Decision (no per-player time-slicing; spec §13 #15 deferred)
+    // Decision — Phase D (CODEBASE_REVIEW §7): per-player decision cadence
+    // is implemented inside `player_decision_system` via the
+    // `DECISION_CADENCE_TICKS` (default N=6, ~10 Hz) guard. Spec §10/§13 #15.
     schedule.add_systems(
         player_decision_system
             .in_set(SimulationSet::Decision)
@@ -161,6 +163,9 @@ impl Simulation {
         // Phase 3: insert the RNG as a resource for stochastic gameplay outcomes
         // (tackle resolution, pass completion, shot accuracy).
         world.insert_resource(sim_physics::SimRng::new(seed));
+        // Phase D: player_decision_system requires the evaluation counter
+        // (CODEBASE_REVIEW §7 — per-player decision cadence).
+        world.insert_resource(sim_ai_player::DecisionEvaluationCount::default());
 
         let mut schedule = Schedule::default();
         let original_seed = seed;
@@ -977,8 +982,11 @@ struct HalfTimeEntryTick {
 /// start. Mirrors the §4a consideration list — `MoveToPosition`, `ChaseBall`,
 /// `PassTo`, `ShootAtGoal`, Tackle, `MarkOpponent`, Press, `SupportRun`,
 /// `HoldPosition`. Curves are tuned for the standard 105×68 pitch (midpoints
-/// are real metres, not normalised). `evaluation_interval` = 6 (per spec §13
-/// decision #15: ~10 Hz decision cadence). Hysteresis bonus = 0.1.
+/// are real metres, not normalised). Hysteresis bonus = 0.1.
+///
+/// Decision cadence (`DECISION_CADENCE_TICKS` = 6, ~10 Hz) is applied by
+/// `player_decision_system` itself per spec §13 #15 — this brain is
+/// cadence-agnostic.
 #[expect(
     clippy::too_many_lines,
     reason = "declarative table of actions and considerations; splitting it would only scatter the data"

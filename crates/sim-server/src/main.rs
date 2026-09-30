@@ -174,8 +174,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if *cmd_tick == tick {
                         if let Err(e) = sim.validate_command(match_entity, cmd) {
                             tracing::warn!("command at tick {tick} failed: {e:?}");
-                        } else {
-                            sim.apply_validated_command(match_entity, cmd.clone());
+                        } else if let Err(e) = sim.apply_validated_command(match_entity, cmd.clone()) {
+                            tracing::warn!("command at tick {tick} failed to apply: {e:?}");
                         }
                         next_command_index += 1;
                     } else {

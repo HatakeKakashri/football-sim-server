@@ -58,10 +58,12 @@ pub fn replay_with_ticks(
                 // function returned `Result<(), String>`; the split
                 // removes the error path here since replay's pre-F5 callers
                 // always discarded the result.
-                simulation.apply_validated_command(
+                if let Err(e) = simulation.apply_validated_command(
                     match_entity,
                     timed_command.command.clone(),
-                );
+                ) {
+                    tracing::warn!("command at tick {tick} failed to apply: {e:?}");
+                }
             }
         }
 

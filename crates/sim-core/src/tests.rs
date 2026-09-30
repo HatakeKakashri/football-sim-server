@@ -88,7 +88,8 @@ fn validate_command_does_not_apply_but_apply_validated_command_does() {
     );
 
     // apply_validated_command DOES mutate.
-    sim.apply_validated_command(sim.match_entity(), cmd);
+    sim.apply_validated_command(sim.match_entity(), cmd)
+        .expect("invariant: ChangeFormation should apply successfully");
     let formation_after_apply = sim
         .world()
         .entity(home_team)
@@ -106,4 +107,94 @@ fn validate_command_does_not_apply_but_apply_validated_command_does() {
 fn test_simulation_creation() {
     let sim = Simulation::new(12345);
     assert_eq!(sim.current_tick(), 0);
+}
+
+/// Phase I: `SetTactic` should validate and apply correctly.
+#[test]
+fn set_tactic_validates_and_applies() {
+    use sim_components::{ManagerCommand, Tactic};
+    let mut sim = Simulation::new(7);
+
+    // Default state is PreMatch; SetTactic should fail validation.
+    let result = sim.validate_command(
+        sim.match_entity(),
+        &ManagerCommand::SetTactic(Tactic::HighPress),
+    );
+    assert!(matches!(
+        result,
+        Err(sim_components::CommandError::InvalidForState {
+            current_state: MatchState::PreMatch,
+            required_state: MatchState::InPlay,
+        })
+    ));
+
+    // Move to InPlay so SetTactic passes validation.
+    sim.world_mut().resource_mut::<Match>().state = MatchState::InPlay;
+    let home_team = sim.world().resource::<Match>().home_team;
+
+    // Read default tactic.
+    let default_tactic = sim
+        .world()
+        .entity(home_team)
+        .get::<sim_components::Team>()
+        .expect("invariant: home team has Team component")
+        .tactic;
+    assert_eq!(default_tactic, Tactic::Possession);
+
+    let cmd = ManagerCommand::SetTactic(Tactic::HighPress);
+
+    // validate_command must NOT mutate.
+    sim.validate_command(sim.match_entity(), &cmd)
+        .expect("invariant: InPlay state permits SetTactic");
+    let tactic_after_validate = sim
+        .world()
+        .entity(home_team)
+        .get::<sim_components::Team>()
+        .expect("invariant: home team has Team component")
+        .tactic;
+    assert_eq!(
+        tactic_after_validate, default_tactic,
+        "validate_command must not mutate state"
+    );
+
+    // apply_validated_command DOES mutate.
+    sim.apply_validated_command(sim.match_entity(), cmd)
+        .expect("invariant: SetTactic should apply successfully");
+    let tactic_after_apply = sim
+        .world()
+        .entity(home_team)
+        .get::<sim_components::Team>()
+        .expect("invariant: home team has Team component")
+        .tactic;
+    assert_eq!(
+        tactic_after_apply,
+        Tactic::HighPress,
+        "apply_validated_command must mutate state"
+    );
+}
+
+/// Phase I: `Substitute` should return `NotImplemented` when applied.
+#[test]
+fn substitute_returns_not_implemented() {
+    use sim_components::ManagerCommand;
+    let mut sim = Simulation::new(7);
+
+    // Move to Stoppage so Substitute passes validation.
+    sim.world_mut().resource_mut::<Match>().state = MatchState::Stoppage;
+
+    let cmd = ManagerCommand::Substitute {
+        out: 1,
+        substitute: 12,
+    };
+
+    // validate_command should succeed in Stoppage state.
+    sim.validate_command(sim.match_entity(), &cmd)
+        .expect("invariant: Stoppage state permits Substitute");
+
+    // apply_validated_command should return NotImplemented.
+    let result = sim.apply_validated_command(sim.match_entity(), cmd);
+    assert!(matches!(
+        result,
+        Err(sim_components::CommandError::NotImplemented)
+    ));
 }

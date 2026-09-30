@@ -137,7 +137,7 @@ mod tests {
     use super::*;
     use sim_components::{
         DecisionFactor, Formation, MatchClock, MatchState, Mentality, Position, Role,
-        RoleComponent, Skill, Stamina, TeamId, Velocity, WeightedDecisionTable,
+        RoleComponent, Skill, Stamina, Tactic, TeamId, Velocity, WeightedDecisionTable,
     };
     use sim_math::Vec2;
 
@@ -172,6 +172,7 @@ mod tests {
             name: "Home".to_string(),
             formation: Formation::FourFourTwo,
             mentality: Mentality::Balance,
+            tactic: Tactic::Possession,
             players: Vec::new(),
             substitutes: Vec::new(),
         });
@@ -198,6 +199,7 @@ mod tests {
             name: "Home".to_string(),
             formation: Formation::FourFourTwo,
             mentality: Mentality::Balance,
+            tactic: Tactic::Possession,
             players: Vec::new(),
             substitutes: Vec::new(),
         });
@@ -255,6 +257,7 @@ mod tests {
             name: "Home".to_string(),
             formation: Formation::FourFourTwo,
             mentality: Mentality::Balance,
+            tactic: Tactic::Possession,
             players: vec![low_stamina_player],
             substitutes: vec![substitute_player],
         });
@@ -300,6 +303,7 @@ mod tests {
             name: "Home".to_string(),
             formation: Formation::FourFourTwo,
             mentality: Mentality::Balance,
+            tactic: Tactic::Possession,
             players: Vec::new(),
             substitutes: Vec::new(),
         });

@@ -620,6 +620,7 @@ dependencies = [
  "sim-components",
  "sim-core",
  "sim-math",
+ "tracing",
 ]
 
 [[package]]

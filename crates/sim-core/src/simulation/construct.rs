@@ -248,6 +248,7 @@ impl Simulation {
             name: "Home".to_string(),
             formation: sim_components::Formation::FourFourTwo,
             mentality: sim_components::Mentality::Balance,
+            tactic: sim_components::Tactic::Possession,
             players: home_players,
             substitutes: Vec::new(),
         });
@@ -299,6 +300,7 @@ impl Simulation {
             name: "Away".to_string(),
             formation: sim_components::Formation::FourFourTwo,
             mentality: sim_components::Mentality::Balance,
+            tactic: sim_components::Tactic::Possession,
             players: away_players,
             substitutes: Vec::new(),
         });

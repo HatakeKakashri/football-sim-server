@@ -52,6 +52,14 @@ pub enum Formation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Tactic {
+    Possession,
+    CounterAttack,
+    HighPress,
+    ParkTheBus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MatchState {
     PreMatch,
     Kickoff,
@@ -301,6 +309,7 @@ pub struct Team {
     pub name: String,
     pub formation: Formation,
     pub mentality: Mentality,
+    pub tactic: Tactic,
     pub players: Vec<Entity>,
     pub substitutes: Vec<Entity>,
 }
@@ -378,6 +387,7 @@ pub enum ManagerCommand {
     ChangeFormation(Formation),
     Substitute { out: u64, substitute: u64 },
     ChangeMentality(Mentality),
+    SetTactic(Tactic),
 }
 
 /// Error returned by `sim_core::Simulation::apply_command` and the
@@ -393,6 +403,8 @@ pub enum CommandError {
         current_state: crate::MatchState,
         required_state: crate::MatchState,
     },
+    /// The command is recognized but not yet implemented.
+    NotImplemented,
 }
 
 #[cfg(test)]

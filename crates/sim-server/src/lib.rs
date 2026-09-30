@@ -69,8 +69,12 @@ impl ServerSimulation {
         // Phase F §F5 fix: the apply lives in sim-core. sim-server delegates
         // so the mutation is defined in exactly one place. This path is
         // home-only; side-aware apply is a future API addition.
-        self.simulation
-            .apply_validated_command(self.simulation.match_entity(), command);
+        if let Err(e) = self
+            .simulation
+            .apply_validated_command(self.simulation.match_entity(), command)
+        {
+            tracing::warn!("command failed to apply: {e:?}");
+        }
     }
 
     /// Snapshot the current state of the wrapped simulation.

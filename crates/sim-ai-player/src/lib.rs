@@ -62,6 +62,15 @@ impl DecisionEvaluationCount {
 /// 22 players distribute roughly evenly across the N slots without a
 /// roster-index pass. Stable for a given entity id (Bevy entity ids are
 /// dense u32 indices, allocated deterministically).
+///
+/// Spec §10 deviation: the spec mandates `tick % 22 == player_index`
+/// (roster-index staggering). This implementation substitutes a hash of
+/// the entity id, which is equivalent in expectation (uniform distribution
+/// across slots) but not equivalent per-player. The substitution was
+/// made to avoid a roster-index pass at decision time. If a future test
+/// pins a specific player's slot, this function will need to switch to
+/// the spec's formula. See `test_stagger_slot_distribution` for the
+/// distribution guarantee.
 pub(crate) const fn player_stagger_slot(entity: Entity) -> u64 {
     let bits = entity.to_bits();
     // SplitMix64 finalize — well-trodden; uniform in [0, 2^64).

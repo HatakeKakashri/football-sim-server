@@ -169,3 +169,39 @@ fn test_consideration_distance_to_target() {
     let raw = c.raw_input(&ctx);
     assert!(raw > 25.0 && raw < 30.0, "raw input was {raw}");
 }
+
+/// Spec §10 deviation regression test: `player_stagger_slot` uses a
+/// `SplitMix64` hash of the entity id rather than the spec's
+/// `tick % 22 == player_index` formula. This test pins the distribution
+/// guarantee (uniform spread across slots) so a future switch to the
+/// spec's formula is a deliberate, test-visible change.
+#[test]
+fn test_stagger_slot_distribution() {
+    use crate::DECISION_CADENCE_TICKS;
+    use crate::player_stagger_slot;
+
+    // Generate 22 distinct entity ids (matching a real roster) and
+    // verify the slot distribution is roughly uniform.
+    #[allow(clippy::cast_possible_truncation, reason = "DECISION_CADENCE_TICKS is 6; always fits in usize")]
+    let mut slot_counts = [0u32; DECISION_CADENCE_TICKS as usize];
+    for i in 0..22u32 {
+        let entity = bevy_ecs::prelude::Entity::from_raw(i);
+        let slot = usize::try_from(player_stagger_slot(entity)).expect("slot fits in usize");
+        slot_counts[slot] += 1;
+    }
+
+    // With 22 players across 6 slots, expect roughly 3-4 per slot.
+    // Allow a tolerance of ±2 to avoid flaky tests while still
+    // catching a degenerate distribution (e.g. all players in one slot).
+    for (slot, &count) in slot_counts.iter().enumerate() {
+        assert!(
+            (1..=6).contains(&count),
+            "slot {slot} has {count} players; expected 1-6 for a uniform distribution"
+        );
+    }
+
+    // Verify all slots are represented (no empty slots with 22 players).
+    for (slot, &count) in slot_counts.iter().enumerate() {
+        assert!(count > 0, "slot {slot} is empty; distribution is not uniform");
+    }
+}

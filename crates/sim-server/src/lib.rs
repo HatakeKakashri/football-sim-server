@@ -1,23 +1,11 @@
 use sim_components::ManagerCommand;
 use sim_core::{MatchSnapshot, Simulation};
 
-#[derive(Debug, Clone)]
-pub enum CommandError {
-    InvalidForState {
-        current_state: sim_components::MatchState,
-        required_state: sim_components::MatchState,
-    },
-    NoSubstitutesRemaining,
-    PlayerNotOnPitch,
-    FormationInvalid,
-    CommandCooldownActive,
-}
+pub use sim_components::CommandError;
 
 pub struct ServerSimulation {
     pub simulation: Simulation,
     pub command_queue: CommandQueue,
-    /// The team side of the active manager (controls which team receives commands)
-    pub active_manager_side: sim_components::TeamSide,
 }
 
 impl ServerSimulation {
@@ -26,7 +14,6 @@ impl ServerSimulation {
         Self {
             simulation: Simulation::new(seed),
             command_queue: CommandQueue::new(),
-            active_manager_side: sim_components::TeamSide::Home,
         }
     }
 
@@ -42,83 +29,32 @@ impl ServerSimulation {
         self.simulation.tick();
     }
 
-    /// Apply a manager command at the next tick boundary.
+    /// Validate a `ManagerCommand` against the current match state and
+    /// enqueue it for application at the next tick boundary.
     ///
-    /// Validation is performed against the current match state and the
-    /// command is then enqueued for execution when `simulation.tick`
-    /// reaches `simulation.tick + 1`.
+    /// Validation is performed by
+    /// `sim_core::Simulation::validate_command` (the single source of
+    /// truth for command legality). On success the command is enqueued
+    /// for execution when `simulation.tick` reaches
+    /// `simulation.tick + 1`. The queued command is applied by `tick()`
+    /// via [`Self::apply_command_immediately`].
     ///
     /// # Errors
     ///
     /// Returns a [`CommandError::InvalidForState`] if the command is not
     /// legal in the current match state (e.g. formation/mentality/tactic
     /// changes during `PreMatch` / `HalfTime` / `FullTime`).
-    pub fn apply_command(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
-        // Phase C §4.3: Match is a Resource, not a Component.
-        let match_component = self
-            .simulation
-            .world
-            .resource::<sim_components::Match>()
-            .clone();
-
-        // Validate command based on current state
-        match &command {
-            ManagerCommand::ChangeFormation(_) => {
-                // Validate formation change is allowed in current state
-                if match_component.state != sim_components::MatchState::InPlay
-                    && match_component.state != sim_components::MatchState::Stoppage
-                {
-                    return Err(CommandError::InvalidForState {
-                        current_state: match_component.state,
-                        required_state: sim_components::MatchState::InPlay,
-                    });
-                }
-
-                // Validate formation is valid
-                // For now, all formations are considered valid
-            }
-            ManagerCommand::Substitute {
-                out: _,
-                substitute: _,
-            } => {
-                // Validate substitution is allowed in current state
-                if match_component.state != sim_components::MatchState::Stoppage
-                    && match_component.state != sim_components::MatchState::HalfTime
-                {
-                    return Err(CommandError::InvalidForState {
-                        current_state: match_component.state,
-                        required_state: sim_components::MatchState::Stoppage,
-                    });
-                }
-
-                // Validate players exist and are in correct positions
-                // For now, skip detailed validation
-            }
-            ManagerCommand::ChangeMentality(_) => {
-                // Validate mentality change is allowed in current state
-                if match_component.state != sim_components::MatchState::InPlay
-                    && match_component.state != sim_components::MatchState::Stoppage
-                {
-                    return Err(CommandError::InvalidForState {
-                        current_state: match_component.state,
-                        required_state: sim_components::MatchState::InPlay,
-                    });
-                }
-            }
-            ManagerCommand::SetTactic(_) => {
-                // Validate tactic change is allowed in current state
-                if match_component.state != sim_components::MatchState::InPlay
-                    && match_component.state != sim_components::MatchState::Stoppage
-                {
-                    return Err(CommandError::InvalidForState {
-                        current_state: match_component.state,
-                        required_state: sim_components::MatchState::InPlay,
-                    });
-                }
-            }
-        }
-
-        // Queue command for application at next tick boundary
+    pub fn apply_command(
+        &mut self,
+        command: ManagerCommand,
+    ) -> Result<(), CommandError> {
+        // Phase F §F5: validation lives in sim-core; sim-server delegates
+        // so the rules are defined in exactly one place. The local wrapper
+        // only handles command queueing for next-tick dispatch. The apply
+        // happens at the queue dispatch (`apply_command_immediately`) so
+        // that command application is aligned with the tick boundary.
+        self.simulation
+            .validate_command(self.simulation.match_entity, &command)?;
         self.command_queue
             .enqueue(command, self.simulation.tick + 1);
         Ok(())
@@ -130,49 +66,11 @@ impl ServerSimulation {
     /// this path only exists because commands queued at tick T-1 are
     /// dispatched at tick T's start, after validation has already happened.
     fn apply_command_immediately(&mut self, command: ManagerCommand) {
-        let match_component = self
-            .simulation
-            .world
-            .resource::<sim_components::Match>()
-            .clone();
-
-        // Determine which team to update based on active_manager_side
-        let team_to_update = match self.active_manager_side {
-            sim_components::TeamSide::Home => match_component.home_team,
-            sim_components::TeamSide::Away => match_component.away_team,
-        };
-
-        match command {
-            ManagerCommand::ChangeFormation(formation) => {
-                if let Some(mut team) = self
-                    .simulation
-                    .world
-                    .entity_mut(team_to_update)
-                    .get_mut::<sim_components::Team>()
-                {
-                    team.formation = formation;
-                }
-            }
-            ManagerCommand::Substitute { out, substitute } => {
-                // Implement substitution logic
-                // For now, just log it
-                tracing::info!("Substitution: {out:?} -> {substitute:?}");
-            }
-            ManagerCommand::ChangeMentality(mentality) => {
-                if let Some(mut team) = self
-                    .simulation
-                    .world
-                    .entity_mut(team_to_update)
-                    .get_mut::<sim_components::Team>()
-                {
-                    team.mentality = mentality;
-                }
-            }
-            ManagerCommand::SetTactic(tactic) => {
-                // Store tactic somewhere (for now, just log)
-                tracing::info!("Tactic set: {tactic:?}");
-            }
-        }
+        // Phase F §F5 fix: the apply lives in sim-core. sim-server delegates
+        // so the mutation is defined in exactly one place. This path is
+        // home-only; side-aware apply is a future API addition.
+        self.simulation
+            .apply_validated_command(self.simulation.match_entity, command);
     }
 
     /// Snapshot the current state of the wrapped simulation.
@@ -288,6 +186,40 @@ mod tests {
             sim_components::Formation::FourThreeThree,
         ));
         assert!(result.is_ok());
+    }
+
+    /// After F5's `apply_command` refactor, commands target the home team.
+    /// `active_manager_side` was removed because it had no consumers.
+    /// If away-management is added back, this test is the deliberate-API-change pin.
+    ///
+    /// Note: `apply_command` enqueues at `tick + 1` for next-tick dispatch.
+    /// We enqueue manually at the current tick so a single `tick()` drains
+    /// and applies the command — testing the apply path directly without
+    /// depending on the queue's enqueue-tick semantics.
+    #[test]
+    fn apply_command_targets_home_team_only() {
+        let mut server = ServerSimulation::new(12345);
+        // Move to InPlay so the command validates.
+        server.simulation.world.resource_mut::<sim_components::Match>().state = sim_components::MatchState::InPlay;
+
+        let home = server.simulation.world.resource::<sim_components::Match>().home_team;
+        let away = server.simulation.world.resource::<sim_components::Match>().away_team;
+
+        // Enqueue directly at the current tick and tick once. This exercises
+        // `tick()`'s drain-and-apply path (`apply_command_immediately` →
+        // `sim_core::apply_validated_command`) without depending on
+        // `apply_command`'s `tick + 1` enqueue semantics.
+        server.command_queue.enqueue(
+            ManagerCommand::ChangeFormation(sim_components::Formation::FourThreeThree),
+            server.simulation.tick,
+        );
+        server.tick();
+
+        let home_formation = server.simulation.world.entity(home).get::<sim_components::Team>().unwrap().formation;
+        let away_formation = server.simulation.world.entity(away).get::<sim_components::Team>().unwrap().formation;
+
+        assert_eq!(home_formation, sim_components::Formation::FourThreeThree, "home team should have new formation");
+        assert_eq!(away_formation, sim_components::Formation::FourFourTwo, "away team should still have default formation");
     }
 
     #[test]

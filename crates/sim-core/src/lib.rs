@@ -508,79 +508,68 @@ impl Simulation {
         (match_entity, home_team_entity, ball_entity)
     }
 
-    /// Apply a manager command to the given match.
+    /// Validate a `ManagerCommand` against the current match state.
     ///
     /// # Errors
     ///
-    /// Returns an error string if `match_id` is not a match entity, or if the
-    /// command is not allowed in the match's current state (formation,
-    /// mentality and tactic changes need `InPlay`/`Stoppage`; substitutions
-    /// need `Stoppage`/`HalfTime`).
-    pub fn apply_command(
-        &mut self,
+    /// Returns a [`sim_components::CommandError`] if the command is not
+    /// allowed in the match's current state (formation, mentality and
+    /// tactic changes need `InPlay`/`Stoppage`; substitutions need
+    /// `Stoppage`/`HalfTime`).
+    pub fn validate_command(
+        &self,
         _match_id: Entity,
-        command: ManagerCommand,
-    ) -> Result<(), String> {
+        command: &ManagerCommand,
+    ) -> Result<(), sim_components::CommandError> {
         // Phase C §4.3: Match is now a Resource. Validate using
         // `world.resource::<Match>()` — the match_id parameter is retained
         // for API compatibility but is no longer used to look up Match.
-        let match_component = self.world.resource::<Match>().clone();
+        let match_component = self.world.resource::<Match>();
 
-        // Validate command based on current state
-        match &command {
-            ManagerCommand::ChangeFormation(_) => {
-                // Validate formation change is allowed in current state
-                if match_component.state != MatchState::InPlay
-                    && match_component.state != MatchState::Stoppage
-                {
-                    return Err(format!(
-                        "Invalid state for formation change: {:?}",
-                        match_component.state
-                    ));
-                }
-            }
+        match command {
             ManagerCommand::Substitute {
                 out: _,
                 substitute: _,
             } => {
-                // Validate substitution is allowed in current state
                 if match_component.state != MatchState::Stoppage
                     && match_component.state != MatchState::HalfTime
                 {
-                    return Err(format!(
-                        "Invalid state for substitution: {:?}",
-                        match_component.state
-                    ));
+                    return Err(sim_components::CommandError::InvalidForState {
+                        current_state: match_component.state,
+                        required_state: MatchState::Stoppage,
+                    });
                 }
             }
-            ManagerCommand::ChangeMentality(_) => {
-                // Validate mentality change is allowed in current state
+            ManagerCommand::ChangeFormation(_)
+            | ManagerCommand::ChangeMentality(_)
+            | ManagerCommand::SetTactic(_) => {
                 if match_component.state != MatchState::InPlay
                     && match_component.state != MatchState::Stoppage
                 {
-                    return Err(format!(
-                        "Invalid state for mentality change: {:?}",
-                        match_component.state
-                    ));
-                }
-            }
-            ManagerCommand::SetTactic(_) => {
-                // Validate tactic change is allowed in current state
-                if match_component.state != MatchState::InPlay
-                    && match_component.state != MatchState::Stoppage
-                {
-                    return Err(format!(
-                        "Invalid state for tactic change: {:?}",
-                        match_component.state
-                    ));
+                    return Err(sim_components::CommandError::InvalidForState {
+                        current_state: match_component.state,
+                        required_state: MatchState::InPlay,
+                    });
                 }
             }
         }
 
-        // Apply command
+        Ok(())
+    }
+
+    /// Apply a previously-validated `ManagerCommand` to the home team.
+    ///
+    /// Callers must have validated the command via [`Self::validate_command`]
+    /// first; this function does not re-check state.
+    pub fn apply_validated_command(&mut self, _match_id: Entity, command: ManagerCommand) {
+        // Phase C §4.3: Match is now a Resource, so the match-id parameter
+        // is retained for API compatibility but is no longer used to look
+        // up Match. The apply always targets the home team; side-aware
+        // application is not currently supported.
+        let match_component = self.world.resource::<Match>().clone();
+
         match command {
             ManagerCommand::ChangeFormation(formation) => {
-                // Update team formation
                 let home_team = match_component.home_team;
                 if let Some(mut team) = self
                     .world
@@ -591,12 +580,9 @@ impl Simulation {
                 }
             }
             ManagerCommand::Substitute { out, substitute } => {
-                // Implement substitution logic
-                // For now, just log it
                 tracing::info!("Substitution: {out:?} -> {substitute:?}");
             }
             ManagerCommand::ChangeMentality(mentality) => {
-                // Update team mentality
                 let home_team = match_component.home_team;
                 if let Some(mut team) = self
                     .world
@@ -607,12 +593,9 @@ impl Simulation {
                 }
             }
             ManagerCommand::SetTactic(tactic) => {
-                // Store tactic somewhere (for now, just log)
                 tracing::info!("Tactic set: {tactic:?}");
             }
         }
-
-        Ok(())
     }
 
     /// Snapshot the current state of the given match.
@@ -1280,6 +1263,79 @@ fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2) {
 mod tests {
     use super::*;
     use sim_components::time;
+
+    /// Phase F §F5: pin the typed error variant returned when a formation
+    /// change is attempted during `PreMatch`. This is the load-bearing
+    /// guarantee that lets `sim_server::apply_command` delegate validation
+    /// to sim-core without re-implementing the rule.
+    #[test]
+    fn validate_command_returns_typed_error_for_prematch() {
+        use sim_components::{CommandError, Formation, ManagerCommand, MatchState};
+        let sim = Simulation::new(7);
+        // Default state is PreMatch; ChangeFormation should fail.
+        let result = sim.validate_command(
+            sim.match_entity,
+            &ManagerCommand::ChangeFormation(Formation::FourThreeThree),
+        );
+        assert!(matches!(
+            result,
+            Err(CommandError::InvalidForState {
+                current_state: MatchState::PreMatch,
+                required_state: MatchState::InPlay,
+            })
+        ));
+    }
+
+    /// Phase F §F5 fix: `validate_command` must not mutate state, and
+    /// `apply_validated_command` is the path that actually applies the
+    /// change. This pins the validate-on-submit / apply-on-tick split.
+    #[test]
+    fn validate_command_does_not_apply_but_apply_validated_command_does() {
+        use sim_components::{Formation, ManagerCommand};
+        let mut sim = Simulation::new(7);
+        // Move to InPlay so ChangeFormation passes validation.
+        sim.world.resource_mut::<Match>().state = MatchState::InPlay;
+        let home_team = sim.world.resource::<Match>().home_team;
+
+        // Read default formation (FourFourTwo from Simulation::new).
+        let default_formation = sim
+            .world
+            .entity(home_team)
+            .get::<sim_components::Team>()
+            .expect("invariant: home team has Team component")
+            .formation;
+        assert_eq!(default_formation, Formation::FourFourTwo);
+
+        let cmd = ManagerCommand::ChangeFormation(Formation::FourThreeThree);
+
+        // validate_command must NOT mutate.
+        sim.validate_command(sim.match_entity, &cmd)
+            .expect("invariant: InPlay state permits ChangeFormation");
+        let formation_after_validate = sim
+            .world
+            .entity(home_team)
+            .get::<sim_components::Team>()
+            .expect("invariant: home team has Team component")
+            .formation;
+        assert_eq!(
+            formation_after_validate, default_formation,
+            "validate_command must not mutate state"
+        );
+
+        // apply_validated_command DOES mutate.
+        sim.apply_validated_command(sim.match_entity, cmd);
+        let formation_after_apply = sim
+            .world
+            .entity(home_team)
+            .get::<sim_components::Team>()
+            .expect("invariant: home team has Team component")
+            .formation;
+        assert_eq!(
+            formation_after_apply,
+            Formation::FourThreeThree,
+            "apply_validated_command must mutate state"
+        );
+    }
 
     #[test]
     fn test_simulation_creation() {

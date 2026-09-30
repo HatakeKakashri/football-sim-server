@@ -91,8 +91,16 @@ pub fn replay_with_ticks(
         // Check if there's a command for this tick
         for timed_command in &commands {
             if timed_command.tick == tick {
-                // Apply command
-                let _ = simulation.apply_command(match_entity, timed_command.command.clone());
+                // Apply command. Phase F §F5 split: replay runs against
+                // a bare `Simulation` with no command queue, so it applies
+                // directly via `apply_validated_command`. Pre-F5 the
+                // function returned `Result<(), String>`; the split
+                // removes the error path here since replay's pre-F5 callers
+                // always discarded the result.
+                simulation.apply_validated_command(
+                    match_entity,
+                    timed_command.command.clone(),
+                );
             }
         }
 

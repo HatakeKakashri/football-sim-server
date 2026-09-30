@@ -165,12 +165,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut next_command_index = 0;
 
             for tick in 0..=sorted_commands.last().map_or(0, |&(t, _)| t) {
-                // Apply any commands for this tick
+                // Apply any commands for this tick. Replay runs against
+                // a bare `Simulation` (no command queue), so we validate
+                // then apply directly. Phase F §F5 split: `apply_command`
+                // was the single (validate + apply) entry point; replay
+                // needs both, so it calls them in order.
                 while next_command_index < sorted_commands.len() {
                     let (cmd_tick, cmd) = &sorted_commands[next_command_index];
                     if *cmd_tick == tick {
-                        if let Err(e) = sim.apply_command(match_entity, cmd.clone()) {
-                            tracing::warn!("command at tick {tick} failed: {e}");
+                        if let Err(e) = sim.validate_command(match_entity, cmd) {
+                            tracing::warn!("command at tick {tick} failed: {e:?}");
+                        } else {
+                            sim.apply_validated_command(match_entity, cmd.clone());
                         }
                         next_command_index += 1;
                     } else {

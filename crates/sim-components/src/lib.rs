@@ -371,6 +371,25 @@ pub enum ManagerCommand {
     SetTactic(Tactic),
 }
 
+/// Error returned by `sim_core::Simulation::apply_command` and the
+/// `sim_server` wrappers.
+///
+/// `sim_components` owns the type because the same variants are
+/// meaningful at both the simulation and the network boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandError {
+    /// The command is not legal in the match's current state
+    /// (e.g. formation change during `PreMatch`).
+    InvalidForState {
+        current_state: crate::MatchState,
+        required_state: crate::MatchState,
+    },
+    NoSubstitutesRemaining,
+    PlayerNotOnPitch,
+    FormationInvalid,
+    CommandCooldownActive,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Tactic {
     HighPress,

@@ -2,8 +2,7 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    ActionIntent, Ball, Intent, MovementIntent, NearbyEntity, PerceptionSnapshot, Player, Stamina,
-    Skill, Velocity,
+    ActionIntent, Ball, Intent, NearbyEntity, PerceptionSnapshot, Player, Stamina, Skill, Velocity,
 };
 use sim_math::Vec2;
 use sim_physics::SimRng;
@@ -19,6 +18,10 @@ pub const KICK_SPEED_PASS: f32 = 14.0;
 /// `None` if the slice is empty. NaN distances are treated as equal
 /// (consistent with the previous inline `unwrap_or(Ordering::Equal)`
 /// pattern).
+#[allow(
+    dead_code,
+    reason = "After F8 the production callers live in `sim_components::intent_dispatch`; this helper remains for direct unit tests in this module"
+)]
 fn closest_by_distance(items: &[NearbyEntity]) -> Option<&NearbyEntity> {
     items.iter().min_by(|a, b| {
         a.distance
@@ -27,65 +30,26 @@ fn closest_by_distance(items: &[NearbyEntity]) -> Option<&NearbyEntity> {
     })
 }
 
-/// Nearest teammate's absolute position from the player's perception
-/// snapshot, if any. Used to aim a `PassTo` kick at an actual teammate
-/// rather than just continuing the ball in the passer's current heading.
-/// Mirrors the equivalent lookup `steer()` already uses to *move* a player
-/// toward the same teammate for a `PassTo` intent.
-fn nearest_teammate_position(perception: &PerceptionSnapshot) -> Option<Vec2> {
-    closest_by_distance(&perception.nearby_teammates)
-        .map(|t| t.relative_position + perception.self_position)
-}
-
 /// Resolve an intent to a target point and an action-specific speed,
 /// then return the unit-direction × speed vector. Target entities are
 /// resolved from the player's perception snapshot (`nearby_teammates` /
 /// `nearby_opponents`), which carries their world position relative to the
 /// player at perception time. The ball position is read from the perception
 /// snapshot directly (the perception system writes it every tick).
+///
+/// Phase F (F8): the per-variant match moved to
+/// `Intent::steer_target(&self, &PerceptionSnapshot)` in
+/// `sim_components::intent_dispatch`. This function is now a thin wrapper
+/// that consumes the (target, speed) pair and converts it to a velocity
+/// vector. The `> 0.1` distance deadband is preserved.
 fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
-    let player_pos = perception.self_position;
-    let ball_pos = perception.ball_position;
-    let ball_vel = Vec2::zero(); // Phase 2: ball velocity not yet exposed in perception.
-
-    let nearest_opponent_pos = || -> Option<Vec2> {
-        closest_by_distance(&perception.nearby_opponents)
-            .map(|o| o.relative_position + player_pos)
+    let Some((target, speed)) = intent.steer_target(perception) else {
+        return Vec2::zero();
     };
-    let nearest_teammate_pos = || -> Option<Vec2> {
-        closest_by_distance(&perception.nearby_teammates)
-            .map(|t| t.relative_position + player_pos)
-    };
-
-    let (target, speed): (Vec2, f32) = match intent {
-        Intent::Movement(MovementIntent::MoveToPosition(target)) => (*target, 5.0),
-        Intent::Movement(MovementIntent::ChaseBall) => (ball_pos, 8.0),
-        Intent::Movement(MovementIntent::Intercept) => (ball_pos + ball_vel * 0.5, 9.0),
-        Intent::Movement(MovementIntent::HoldPosition) => return Vec2::zero(),
-        Intent::Movement(MovementIntent::SupportRun) => {
-            if let Some(worst) = closest_by_distance(&perception.nearby_opponents) {
-                let away = player_pos + (player_pos - worst.relative_position);
-                (away, 5.0)
-            } else {
-                return Vec2::zero();
-            }
-        }
-        Intent::Movement(MovementIntent::TrackBack) => (Vec2::new(0.0, 34.0), 6.0),
-        Intent::Action(ActionIntent::PassTo) => (nearest_teammate_pos().unwrap_or(ball_pos), 8.0),
-        Intent::Action(ActionIntent::ShootAtGoal(target)) => (*target, 10.0),
-        Intent::Action(ActionIntent::Tackle(_) | ActionIntent::Press(_)) => {
-            (nearest_opponent_pos().unwrap_or(player_pos), 10.0)
-        }
-        Intent::Action(ActionIntent::MarkOpponent(_)) => {
-            (nearest_opponent_pos().unwrap_or(player_pos), 4.0)
-        }
-    };
-
-    let direction = target - player_pos;
+    let direction = target - perception.self_position;
     let distance = direction.length();
     if distance > 0.1 {
-        let normalized = direction / distance;
-        normalized * speed
+        (direction / distance) * speed
     } else {
         Vec2::zero()
     }
@@ -189,10 +153,10 @@ pub fn player_action_execution_system(
 /// notional. This system closes that gap for the current demo scope only —
 /// it is intentionally not real ball control:
 /// - `ShootAtGoal`: kicks toward the already-resolved shot target.
-/// - `PassTo`: kicks toward the nearest teammate (if any), via
-///   `nearest_teammate_position`. No lead/interception modeling, no
-///   pass-completion mechanic beyond that — out of scope for "just
-///   movement and kick/pass".
+/// - `PassTo`: kicks toward the nearest teammate (if any); the
+///   teammate lookup is encapsulated in `Intent::kick`. No
+///   lead/interception modeling, no pass-completion mechanic beyond
+///   that — out of scope for "just movement and kick/pass".
 /// - `ChaseBall` / `Tackle` / `Press`: continues the ball in the player's
 ///   current heading.
 ///
@@ -228,26 +192,25 @@ pub fn kick_execution_system(
         return;
     };
 
-    let kick = match &intent {
-        Intent::Action(ActionIntent::ShootAtGoal(target)) => {
-            let dir = *target - perception.self_position;
-            (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_SHOT))
-        }
-        Intent::Action(ActionIntent::PassTo) => {
-            nearest_teammate_position(perception).and_then(|target| {
-                let dir = target - perception.self_position;
-                (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_PASS))
-            })
-        }
-        Intent::Movement(MovementIntent::ChaseBall)
-        | Intent::Action(ActionIntent::Tackle(_) | ActionIntent::Press(_)) => {
-            (player_vel.0.length() > 0.01).then(|| (player_vel.0.normalized(), KICK_SPEED_PASS))
-        }
-        Intent::Movement(_) | Intent::Action(ActionIntent::MarkOpponent(_)) => None,
+    // Phase F (F8): the per-variant match moved to `Intent::kick` in
+    // `sim_components::intent_dispatch`. The speed multiplier depends on
+    // whether the kick is a shot (uses `KICK_SPEED_SHOT`) or a pass /
+    // velocity-continuation (uses `KICK_SPEED_PASS`).
+    let Some(kick_dir) = intent.kick(perception, player_vel.0) else {
+        return;
+    };
+    let kick_speed = match intent {
+        Intent::Action(ActionIntent::ShootAtGoal(_)) => KICK_SPEED_SHOT,
+        _ => KICK_SPEED_PASS,
     };
 
-    if let Some((direction, speed)) = kick {
-        ball.kick_velocity = Some(direction * speed);
+    // Preserve the original `dir.length() > 0.01` guard: if the
+    // computed direction is effectively zero (e.g. a `ShootAtGoal`
+    // target equal to the player, or a stationary player kicking on
+    // `ChaseBall`/`Tackle`/`Press`), skip the kick entirely so we
+    // don't touch `ball.kick_velocity` or clear `ball.possessor`.
+    if kick_dir.length() > 0.01 {
+        ball.kick_velocity = Some(kick_dir * kick_speed);
         ball.possessor = None;
     }
 }

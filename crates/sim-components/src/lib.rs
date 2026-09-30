@@ -2,6 +2,7 @@ use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_math::Vec2;
 
+pub mod intent_dispatch;
 pub mod time;
 
 #[derive(Component, Debug, Clone)]
@@ -153,6 +154,18 @@ impl Intent {
             Self::Movement(_) => IntentKind::Movement,
             Self::Action(_) => IntentKind::Action,
         }
+    }
+
+    /// `true` when this intent is a `Movement(_)` variant.
+    #[must_use]
+    pub const fn is_movement(&self) -> bool {
+        matches!(self, Self::Movement(_))
+    }
+
+    /// `true` when this intent is an `Action(_)` variant.
+    #[must_use]
+    pub const fn is_action(&self) -> bool {
+        matches!(self, Self::Action(_))
     }
 }
 

@@ -1,5 +1,10 @@
 //! `lifecycle_system`: the `MatchState` transition driver, ball placement
 //! at restart, and `apply_player_slot` (formation reset helper).
+//!
+//! Decomposed (Phase F follow-up): the per-tick driver loops `decide_transition`
+//! and `apply_transition` until the state stabilises. The split isolates the
+//! pure decision from the side effects (commit the new state, place the
+//! ball, update the clock, reset formation).
 
 use bevy_ecs::prelude::*;
 use sim_components::{Match, MatchClock, MatchState, Position, Velocity};
@@ -37,33 +42,161 @@ pub fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2)
     }
 }
 
-/// Match state machine driver. Runs once per tick after `schedule.run()` and
-/// before `tick_clock`.
-/// Owns `PreMatch` → Kickoff → `InPlay` → `HalfTime` → Kickoff(2nd half) →
-/// `InPlay` → `FullTime`. Also responsible for placing the ball at the center
-/// spot, zeroing ball velocity, applying the kickoff impulse, and resetting
-/// the 4-4-2 formation at every kickoff transition.
-///
-/// Phase 1 deliberately hardcodes formation slots and intent — proving the
-/// read/write-separation pipeline and perception-snapshot shape before any
-/// utility-AI variable comes online.
-///
-/// Phase 1 implementation note: the `PreMatch` → Kickoff → `InPlay` chain is
-/// instantaneous (all three states settle on tick 1), so the driver loops
-/// through the state machine until the state stabilises. Without this,
-/// `PreMatch` would only advance one step per tick and the kickoff impulse
-/// wouldn't apply until tick 2 (clobbering anything else that ran in
-/// between).
-// `MatchClock.elapsed_ticks` accumulates in simulation ticks (60 ticks = 1 second).
-// A half is 45 match-minutes = 45 * 60 * 60 = 162,000 ticks (HALF_LENGTH_TICKS).
-// This is the SAME threshold for both halves: `elapsed_ticks` resets to 0 at the
-// second-half kickoff (see `lifecycle_system` below), so half 2 needs its own
-// 162,000-tick budget, not the cumulative 90-minute match length.
+/// Pure decision: given the current state + clock + sim-tick + half-time entry,
+/// compute the next state and the side-effect descriptors (clock mutation,
+/// ball placement, kickoff impulse). Does not mutate the world.
+#[derive(Debug, Clone)]
+pub struct TransitionDecision {
+    pub next_state: MatchState,
+    pub new_clock: Option<MatchClock>,
+    pub place_ball_center: bool,
+    pub apply_kickoff_impulse: bool,
+}
+
+impl TransitionDecision {
+    const fn stable(next_state: MatchState) -> Self {
+        Self {
+            next_state,
+            new_clock: None,
+            place_ball_center: false,
+            apply_kickoff_impulse: false,
+        }
+    }
+}
+
+/// Decide whether the match state machine should advance from `current_state`
+/// given the current clock + sim-tick. Pure function — no world mutation.
 #[allow(
     clippy::too_long_first_doc_paragraph,
-    reason = "single doc paragraph documents the entire state-machine lifecycle; \
-              splitting it would scatter a tightly-coupled description"
+    reason = "single doc paragraph documents the entire state-machine decision table"
 )]
+pub fn decide_transition(
+    current_state: MatchState,
+    clock: Option<MatchClock>,
+    sim_tick: u64,
+    half_time_entry_tick: Option<u64>,
+) -> TransitionDecision {
+    match current_state {
+        MatchState::PreMatch => TransitionDecision {
+            next_state: MatchState::Kickoff,
+            new_clock: None,
+            place_ball_center: true,
+            apply_kickoff_impulse: false,
+        },
+        MatchState::Kickoff => TransitionDecision {
+            next_state: MatchState::InPlay,
+            new_clock: None,
+            place_ball_center: true,
+            apply_kickoff_impulse: true,
+        },
+        MatchState::InPlay => {
+            let Some(c) = clock else {
+                return TransitionDecision::stable(current_state);
+            };
+            // Both halves use the same per-half length: `elapsed_ticks` is
+            // reset to 0 at the second-half kickoff, so there is no
+            // "cumulative 90 minutes" quantity to compare against here.
+            let in_play_threshold = HALF_LENGTH_TICKS + c.added_time_ticks;
+            let is_final_half = c.half >= 2;
+            if c.elapsed_ticks < in_play_threshold {
+                return TransitionDecision::stable(current_state);
+            }
+            let next_state = if is_final_half {
+                MatchState::FullTime
+            } else {
+                MatchState::HalfTime
+            };
+            let mut updated = c;
+            updated.is_running = false;
+            TransitionDecision {
+                next_state,
+                new_clock: Some(updated),
+                place_ball_center: false,
+                apply_kickoff_impulse: false,
+            }
+        }
+        MatchState::HalfTime => {
+            // If we just entered HalfTime, this is the first tick of the break.
+            // Caller is responsible for persisting the entry tick on the resource
+            // (see the driver); here we only read it.
+            let entry_tick = half_time_entry_tick.unwrap_or(sim_tick);
+            let in_halftime_for = sim_tick.saturating_sub(entry_tick);
+            if in_halftime_for < HALFTIME_BREAK_TICKS {
+                return TransitionDecision::stable(current_state);
+            }
+            let new_clock = clock.map(|c| MatchClock {
+                elapsed_ticks: 0,
+                half: 2,
+                added_time_ticks: c.added_time_ticks,
+                is_running: true,
+            });
+            TransitionDecision {
+                next_state: MatchState::Kickoff,
+                new_clock,
+                place_ball_center: true,
+                apply_kickoff_impulse: false,
+            }
+        }
+        MatchState::FullTime | MatchState::Stoppage => TransitionDecision::stable(current_state),
+    }
+}
+
+/// Apply a `TransitionDecision` to the world: write the new clock, place the
+/// ball at the center spot if requested, apply the kickoff impulse if
+/// requested, reset the formation when entering `Kickoff`, and commit the
+/// new match state.
+pub fn apply_transition(
+    decision: &TransitionDecision,
+    current_state: MatchState,
+    match_entity: Entity,
+    ball_entity: Entity,
+    world: &mut World,
+) {
+    // Apply clock mutation.
+    if let Some(clock) = decision.new_clock.clone() {
+        world.entity_mut(match_entity).insert(clock);
+    }
+
+    // Apply ball placement / kickoff impulse.
+    if decision.place_ball_center {
+        if let Some(mut pos) = world.entity_mut(ball_entity).get_mut::<Position>() {
+            pos.0 = Vec2::new(52.5, 34.0);
+        }
+        if let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>() {
+            vel.0 = Vec2::zero();
+        }
+        // Phase C §4.3: Ball state lives on the Resource, not on the entity.
+        world.resource_mut::<sim_components::Ball>().state = sim_components::BallState::Free;
+        // Drop any pending kick velocity — placement at the center
+        // spot must not be combined with an inbound kick impulse.
+        world.resource_mut::<sim_components::Ball>().kick_velocity = None;
+    }
+    if decision.apply_kickoff_impulse
+        && let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>()
+    {
+        vel.0 = Vec2::new(2.0, 0.0);
+    }
+
+    // Reset 4-4-2 formation whenever we enter Kickoff.
+    if decision.next_state == MatchState::Kickoff && current_state != MatchState::Kickoff {
+        reset_formation_to_4_4_2(world);
+    }
+
+    // Clear the HalfTime entry-tick resource once we've left HalfTime.
+    if current_state == MatchState::HalfTime && decision.next_state != MatchState::HalfTime {
+        world.insert_resource(HalfTimeEntryTick { tick: None });
+    }
+
+    // Commit state mutation.
+    world.resource_mut::<Match>().state = decision.next_state;
+}
+
+/// Match state machine driver. Runs once per tick after `schedule.run()` and
+/// before `tick_clock`. Loops `decide_transition` + `apply_transition` until
+/// the state stabilises.
+///
+/// Note: the `PreMatch` -> `Kickoff` -> `InPlay` chain settles on tick 1,
+/// so the loop is bounded.
 pub fn lifecycle_system(
     match_entity: Entity,
     ball_entity: Entity,
@@ -73,108 +206,35 @@ pub fn lifecycle_system(
     const MAX_TRANSITIONS_PER_TICK: usize = 8;
 
     for _iteration in 0..MAX_TRANSITIONS_PER_TICK {
-        // Phase C §4.3: Match is now a Resource, read it from `world.resource`.
         let current_state = world.resource::<Match>().state;
+        let clock = world.entity(match_entity).get::<MatchClock>().cloned();
 
-        let mut next_state = current_state;
-        let mut new_clock: Option<MatchClock> = None;
-        let mut place_ball_center = false;
-        let mut apply_kickoff_impulse = false;
-
-        match current_state {
-            MatchState::PreMatch => {
-                next_state = MatchState::Kickoff;
-                place_ball_center = true;
+        // HalfTime entry-tick persistence: on the first HalfTime tick the
+        // entry resource is None; the decision reads it to compute
+        // `in_halftime_for`. We persist here in the driver (not in the pure
+        // decision) so `decide_transition` stays a pure function.
+        if current_state == MatchState::HalfTime {
+            let mut entry = world
+                .get_resource::<HalfTimeEntryTick>()
+                .copied()
+                .unwrap_or_default();
+            if entry.tick.is_none() {
+                entry.tick = Some(sim_tick);
+                world.insert_resource(entry);
+                continue;
             }
-            MatchState::Kickoff => {
-                next_state = MatchState::InPlay;
-                apply_kickoff_impulse = true;
-                place_ball_center = true;
-            }
-            MatchState::InPlay => {
-                let clock = world.entity(match_entity).get::<MatchClock>().cloned();
-                if let Some(c) = clock {
-                    // Both halves use the same per-half length: `elapsed_ticks` is
-                    // reset to 0 at the second-half kickoff, so there is no
-                    // "cumulative 90 minutes" quantity to compare against here.
-                    let in_play_threshold = HALF_LENGTH_TICKS + c.added_time_ticks;
-                    let is_final_half = c.half >= 2;
-                    if c.elapsed_ticks >= in_play_threshold {
-                        if is_final_half {
-                            next_state = MatchState::FullTime;
-                        } else {
-                            next_state = MatchState::HalfTime;
-                        }
-                        let mut updated = c;
-                        updated.is_running = false;
-                        new_clock = Some(updated);
-                    }
-                }
-            }
-            MatchState::HalfTime => {
-                let clock = world.entity(match_entity).get::<MatchClock>().cloned();
-                let mut entry = world
-                    .get_resource::<HalfTimeEntryTick>()
-                    .copied()
-                    .unwrap_or_default();
-                if entry.tick.is_none() {
-                    entry.tick = Some(sim_tick);
-                    world.insert_resource(entry);
-                }
-                let entry_tick = entry.tick.unwrap_or(sim_tick);
-                let in_halftime_for = sim_tick.saturating_sub(entry_tick);
-                if in_halftime_for >= HALFTIME_BREAK_TICKS {
-                    next_state = MatchState::Kickoff;
-                    if let Some(c) = clock {
-                        new_clock = Some(MatchClock {
-                            elapsed_ticks: 0,
-                            half: 2,
-                            added_time_ticks: c.added_time_ticks,
-                            is_running: true,
-                        });
-                    }
-                    place_ball_center = true;
-                    world.insert_resource(HalfTimeEntryTick { tick: None });
-                }
-            }
-            MatchState::FullTime | MatchState::Stoppage => {}
         }
 
-        // Apply clock mutation.
-        if let Some(clock) = new_clock {
-            world.entity_mut(match_entity).insert(clock);
-        }
+        let entry_tick = world
+            .get_resource::<HalfTimeEntryTick>()
+            .and_then(|e| e.tick);
 
-        // Apply ball placement / kickoff impulse.
-        if place_ball_center {
-            if let Some(mut pos) = world.entity_mut(ball_entity).get_mut::<Position>() {
-                pos.0 = Vec2::new(52.5, 34.0);
-            }
-            if let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>() {
-                vel.0 = Vec2::zero();
-            }
-            // Phase C §4.3: Ball state lives on the Resource, not on the entity.
-            world.resource_mut::<sim_components::Ball>().state = sim_components::BallState::Free;
-            // Drop any pending kick velocity — placement at the center
-            // spot must not be combined with an inbound kick impulse.
-            world.resource_mut::<sim_components::Ball>().kick_velocity = None;
-        }
-        if apply_kickoff_impulse
-            && let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>()
-        {
-            vel.0 = Vec2::new(2.0, 0.0);
-        }
+        let decision = decide_transition(current_state, clock, sim_tick, entry_tick);
 
-        // Reset 4-4-2 formation whenever we enter Kickoff.
-        if next_state == MatchState::Kickoff && current_state != MatchState::Kickoff {
-            reset_formation_to_4_4_2(world);
-        }
-
-        // Commit state mutation.
-        if next_state == current_state {
-            // No further transitions this tick; stop iterating.
+        if decision.next_state == current_state {
             return;
         }
-        world.resource_mut::<Match>().state = next_state;
+
+        apply_transition(&decision, current_state, match_entity, ball_entity, world);
     }
 }

@@ -312,3 +312,128 @@ fn test_ai_time_remaining_in_second_half() {
     // Half time remaining: 45 min - 40 min = 5 min = 300 sec
     assert_eq!(half_remaining_secs, 5.0 * 60.0);
 }
+// =========================================================================
+// Phase F follow-up: tests for the decomposed `decide_transition` /
+// `apply_transition` pair. The pure decision function is now unit-testable
+// without spinning up a full Simulation + Bevy schedule.
+// =========================================================================
+
+use crate::simulation::lifecycle::decide_transition;
+
+/// `PreMatch` always advances to `Kickoff` with ball-center placement, no
+/// kickoff impulse yet.
+#[test]
+fn test_decide_transition_prematch_to_kickoff() {
+    let decision = decide_transition(MatchState::PreMatch, None, 0, None);
+    assert_eq!(decision.next_state, MatchState::Kickoff);
+    assert!(decision.place_ball_center);
+    assert!(!decision.apply_kickoff_impulse);
+    assert!(decision.new_clock.is_none());
+}
+
+/// `Kickoff` advances to `InPlay` with both ball placement AND kickoff
+/// impulse.
+#[test]
+fn test_decide_transition_kickoff_to_inplay() {
+    let decision = decide_transition(MatchState::Kickoff, None, 0, None);
+    assert_eq!(decision.next_state, MatchState::InPlay);
+    assert!(decision.place_ball_center);
+    assert!(decision.apply_kickoff_impulse);
+}
+
+/// `InPlay` stays put while `elapsed_ticks` is below the half-length
+/// threshold; clock unchanged, no ball ops.
+#[test]
+fn test_decide_transition_inplay_below_threshold() {
+    let clock = MatchClock {
+        elapsed_ticks: 100,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    };
+    let decision = decide_transition(MatchState::InPlay, Some(clock), 0, None);
+    assert_eq!(decision.next_state, MatchState::InPlay);
+    assert!(decision.new_clock.is_none());
+    assert!(!decision.place_ball_center);
+}
+
+/// `InPlay` half 1 transitions to `HalfTime` when elapsed crosses
+/// `HALF_LENGTH_TICKS + added_time_ticks`; the new clock has `is_running`
+/// set to `false`.
+#[test]
+fn test_decide_transition_inplay_to_halftime() {
+    let clock = MatchClock {
+        elapsed_ticks: time::HALF_LENGTH_TICKS,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    };
+    let decision = decide_transition(MatchState::InPlay, Some(clock), 0, None);
+    assert_eq!(decision.next_state, MatchState::HalfTime);
+    let new_clock = decision.new_clock.expect("new_clock should be set");
+    assert!(!new_clock.is_running);
+    assert_eq!(new_clock.half, 1);
+}
+
+/// `InPlay` half 2 transitions to `FullTime` (not `HalfTime`) when elapsed
+/// crosses threshold.
+#[test]
+fn test_decide_transition_inplay_to_fulltime() {
+    let clock = MatchClock {
+        elapsed_ticks: time::HALF_LENGTH_TICKS,
+        half: 2,
+        added_time_ticks: 0,
+        is_running: true,
+    };
+    let decision = decide_transition(MatchState::InPlay, Some(clock), 0, None);
+    assert_eq!(decision.next_state, MatchState::FullTime);
+}
+
+/// `HalfTime` advances to `Kickoff` only after `HALFTIME_BREAK_TICKS`
+/// ticks have elapsed since the entry tick.
+#[test]
+fn test_decide_transition_halftime_before_break_end() {
+    let clock = MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: false,
+    };
+    let decision = decide_transition(MatchState::HalfTime, Some(clock), 5, Some(0));
+    assert_eq!(decision.next_state, MatchState::HalfTime);
+}
+
+#[test]
+fn test_decide_transition_halftime_to_kickoff() {
+    let clock = MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: false,
+    };
+    let decision = decide_transition(
+        MatchState::HalfTime,
+        Some(clock),
+        time::HALFTIME_BREAK_TICKS,
+        Some(0),
+    );
+    assert_eq!(decision.next_state, MatchState::Kickoff);
+    assert!(decision.place_ball_center);
+    let new_clock = decision.new_clock.expect("new_clock should be set");
+    assert_eq!(new_clock.elapsed_ticks, 0);
+    assert_eq!(new_clock.half, 2);
+    assert!(new_clock.is_running);
+}
+
+/// `FullTime` and `Stoppage` are terminal in the inner match-state machine;
+/// `decide_transition` returns a stable decision (no transitions).
+#[test]
+fn test_decide_transition_terminal_states() {
+    for state in [MatchState::FullTime, MatchState::Stoppage] {
+        let decision = decide_transition(state, None, 0, None);
+        assert_eq!(decision.next_state, state);
+        assert!(!decision.place_ball_center);
+        assert!(!decision.apply_kickoff_impulse);
+        assert!(decision.new_clock.is_none());
+    }
+}

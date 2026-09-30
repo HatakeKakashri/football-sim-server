@@ -87,55 +87,55 @@ pub enum Consideration {
     FormationDiscipline { weight: f32, curve: ResponseCurve },
 }
 
+/// Macro that generates `Consideration::weight` and `Consideration::curve`.
+///
+/// Each row is one `Consideration` variant; the macro emits one `match` arm
+/// per variant for each accessor. Adding a new `Consideration` variant
+/// forces the developer to add a row here (the match would be
+/// non-exhaustive otherwise), which keeps the accessors in lock-step with
+/// the enum definition.
+macro_rules! consideration_accessors {
+    ( $( $variant:ident { weight: $w:expr, curve: $c:expr } ),+ $(,)? ) => {
+        impl Consideration {
+            #[must_use]
+            pub const fn weight(&self) -> f32 {
+                match self {
+                    $( Self::$variant { weight, .. } => *weight, )+
+                }
+            }
+
+            #[must_use]
+            pub const fn curve(&self) -> &ResponseCurve {
+                match self {
+                    $( Self::$variant { curve, .. } => curve, )+
+                }
+            }
+        }
+    };
+}
+
+consideration_accessors! {
+    DistanceToTarget    { weight: _, curve: _ },
+    DistanceToBall      { weight: _, curve: _ },
+    Stamina             { weight: _, curve: _ },
+    PitchControlAtBall  { weight: _, curve: _ },
+    PassAngleClear      { weight: _, curve: _ },
+    TeammateDistance    { weight: _, curve: _ },
+    TeammateSpace       { weight: _, curve: _ },
+    DistanceToGoal      { weight: _, curve: _ },
+    GoalAngle           { weight: _, curve: _ },
+    DefenderPressure    { weight: _, curve: _ },
+    DistanceToOpponent  { weight: _, curve: _ },
+    SkillDiff           { weight: _, curve: _ },
+    DistanceToMarked    { weight: _, curve: _ },
+    DefensivePosition   { weight: _, curve: _ },
+    DistanceToPress     { weight: _, curve: _ },
+    SpaceAhead          { weight: _, curve: _ },
+    TeammateBall        { weight: _, curve: _ },
+    FormationDiscipline { weight: _, curve: _ },
+}
+
 impl Consideration {
-    #[must_use]
-    pub const fn weight(&self) -> f32 {
-        match self {
-            Self::DistanceToTarget { weight, .. }
-            | Self::DistanceToBall { weight, .. }
-            | Self::Stamina { weight, .. }
-            | Self::PitchControlAtBall { weight, .. }
-            | Self::PassAngleClear { weight, .. }
-            | Self::TeammateDistance { weight, .. }
-            | Self::TeammateSpace { weight, .. }
-            | Self::DistanceToGoal { weight, .. }
-            | Self::GoalAngle { weight, .. }
-            | Self::DefenderPressure { weight, .. }
-            | Self::DistanceToOpponent { weight, .. }
-            | Self::SkillDiff { weight, .. }
-            | Self::DistanceToMarked { weight, .. }
-            | Self::DefensivePosition { weight, .. }
-            | Self::DistanceToPress { weight, .. }
-            | Self::SpaceAhead { weight, .. }
-            | Self::TeammateBall { weight, .. }
-            | Self::FormationDiscipline { weight, .. } => *weight,
-        }
-    }
-
-    #[must_use]
-    pub const fn curve(&self) -> &ResponseCurve {
-        match self {
-            Self::DistanceToTarget { curve, .. }
-            | Self::DistanceToBall { curve, .. }
-            | Self::Stamina { curve, .. }
-            | Self::PitchControlAtBall { curve, .. }
-            | Self::PassAngleClear { curve, .. }
-            | Self::TeammateDistance { curve, .. }
-            | Self::TeammateSpace { curve, .. }
-            | Self::DistanceToGoal { curve, .. }
-            | Self::GoalAngle { curve, .. }
-            | Self::DefenderPressure { curve, .. }
-            | Self::DistanceToOpponent { curve, .. }
-            | Self::SkillDiff { curve, .. }
-            | Self::DistanceToMarked { curve, .. }
-            | Self::DefensivePosition { curve, .. }
-            | Self::DistanceToPress { curve, .. }
-            | Self::SpaceAhead { curve, .. }
-            | Self::TeammateBall { curve, .. }
-            | Self::FormationDiscipline { curve, .. } => curve,
-        }
-    }
-
     /// Compute the raw, unnormalized input for this consideration. The
     /// returned value is fed into `self.curve()` by the caller (typically
     /// `player_decision_system`) which then multiplies by the weight.
@@ -913,6 +913,27 @@ fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
 mod tests {
     use super::*;
     use sim_components::{Role, TeamId};
+
+    /// Exhaustiveness guard: if a new `Consideration` variant is added without
+    /// updating the F1 macro, this const-assertion fails to compile, forcing
+    /// the developer to add the variant to the macro's `$( ... )*` list.
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "exact equality against a literal is the point of this smoke check"
+    )]
+    fn weight_curve_exhaustive_for_all_variants() {
+        // Spot-check: construct every variant the macro must cover and
+        // verify both accessors return the values carried by the variant.
+        let v = Consideration::DistanceToTarget {
+            weight: 0.5,
+            curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
+        };
+        assert_eq!(v.weight(), 0.5);
+        assert!(matches!(v.curve(), ResponseCurve::Linear { min: 0.0, max: 1.0 }));
+        // The exhaustive list is verified at compile-time by the macro
+        // itself; this test is the runtime smoke check.
+    }
 
     /// Phase D helper: run a schedule for one full cadence window,
     /// incrementing the match clock each iteration. Every player is

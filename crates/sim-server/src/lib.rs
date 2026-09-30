@@ -35,13 +35,24 @@ impl ServerSimulation {
         let commands = self.command_queue.apply_at_tick(self.simulation.tick);
         for command in commands {
             // Apply command (validation already done when queueing)
-            let _ = self.apply_command_immediately(command);
+            self.apply_command_immediately(command);
         }
 
         // Advance simulation
         self.simulation.tick();
     }
 
+    /// Apply a manager command at the next tick boundary.
+    ///
+    /// Validation is performed against the current match state and the
+    /// command is then enqueued for execution when `simulation.tick`
+    /// reaches `simulation.tick + 1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CommandError::InvalidForState`] if the command is not
+    /// legal in the current match state (e.g. formation/mentality/tactic
+    /// changes during `PreMatch` / `HalfTime` / `FullTime`).
     pub fn apply_command(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
         // Phase C §4.3: Match is a Resource, not a Component.
         let match_component = self
@@ -113,7 +124,12 @@ impl ServerSimulation {
         Ok(())
     }
 
-    fn apply_command_immediately(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
+    /// Apply a previously-validated `ManagerCommand` to the simulation now.
+    ///
+    /// Callers must have already run validation through [`Self::apply_command`];
+    /// this path only exists because commands queued at tick T-1 are
+    /// dispatched at tick T's start, after validation has already happened.
+    fn apply_command_immediately(&mut self, command: ManagerCommand) {
         let match_component = self
             .simulation
             .world
@@ -157,8 +173,6 @@ impl ServerSimulation {
                 tracing::info!("Tactic set: {tactic:?}");
             }
         }
-
-        Ok(())
     }
 
     /// Phase C §4.3: returns the match entity whose `MatchClock` component
@@ -166,10 +180,19 @@ impl ServerSimulation {
     /// the test API; with `Match` as a Resource, callers should generally
     /// read `simulation.world.resource::<Match>()` directly.
     #[allow(dead_code, reason = "kept for test API backwards compatibility")]
-    const fn get_match_entity(&self) -> Result<bevy_ecs::prelude::Entity, CommandError> {
-        Ok(self.simulation.match_entity)
+    const fn get_match_entity(&self) -> bevy_ecs::prelude::Entity {
+        self.simulation.match_entity
     }
 
+    /// Snapshot the current state of the wrapped simulation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying `Simulation::get_state` returns `Err`,
+    /// which only happens when the `Match` resource has not been
+    /// registered (i.e. `Simulation::new` was bypassed). All paths that
+    /// construct a `ServerSimulation` via [`Self::new`] are guaranteed
+    /// to have the resource available.
     pub fn get_state(&self) -> MatchSnapshot {
         // Phase C §4.3: Match is a Resource, so the match-entity argument
         // is now informational. sim-core's get_state reads the resource.
@@ -315,7 +338,7 @@ mod tests {
             .resource_mut::<sim_components::Match>()
             .state = sim_components::MatchState::Kickoff;
 
-        let full_match_ticks: u64 = 324000;
+        let full_match_ticks: u64 = 324_000;
         for _ in 0..full_match_ticks {
             server.tick();
         }

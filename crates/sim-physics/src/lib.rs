@@ -308,9 +308,16 @@ pub fn apply_kick_velocity_system(
     }
 }
 
+/// Integrate player positions and apply pitch boundary clamping.
+///
+/// The ball entity carries `Position` + `Velocity` components too (its
+/// position/velocity live on the entity, while its state/possessor/etc.
+/// live on the `Ball` resource). Filtering by `Without<BallMarker>`
+/// ensures this system does not run ball physics — `ball_physics_system`
+/// is the sole writer for the ball's position and velocity.
 pub fn player_movement_system(
     pitch: Res<PitchDimensions>,
-    mut query: Query<(&mut Position, &mut Velocity)>,
+    mut query: Query<(&mut Position, &mut Velocity), Without<sim_components::BallMarker>>,
 ) {
     for (mut pos, mut vel) in &mut query {
         // Clamp velocity to max speed
@@ -326,12 +333,9 @@ pub fn player_movement_system(
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
-    use sim_components::{
-        Ball, BallMarker, Player, Position, RoleComponent, TeamId, Velocity,
-    };
+    use sim_components::{Ball, BallMarker, Player, Position, RoleComponent, TeamId, Velocity};
 
     /// The `pitch_control_system` (Phase 2 ECS-shape polish: §2.5) must
     /// succeed when invoked as a normal Bevy system (not via
@@ -390,6 +394,9 @@ mod tests {
                 }
             }
         }
-        assert!(changed > 0, "Grid should reflect player positions, all cells were 0.5");
+        assert!(
+            changed > 0,
+            "Grid should reflect player positions, all cells were 0.5"
+        );
     }
 }

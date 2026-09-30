@@ -50,10 +50,24 @@ impl ReplaySession {
     }
 }
 
+/// Replay a match from a seed and a list of timed manager commands.
+///
+/// # Errors
+///
+/// Returns an error string if the underlying `Simulation::get_state` call
+/// fails (no `Match` resource registered) or the snapshot cannot be
+/// constructed.
 pub fn replay(seed: u64, commands: Vec<TimedCommand>) -> Result<ReplayResult, String> {
-    replay_with_ticks(seed, commands, 324000)
+    replay_with_ticks(seed, commands, 324_000)
 }
 
+/// Replay a match for up to `total_ticks` simulation ticks.
+///
+/// # Errors
+///
+/// Returns an error string if the underlying `Simulation::get_state` call
+/// fails (no `Match` resource registered) or the snapshot cannot be
+/// constructed.
 pub fn replay_with_ticks(
     seed: u64,
     commands: Vec<TimedCommand>,
@@ -182,24 +196,41 @@ pub struct PlayerSnapshot {
     pub skill: f32,
 }
 
+/// Serialize a `RecordedSnapshot` to disk via `bincode`.
+///
+/// # Errors
+///
+/// Returns the bincode serialization error if the snapshot cannot be
+/// encoded, or the I/O error if the destination file cannot be written.
 pub fn save_snapshot(snapshot: &RecordedSnapshot, path: &str) -> Result<(), String> {
     let encoded = bincode::serialize(snapshot).map_err(|e| e.to_string())?;
     std::fs::write(path, encoded).map_err(|e| e.to_string())
 }
 
+/// Read and deserialize a `RecordedSnapshot` from disk via `bincode`.
+///
+/// # Errors
+///
+/// Returns the I/O error if the file cannot be read, or the bincode
+/// deserialization error if its bytes do not match the
+/// `RecordedSnapshot` schema.
 pub fn load_snapshot(path: &str) -> Result<RecordedSnapshot, String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     bincode::deserialize(&data).map_err(|e| e.to_string())
 }
 
+/// Capture the current `Simulation` world as a serializable
+/// `RecordedSnapshot`.
+///
+/// # Errors
+///
+/// Returns an error string if the `Match` resource is not registered
+/// (no match has been created yet).
 pub fn create_snapshot_from_simulation(
     simulation: &Simulation,
     _match_entity: Entity,
 ) -> Result<RecordedSnapshot, String> {
-    let match_component = simulation
-        .world
-        .resource::<Match>()
-        .clone();
+    let match_component = simulation.world.resource::<Match>().clone();
 
     let mut ball_position = [0.0f32; 2];
     // Phase C §4.3: ball entity is identified by `BallMarker`. There is
@@ -279,7 +310,7 @@ mod tests {
             .zip(result2.state_hash_history.iter())
             .enumerate()
         {
-            assert_eq!(hash1, hash2, "State hash mismatch at tick {}", i);
+            assert_eq!(hash1, hash2, "State hash mismatch at tick {i}");
         }
 
         assert_eq!(result1.final_state.tick, result2.final_state.tick);
@@ -302,11 +333,10 @@ mod tests {
 
         let result1 = replay_with_ticks(seed, Vec::new(), 5000).unwrap();
 
-        let mut commands = Vec::new();
-        commands.push(TimedCommand {
+        let commands = vec![TimedCommand {
             tick: 1000,
             command: ManagerCommand::ChangeFormation(sim_components::Formation::FourThreeThree),
-        });
+        }];
         let result2 = replay_with_ticks(seed, commands, 5000).unwrap();
 
         assert_eq!(
@@ -319,7 +349,7 @@ mod tests {
     fn test_snapshot_serialization() {
         let snapshot = RecordedSnapshot {
             tick: 1000,
-            state_hash: 123456789,
+            state_hash: 123_456_789,
             ball_position: [52.5, 34.0],
             player_positions: vec![([10.0, 20.0], TeamId(0))],
             score: (2, 1),

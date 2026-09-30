@@ -8,10 +8,15 @@ use sim_math::Vec2;
 use sim_physics::{PitchControlGrid, SimRng};
 
 /// Default decision cadence: every N physics ticks a given player is
-/// re-evaluated. Spec §13 #15, default N=6 → ~10 Hz at 60 Hz physics.
-/// Each player maps to a deterministic slot in `0..N` (see
-/// `player_stagger_slot`), so the guard is
-/// `(elapsed_ticks % N) == player_stagger_slot(entity)`.
+/// re-evaluated.
+///
+/// Spec §13 #15, default N=6 → ~10 Hz at 60 Hz physics. Each player
+/// maps to a deterministic slot in `0..N` (see `player_stagger_slot`),
+/// so the guard is `(elapsed_ticks % N) == player_stagger_slot(entity)`.
+#[allow(
+    clippy::too_long_first_doc_paragraph,
+    reason = "single-cadence constant; one paragraph best documents the contract"
+)]
 pub const DECISION_CADENCE_TICKS: u64 = 6;
 
 /// Counter incremented by `player_decision_system` each time a player
@@ -40,12 +45,17 @@ pub struct UtilityBrain {
     pub hysteresis: f32,
 }
 
-/// One consideration in a player's utility brain. Each variant carries its
-/// own `weight` and `ResponseCurve`. The dispatcher (`raw_input`) is
-/// exhaustive: adding a new variant forces a match-arm update at compile
-/// time, so a brain template that references a typo'd consideration fails
-/// at compile time instead of silently scoring 0.5 (the old string-dispatch
-/// behaviour).
+/// One consideration in a player's utility brain.
+///
+/// Each variant carries its own `weight` and `ResponseCurve`. The
+/// dispatcher (`raw_input`) is exhaustive: adding a new variant forces a
+/// match-arm update at compile time, so a brain template that references
+/// a typo'd consideration fails at compile time instead of silently
+/// scoring 0.5 (the old string-dispatch behaviour).
+#[allow(
+    clippy::too_long_first_doc_paragraph,
+    reason = "single-paragraph exhaustive-dispatch contract"
+)]
 #[derive(Debug, Clone)]
 pub enum Consideration {
     DistanceToTarget { weight: f32, curve: ResponseCurve },
@@ -350,11 +360,7 @@ pub fn perception_system(
     let ball_state = ball_res.state;
     let ball_position = {
         let q = queries.p2();
-        if let Ok(pos) = q.get_single() {
-            pos.0
-        } else {
-            Vec2::zero()
-        }
+        q.get_single().map_or_else(|_| Vec2::zero(), |pos| pos.0)
     };
 
     // Snapshot all other players' (entity, team_id, position) up front. This
@@ -717,8 +723,8 @@ pub fn player_action_execution_system(
                         Vec2::new(rng.gen_range_f32(-3.0, 3.0), rng.gen_range_f32(-2.0, 2.0));
                 }
             }
-            Intent::Movement(_) |
-Intent::Action(ActionIntent::MarkOpponent(_) | ActionIntent::Press(_)) => {}
+            Intent::Movement(_)
+            | Intent::Action(ActionIntent::MarkOpponent(_) | ActionIntent::Press(_)) => {}
         }
 
         let new_velocity = steer(perception, &intent);
@@ -809,8 +815,8 @@ pub fn kick_execution_system(
                 (dir.length() > 0.01).then(|| (dir.normalized(), KICK_SPEED_PASS))
             })
         }
-        Intent::Movement(MovementIntent::ChaseBall) |
-Intent::Action(ActionIntent::Tackle(_) | ActionIntent::Press(_)) => {
+        Intent::Movement(MovementIntent::ChaseBall)
+        | Intent::Action(ActionIntent::Tackle(_) | ActionIntent::Press(_)) => {
             (player_vel.0.length() > 0.01).then(|| (player_vel.0.normalized(), KICK_SPEED_PASS))
         }
         Intent::Movement(_) | Intent::Action(ActionIntent::MarkOpponent(_)) => None,
@@ -921,12 +927,6 @@ mod tests {
             .entity(match_entity)
             .get::<sim_components::MatchClock>()
             .map_or(0, |c| c.elapsed_ticks)
-    }
-
-    #[test]
-    fn test_player_ai_plugin() {
-        // Placeholder test
-        assert!(true);
     }
 
     /// Phase E PR 4b: the string labels produced by `intent_kind` must
@@ -1293,7 +1293,7 @@ mod tests {
         assert!(defender.intent.is_some());
     }
 
-    /// Phase D (CODEBASE_REVIEW §7): per-player decision cadence.
+    /// Phase D (`CODEBASE_REVIEW` §7): per-player decision cadence.
     ///
     /// The decision system MUST evaluate a given player only on the ticks
     /// where `(elapsed_ticks % DECISION_CADENCE_TICKS) == player_slot(entity)`,
@@ -1442,7 +1442,6 @@ mod tests {
             });
 
         // 22-player roster (Phase 3 default), 11 per team.
-        let mut player_entities = Vec::new();
         for team in 0..2u8 {
             for _ in 0..11 {
                 let e = world.spawn(()).id();
@@ -1485,7 +1484,6 @@ mod tests {
                             distance_to_bottom: 34.0,
                         },
                     });
-                player_entities.push(e);
             }
         }
 
@@ -1604,8 +1602,8 @@ mod tests {
     fn test_consideration_distance_to_target() {
         let perception = sim_components::PerceptionSnapshot {
             self_position: Vec2::new(50.0, 34.0),
-            nearby_teammates: Default::default(),
-            nearby_opponents: Default::default(),
+            nearby_teammates: smallvec::SmallVec::default(),
+            nearby_opponents: smallvec::SmallVec::default(),
             ball_position: Vec2::new(52.5, 34.0),
             ball_state: sim_components::BallState::Free,
             goal_position: Vec2::new(105.0, 34.0),

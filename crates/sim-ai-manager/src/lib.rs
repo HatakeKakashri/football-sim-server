@@ -146,11 +146,6 @@ mod tests {
     use sim_math::Vec2;
 
     #[test]
-    fn test_manager_ai_plugin() {
-        assert!(true);
-    }
-
-    #[test]
     fn test_manager_decision_aggressive_tactics() {
         let mut world = World::new();
 

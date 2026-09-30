@@ -223,8 +223,10 @@ impl MatchClock {
     }
 }
 
-/// Phase C §4.3 (ECS-shape polish, full): `Ball` is now a Resource,
-/// not a Component on an entity. There is exactly one ball per simulation,
+/// `Ball` is the singleton Resource holding all dynamic ball state.
+///
+/// Phase C §4.3 (ECS-shape polish, full): `Ball` is now a Resource, not
+/// a Component on an entity. There is exactly one ball per simulation,
 /// so the singleton-resource pattern removes the linear-scan ball
 /// lookups. The ball's `Position` and `Velocity` still live as Components
 /// on the dedicated ball entity — `Simulation::ball_entity` exposes the
@@ -234,6 +236,10 @@ impl MatchClock {
 /// only writer for state/possessor/last-touched-by/kick_velocity/spin,
 /// while `Position`/`Velocity` are written exclusively by the physics
 /// systems on the entity).
+#[allow(
+    clippy::too_long_first_doc_paragraph,
+    reason = "Phase C history block; splitting it would scatter load-bearing context"
+)]
 #[derive(Resource, Debug, Clone)]
 pub struct Ball {
     pub spin: f32,
@@ -252,11 +258,17 @@ pub struct Ball {
     pub kick_velocity: Option<Vec2>,
 }
 
-/// Phase C §4.3: tag component on the ball entity so systems can find it
-/// via Query without scanning `iter_entities()`. There is exactly one
-/// entity carrying `BallMarker` per match; its `Position`/`Velocity`
-/// components are written by `ball_physics_system`, while `Ball` (the
-/// Resource) holds `state/possessor/last_touched_by/kick_velocity/spin`.
+/// Tag component on the ball entity so systems can find it via Query
+/// without scanning `iter_entities()`.
+///
+/// Phase C §4.3: there is exactly one entity carrying `BallMarker` per
+/// match; its `Position`/`Velocity` components are written by
+/// `ball_physics_system`, while `Ball` (the Resource) holds
+/// `state/possessor/last_touched_by/kick_velocity/spin`.
+#[allow(
+    clippy::too_long_first_doc_paragraph,
+    reason = "Phase C history block; splitting it would scatter load-bearing context"
+)]
 #[derive(Component, Debug, Clone, Copy)]
 pub struct BallMarker;
 
@@ -276,15 +288,21 @@ pub struct Team {
     pub substitutes: Vec<Entity>,
 }
 
-/// Phase C ECS-shape polish (review §4.3): `Match` is now a Resource rather
-/// than a Component. There is exactly one match per simulation, and the
-/// singleton-resource pattern removes the linear-scan lookups in
+/// `Match` is the singleton Resource holding all match-level state.
+///
+/// Phase C ECS-shape polish (review §4.3): `Match` is now a Resource
+/// rather than a Component. There is exactly one match per simulation,
+/// and the singleton-resource pattern removes the linear-scan lookups in
 /// `apply_command` / `get_match_entity` (§2.9). `Match` is no longer a
 /// `Component` — anywhere a system needs match state, take
 /// `Res<Match>` / `ResMut<Match>`. The match-entity slot on
 /// `Simulation::match_entity` is retained for compatibility with consumers
 /// that still need the entity (e.g. lifecycle commands), but no system
 /// reads match state via `Query<&Match>` after this change.
+#[allow(
+    clippy::too_long_first_doc_paragraph,
+    reason = "Phase C history block; splitting it would scatter load-bearing context"
+)]
 #[derive(Resource, Debug, Clone)]
 pub struct Match {
     pub id: u64,
@@ -363,6 +381,10 @@ pub enum Tactic {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare freshly-constructed values against the literals they were built from; equality is exact"
+)]
 mod tests {
     use super::*;
 

@@ -132,6 +132,10 @@ pub const fn is_full_time(clock: &MatchClock) -> bool {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests assert exact `secs`/`mins` returns from integer-minute tick arithmetic"
+)]
 mod tests {
     use super::*;
 
@@ -149,7 +153,7 @@ mod tests {
     fn test_ticks_to_secs() {
         assert_eq!(ticks_to_secs(60), 1);
         assert_eq!(ticks_to_secs(120), 2);
-        assert_eq!(ticks_to_secs(162000), 2700); // 45 minutes
+        assert_eq!(ticks_to_secs(162_000), 2700); // 45 minutes
     }
 
     #[test]

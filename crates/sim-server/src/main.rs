@@ -65,6 +65,10 @@ enum Commands {
     },
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "single-file CLI dispatcher; splitting would scatter the three subcommand flows across modules"
+)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -84,10 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if full_match {
                 loop {
                     sim.tick();
-                    let m_state = sim
-                        .world
-                        .resource::<sim_components::Match>()
-                        .state;
+                    let m_state = sim.world.resource::<sim_components::Match>().state;
                     if m_state == sim_components::MatchState::FullTime {
                         println!("[Tick {:06}] FullTime reached", sim.tick);
                         break;
@@ -109,10 +110,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let duration = start.elapsed();
+            // Display-only conversion: 60 Hz ticks stay well below 2^53,
+            // so the `u64 -> f64` cast is exact for any plausible match.
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "display-only cast; tick counts at 60 Hz stay far below 2^53"
+            )]
+            let ticks_per_sec = sim.tick as f64 / duration.as_secs_f64();
             println!(
                 "Simulation completed in {:.2}ms ({:.2} ticks/sec)",
                 duration.as_secs_f64() * 1000.0,
-                sim.tick as f64 / duration.as_secs_f64()
+                ticks_per_sec
             );
 
             if let Some(output_path) = output {
@@ -201,7 +209,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sim.tick();
             }
             let duration = start.elapsed();
+            // Display-only conversion: 60 Hz ticks stay well below 2^53,
+            // so the `u64 -> f64` cast is exact for any plausible run.
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "display-only cast; tick counts at 60 Hz stay far below 2^53"
+            )]
             let tick_time_ms = duration.as_secs_f64() * 1000.0 / ticks as f64;
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "display-only cast; tick counts at 60 Hz stay far below 2^53"
+            )]
             let ticks_per_sec = ticks as f64 / duration.as_secs_f64();
 
             println!(

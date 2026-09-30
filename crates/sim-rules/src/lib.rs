@@ -685,9 +685,15 @@ mod tests {
     use super::*;
     use sim_components::{BallMarker, Player, RoleComponent, Skill, Stamina, TeamId};
 
-    /// Produces a test Ball at `pos` with the given `state`.
+    /// Produces a test `Ball` resource with the given `state`.
     /// All other fields are zeroed; `possessor` and `last_touched_by` are `None`.
-    fn ball_fixture(pos: sim_math::Vec2, state: BallState) -> Ball {
+    ///
+    /// Note: the legacy `pos: Vec2` parameter is intentionally retained (as
+    /// `_pos`) for backwards compatibility with the existing test call
+    /// sites. Ball position lives on the entity component (`Position`),
+    /// not on this Resource, so callers must still set the entity position
+    /// separately — the parameter does not propagate.
+    fn ball_fixture(_pos: sim_math::Vec2, state: BallState) -> Ball {
         Ball {
             kick_velocity: None,
             spin: 0.0,
@@ -1033,7 +1039,7 @@ mod tests {
     }
 
     /// Test that possession is resolved to the actual player entity, not
-    /// Entity::PLACEHOLDER.
+    /// `Entity::PLACEHOLDER`.
     #[test]
     fn test_possession_resolved_to_real_entity() {
         let mut world = World::new();
@@ -1106,24 +1112,24 @@ mod tests {
             .entity_mut(ball_entity)
             .insert(Position(Vec2::new(50.0, 34.0)));
 
-        let _player_entity = world.spawn(()).id();
-        world.entity_mut(_player_entity).insert(Player {
+        let player_entity = world.spawn(()).id();
+        world.entity_mut(player_entity).insert(Player {
             team_id: TeamId(0),
             intent: None,
         });
         world
-            .entity_mut(_player_entity)
+            .entity_mut(player_entity)
             .insert(Position(Vec2::new(55.0, 34.0)));
         world
-            .entity_mut(_player_entity)
+            .entity_mut(player_entity)
             .insert(Velocity(Vec2::zero()));
-        world.entity_mut(_player_entity).insert(Stamina(0.8));
+        world.entity_mut(player_entity).insert(Stamina(0.8));
         world
-            .entity_mut(_player_entity)
+            .entity_mut(player_entity)
             .insert(RoleComponent(sim_components::Role::Striker));
-        world.entity_mut(_player_entity).insert(Skill(0.8));
+        world.entity_mut(player_entity).insert(Skill(0.8));
         world
-            .entity_mut(_player_entity)
+            .entity_mut(player_entity)
             .insert(TeamIdComponent(TeamId(0)));
 
         let mut schedule = Schedule::default();
@@ -1138,7 +1144,7 @@ mod tests {
         );
     }
 
-    /// Test that last_touched_by is updated when a player touches the ball
+    /// Test that `last_touched_by` is updated when a player touches the ball
     /// (simulates a pass scenario).
     #[test]
     fn test_offside_last_touch_tracked() {

@@ -1269,6 +1269,10 @@ fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare outputs of identical arithmetic against the inputs they were derived from"
+)]
 mod tests {
     use super::*;
     use sim_components::time;
@@ -1341,8 +1345,8 @@ mod tests {
 
         let bx = snapshot.ball.position[0];
         let by = snapshot.ball.position[1];
-        assert!(bx >= 0.0 && bx <= 105.0, "Ball x {} out of pitch", bx);
-        assert!(by >= 0.0 && by <= 68.0, "Ball y {} out of pitch", by);
+        assert!((0.0..=105.0).contains(&bx), "Ball x {bx} out of pitch");
+        assert!((0.0..=68.0).contains(&by), "Ball y {by} out of pitch");
     }
 
     /// Sanity check that the hash is a non-zero u64 that exercises every
@@ -1363,7 +1367,7 @@ mod tests {
     /// ball entity (the one with both `Ball` and `Position`/`Velocity`
     /// components) and verify the Position changes after a tick.
     ///
-    /// Phase 1 update: lifecycle_system kicks the ball at Kickoff→InPlay with
+    /// Phase 1 update: `lifecycle_system` kicks the ball at Kickoff→InPlay with
     /// a velocity of (2.0, 0.0) on the first tick, which would clobber any
     /// velocity the test sets *before* the first tick. We instead let the
     /// first tick complete (so the kickoff settles), then perturb velocity
@@ -1472,8 +1476,7 @@ mod tests {
             .elapsed_ticks;
         assert!(
             elapsed_ticks == 60,
-            "clock should be 60 ticks, got {}",
-            elapsed_ticks
+            "clock should be 60 ticks, got {elapsed_ticks}"
         );
     }
 
@@ -1611,7 +1614,7 @@ mod tests {
     }
 
     /// Test: Half-time transition with added time.
-    /// Verifies that the match correctly transitions to HalfTime when
+    /// Verifies that the match correctly transitions to `HalfTime` when
     /// the first half elapsed time reaches 45 minutes + added time.
     #[test]
     fn test_half_time_transition_with_added_time() {
@@ -1647,7 +1650,7 @@ mod tests {
     }
 
     /// Test: Second-half kickoff clock reset.
-    /// Verifies that at the start of the second half, elapsed_ticks resets to 0.
+    /// Verifies that at the start of the second half, `elapsed_ticks` resets to 0.
     #[test]
     fn test_second_half_kickoff_clock_reset() {
         let mut sim = Simulation::new(42);
@@ -1698,7 +1701,7 @@ mod tests {
     }
 
     /// Test: Clock pause/resume during stoppage.
-    /// Verifies that the match clock pauses when is_running is false
+    /// Verifies that the match clock pauses when `is_running` is false
     /// and resumes when set back to true.
     #[test]
     fn test_clock_pause_resume_stoppage() {
@@ -1757,7 +1760,7 @@ mod tests {
 
     /// Test: AI time-remaining calculation in second half.
     /// Verifies that the time remaining calculation correctly handles
-    /// the second half (where elapsed_ticks resets but total elapsed continues).
+    /// the second half (where `elapsed_ticks` resets but total elapsed continues).
     #[test]
     fn test_ai_time_remaining_in_second_half() {
         let mut sim = Simulation::new(42);

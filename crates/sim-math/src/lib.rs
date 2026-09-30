@@ -216,6 +216,10 @@ impl PitchDimensions {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests assert exact arithmetic results from integer-literal vector operands"
+)]
 mod tests {
     use super::*;
 

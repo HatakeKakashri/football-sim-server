@@ -135,6 +135,48 @@ consideration_accessors! {
     FormationDiscipline { weight: _, curve: _ },
 }
 
+/// Tactical distance thresholds (metres) used by `Consideration::raw_input`
+/// to convert perception-snapshot fields into scoring inputs.
+///
+/// Centralising these here makes the consideration arms read like a table
+/// rather than a wall of magic numbers, and gives a single point of
+/// adjustment when a balance pass changes the model's sensitivity.
+#[allow(
+    clippy::module_name_repetitions,
+    reason = "the name `tactical_thresholds` is intentional; not a repetition"
+)]
+mod tactical_thresholds {
+    /// Opponents closer than this are considered to have a clear pass lane.
+    pub const PASS_LANE_CLEAR_M: f32 = 8.0;
+    /// Upper bound used by `TeammateSpace` (and friends) when the nearest
+    /// opponent is non-finite (no opponents visible).
+    pub const TEAMMATE_SPACE_DEFAULT_M: f32 = 20.0;
+    /// Cap on `TeammateSpace` / `DistanceToTarget` / `SpaceAhead` raw scores
+    /// before scaling.
+    pub const TEAMMATE_SPACE_CAP_M: f32 = 20.0;
+    /// Cap for `DistanceToOpponent` scoring.
+    pub const DEFENDER_PRESSURE_RADIUS_M: f32 = 5.0;
+    /// Cap for `DistanceToMarked` scoring.
+    pub const DISTANCE_TO_MARKED_CAP_M: f32 = 10.0;
+    /// Cap for `DistanceToPress` scoring.
+    pub const DISTANCE_TO_PRESS_CAP_M: f32 = 12.0;
+    /// Cap for `SpaceAhead` / `DistanceToTarget` raw scoring.
+    pub const SPACE_AHEAD_CAP_M: f32 = 15.0;
+    /// Distance to ball below which a teammate is considered to be
+    /// "on the ball" (for `TeammateBall`).
+    pub const TEAMMATE_ON_BALL_RADIUS_M: f32 = 2.0;
+    /// Cap for `DistanceToTarget` and `TeammateDistance` scoring.
+    pub const DISTANCE_TO_TARGET_CAP_M: f32 = 30.0;
+    /// Cap for `DistanceToGoal` scoring.
+    pub const DISTANCE_TO_GOAL_CAP_M: f32 = 35.0;
+    /// `PitchControlAtBall` returns a value in [0, 1]; we scale to [0, 100].
+    pub const PITCH_CONTROL_SCALE: f32 = 100.0;
+    /// `Stamina` and `Skill` baseline; `SkillDiff` clamps skill-0.7 to [-1, 1].
+    pub const SKILL_BASELINE: f32 = 0.7;
+    /// Floor on goal-angle magnitude to avoid divide-by-zero in `GoalAngle`.
+    pub const GOAL_ANGLE_MIN_MAGNITUDE: f32 = 1e-3;
+}
+
 impl Consideration {
     /// Compute the raw, unnormalized input for this consideration. The
     /// returned value is fed into `self.curve()` by the caller (typically
@@ -167,7 +209,8 @@ impl Consideration {
                         .self_position
                         .distance(ctx.perception.ball_position)
                 };
-                30.0 - d.min(30.0)
+                tactical_thresholds::DISTANCE_TO_TARGET_CAP_M
+                    - d.min(tactical_thresholds::DISTANCE_TO_TARGET_CAP_M)
             }
             Self::DistanceToBall { .. } => ctx
                 .perception
@@ -178,7 +221,7 @@ impl Consideration {
                 g.control_at(
                     ctx.perception.ball_position.x,
                     ctx.perception.ball_position.y,
-                ) * 100.0
+                ) * tactical_thresholds::PITCH_CONTROL_SCALE
             }),
             Self::PassAngleClear { .. } => {
                 if matches!(
@@ -189,7 +232,7 @@ impl Consideration {
                         .perception
                         .nearby_opponents
                         .iter()
-                        .any(|opp| opp.distance < 8.0);
+                        .any(|opp| opp.distance < tactical_thresholds::PASS_LANE_CLEAR_M);
                     if lane_clear { 1.0 } else { 0.4 }
                 } else {
                     0.5
@@ -206,7 +249,7 @@ impl Consideration {
                         .map(|t| t.distance)
                         .sum::<f32>()
                         / count_to_f32(ctx.perception.nearby_teammates.len());
-                    30.0 - avg.min(30.0)
+                    tactical_thresholds::DISTANCE_TO_TARGET_CAP_M - avg.min(tactical_thresholds::DISTANCE_TO_TARGET_CAP_M)
                 }
             }
             Self::TeammateSpace { .. } => {
@@ -219,12 +262,13 @@ impl Consideration {
                 let space_m = if nearest_opp.is_finite() {
                     nearest_opp
                 } else {
-                    20.0
+                    tactical_thresholds::TEAMMATE_SPACE_DEFAULT_M
                 };
-                20.0 - space_m.min(20.0)
+                tactical_thresholds::TEAMMATE_SPACE_CAP_M
+                    - space_m.min(tactical_thresholds::TEAMMATE_SPACE_CAP_M)
             }
             Self::DistanceToGoal { .. } => {
-                35.0 - ctx
+                tactical_thresholds::DISTANCE_TO_GOAL_CAP_M - ctx
                     .perception
                     .self_position
                     .distance(ctx.perception.goal_position)
@@ -234,7 +278,7 @@ impl Consideration {
                 let to_goal = ctx.perception.goal_position - ctx.perception.self_position;
                 let dot = to_ball.dot(to_goal);
                 let mags = to_ball.length() * to_goal.length();
-                if mags > 1e-3 {
+                if mags > tactical_thresholds::GOAL_ANGLE_MIN_MAGNITUDE {
                     (dot / mags).clamp(-1.0, 1.0)
                 } else {
                     0.0
@@ -244,27 +288,27 @@ impl Consideration {
                 ctx.perception
                     .nearby_opponents
                     .iter()
-                    .filter(|o| o.distance <= 5.0)
+                    .filter(|o| o.distance <= tactical_thresholds::DEFENDER_PRESSURE_RADIUS_M)
                     .count(),
             ),
             Self::DistanceToOpponent { .. } => {
-                5.0 - ctx
+                tactical_thresholds::DEFENDER_PRESSURE_RADIUS_M - ctx
                     .perception
                     .nearby_opponents
                     .iter()
                     .map(|o| o.distance)
                     .fold(f32::INFINITY, f32::min)
-                    .min(5.0)
+                    .min(tactical_thresholds::DEFENDER_PRESSURE_RADIUS_M)
             }
-            Self::SkillDiff { .. } => (ctx.skill - 0.7).clamp(-1.0, 1.0),
+            Self::SkillDiff { .. } => (ctx.skill - tactical_thresholds::SKILL_BASELINE).clamp(-1.0, 1.0),
             Self::DistanceToMarked { .. } => {
-                10.0 - ctx
+                tactical_thresholds::DISTANCE_TO_MARKED_CAP_M - ctx
                     .perception
                     .nearby_opponents
                     .iter()
                     .map(|o| o.distance)
                     .fold(f32::INFINITY, f32::min)
-                    .min(10.0)
+                    .min(tactical_thresholds::DISTANCE_TO_MARKED_CAP_M)
             }
             Self::DefensivePosition { .. } => {
                 let own_goal_x = 0.0_f32;
@@ -277,13 +321,13 @@ impl Consideration {
                 }
             }
             Self::DistanceToPress { .. } => {
-                12.0 - ctx
+                tactical_thresholds::DISTANCE_TO_PRESS_CAP_M - ctx
                     .perception
                     .nearby_opponents
                     .iter()
                     .map(|o| o.distance)
                     .fold(f32::INFINITY, f32::min)
-                    .min(12.0)
+                    .min(tactical_thresholds::DISTANCE_TO_PRESS_CAP_M)
             }
             Self::SpaceAhead { .. } => {
                 let forward = ctx.perception.ball_position.x > ctx.perception.self_position.x;
@@ -303,16 +347,16 @@ impl Consideration {
                 let d = if opp_in_front.is_finite() {
                     opp_in_front
                 } else {
-                    15.0
+                    tactical_thresholds::SPACE_AHEAD_CAP_M
                 };
-                15.0 - d.min(15.0)
+                tactical_thresholds::SPACE_AHEAD_CAP_M - d.min(tactical_thresholds::SPACE_AHEAD_CAP_M)
             }
             Self::TeammateBall { .. } => {
                 let has = ctx.perception.nearby_teammates.iter().any(|t| {
                     let dist_to_ball = (t.relative_position + ctx.perception.self_position
                         - ctx.perception.ball_position)
                         .length();
-                    dist_to_ball < 2.0
+                    dist_to_ball < tactical_thresholds::TEAMMATE_ON_BALL_RADIUS_M
                 });
                 if has { 1.0 } else { 0.0 }
             }
@@ -920,6 +964,19 @@ mod tests {
         assert!(matches!(v.curve(), ResponseCurve::Linear { min: 0.0, max: 1.0 }));
         // The exhaustive list is verified at compile-time by the macro
         // itself; this test is the runtime smoke check.
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "exact equality against a literal is the point of this pin-the-value sanity check"
+    )]
+    fn tactical_thresholds_have_expected_values() {
+        // Pin the values to the magic numbers they replace, so a balance
+        // pass that changes gameplay tuning is a deliberate act.
+        assert_eq!(tactical_thresholds::PASS_LANE_CLEAR_M, 8.0);
+        assert_eq!(tactical_thresholds::DEFENDER_PRESSURE_RADIUS_M, 5.0);
+        assert_eq!(tactical_thresholds::DISTANCE_TO_TARGET_CAP_M, 30.0);
     }
 
     /// Phase D helper: run a schedule for one full cadence window,

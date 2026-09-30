@@ -88,9 +88,15 @@ Open `crates/sim-ai-player/src/lib.rs`, find the `#[cfg(test)] mod tests {` bloc
     fn weight_curve_exhaustive_for_all_variants() {
         // Spot-check: construct every variant the macro must cover and
         // verify both accessors return the values carried by the variant.
-        let v = Consideration::DistanceToTarget { weight: 0.5, curve: ResponseCurve::Constant(1.0) };
+        let v = Consideration::DistanceToTarget {
+            weight: 0.5,
+            curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
+        };
         assert_eq!(v.weight(), 0.5);
-        assert!(matches!(v.curve(), ResponseCurve::Constant(1.0)));
+        assert!(matches!(
+            v.curve(),
+            ResponseCurve::Linear { min: 0.0, max: 1.0 }
+        ));
         // The exhaustive list is verified at compile-time by the macro
         // itself; this test is the runtime smoke check.
     }

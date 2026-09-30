@@ -30,3 +30,6 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+
+# Plan execution artifacts (ledgers, briefs, review packages)
+.superpowers/sdd/

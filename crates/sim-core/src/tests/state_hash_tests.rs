@@ -45,9 +45,9 @@ fn test_hash_detects_state_change() {
     );
 
     // Perturb ball on sim a.
-    let ball_a = a.ball_entity;
+    let ball_a = a.ball_entity();
     {
-        let mut em = a.world.entity_mut(ball_a);
+        let mut em = a.world_mut().entity_mut(ball_a);
         let mut p = em.get_mut::<PosComp>().expect("ball has Position");
         p.0 = Vec2::new(p.0.x + 1.0, p.0.y);
     }

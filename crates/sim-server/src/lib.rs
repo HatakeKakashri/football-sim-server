@@ -4,8 +4,8 @@ use sim_core::{MatchSnapshot, Simulation};
 pub use sim_components::CommandError;
 
 pub struct ServerSimulation {
-    pub simulation: Simulation,
-    pub command_queue: CommandQueue,
+    simulation: Simulation,
+    command_queue: CommandQueue,
 }
 
 impl ServerSimulation {
@@ -19,7 +19,7 @@ impl ServerSimulation {
 
     pub fn tick(&mut self) {
         // Apply queued commands at tick boundaries
-        let commands = self.command_queue.apply_at_tick(self.simulation.tick);
+        let commands = self.command_queue.apply_at_tick(self.simulation.current_tick());
         for command in commands {
             // Apply command (validation already done when queueing)
             self.apply_command_immediately(command);
@@ -54,9 +54,9 @@ impl ServerSimulation {
         // happens at the queue dispatch (`apply_command_immediately`) so
         // that command application is aligned with the tick boundary.
         self.simulation
-            .validate_command(self.simulation.match_entity, &command)?;
+            .validate_command(self.simulation.match_entity(), &command)?;
         self.command_queue
-            .enqueue(command, self.simulation.tick + 1);
+            .enqueue(command, self.simulation.current_tick() + 1);
         Ok(())
     }
 
@@ -70,7 +70,7 @@ impl ServerSimulation {
         // so the mutation is defined in exactly one place. This path is
         // home-only; side-aware apply is a future API addition.
         self.simulation
-            .apply_validated_command(self.simulation.match_entity, command);
+            .apply_validated_command(self.simulation.match_entity(), command);
     }
 
     /// Snapshot the current state of the wrapped simulation.
@@ -83,21 +83,17 @@ impl ServerSimulation {
     /// construct a `ServerSimulation` via [`Self::new`] are guaranteed
     /// to have the resource available.
     pub fn get_state(&self) -> MatchSnapshot {
-        // Phase C §4.3: Match is a Resource, so the match-entity argument
-        // is now informational. sim-core's get_state reads the resource.
-        self.simulation
-            .get_state(self.simulation.match_entity)
-            .unwrap()
+        self.simulation.get_state().unwrap()
     }
 }
 
 pub struct CommandQueue {
-    pub commands: Vec<QueuedCommand>,
+    commands: Vec<QueuedCommand>,
 }
 
 pub struct QueuedCommand {
-    pub command: ManagerCommand,
-    pub tick: u64,
+    pub(crate) command: ManagerCommand,
+    pub(crate) tick: u64,
 }
 
 impl Default for CommandQueue {
@@ -134,7 +130,7 @@ mod tests {
     #[test]
     fn test_server_simulation() {
         let server = ServerSimulation::new(12345);
-        assert_eq!(server.simulation.tick, 0);
+        assert_eq!(server.simulation.current_tick(), 0);
     }
 
     #[test]
@@ -177,7 +173,7 @@ mod tests {
         // Set match state to InPlay (Phase C §4.3: Match is now a Resource).
         server
             .simulation
-            .world
+            .world_mut()
             .resource_mut::<sim_components::Match>()
             .state = sim_components::MatchState::InPlay;
 
@@ -200,10 +196,10 @@ mod tests {
     fn apply_command_targets_home_team_only() {
         let mut server = ServerSimulation::new(12345);
         // Move to InPlay so the command validates.
-        server.simulation.world.resource_mut::<sim_components::Match>().state = sim_components::MatchState::InPlay;
+        server.simulation.world_mut().resource_mut::<sim_components::Match>().state = sim_components::MatchState::InPlay;
 
-        let home = server.simulation.world.resource::<sim_components::Match>().home_team;
-        let away = server.simulation.world.resource::<sim_components::Match>().away_team;
+        let home = server.simulation.world().resource::<sim_components::Match>().home_team;
+        let away = server.simulation.world().resource::<sim_components::Match>().away_team;
 
         // Enqueue directly at the current tick and tick once. This exercises
         // `tick()`'s drain-and-apply path (`apply_command_immediately` →
@@ -211,12 +207,12 @@ mod tests {
         // `apply_command`'s `tick + 1` enqueue semantics.
         server.command_queue.enqueue(
             ManagerCommand::ChangeFormation(sim_components::Formation::FourThreeThree),
-            server.simulation.tick,
+            server.simulation.current_tick(),
         );
         server.tick();
 
-        let home_formation = server.simulation.world.entity(home).get::<sim_components::Team>().unwrap().formation;
-        let away_formation = server.simulation.world.entity(away).get::<sim_components::Team>().unwrap().formation;
+        let home_formation = server.simulation.world().entity(home).get::<sim_components::Team>().unwrap().formation;
+        let away_formation = server.simulation.world().entity(away).get::<sim_components::Team>().unwrap().formation;
 
         assert_eq!(home_formation, sim_components::Formation::FourThreeThree, "home team should have new formation");
         assert_eq!(away_formation, sim_components::Formation::FourFourTwo, "away team should still have default formation");
@@ -257,7 +253,7 @@ mod tests {
         // Phase C §4.3: Match is a Resource.
         server
             .simulation
-            .world
+            .world_mut()
             .resource_mut::<sim_components::Match>()
             .state = sim_components::MatchState::Kickoff;
 

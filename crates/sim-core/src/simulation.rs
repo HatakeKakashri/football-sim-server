@@ -25,12 +25,51 @@ pub enum SimulationSet {
 }
 
 pub struct Simulation {
-    pub world: World,
-    pub schedule: Schedule,
-    pub original_seed: u64,
-    pub tick: u64,
-    pub match_entity: Entity,
-    pub ball_entity: Entity,
+    world: World,
+    schedule: Schedule,
+    original_seed: u64,
+    tick: u64,
+    match_entity: Entity,
+    ball_entity: Entity,
+}
+
+impl Simulation {
+    /// Read-only access to the Bevy `World`.
+    #[must_use]
+    pub const fn world(&self) -> &World {
+        &self.world
+    }
+
+    /// Mutable access to the Bevy `World`.
+    ///
+    /// Callers must not bypass the tick pipeline or mutate state in ways
+    /// that break determinism. Intended for test setup and internal
+    /// initialization only.
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "no const-evaluation context uses this; const adds noise without benefit"
+    )]
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
+    /// The current simulation tick.
+    #[must_use]
+    pub const fn current_tick(&self) -> u64 {
+        self.tick
+    }
+
+    /// The entity representing the match.
+    #[must_use]
+    pub const fn match_entity(&self) -> Entity {
+        self.match_entity
+    }
+
+    /// The entity representing the ball.
+    #[must_use]
+    pub const fn ball_entity(&self) -> Entity {
+        self.ball_entity
+    }
 }
 
 // `Simulation`'s implementation is split across the sibling submodules:

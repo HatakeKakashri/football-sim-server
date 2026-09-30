@@ -16,11 +16,10 @@ use sim_components::Position;
 #[test]
 fn test_pipeline_isolation_single_tick() {
     let mut sim = Simulation::new(42);
-    let match_entity = sim.match_entity;
 
     sim.tick();
 
-    let snapshot = sim.get_state(match_entity).expect("get_state failed");
+    let snapshot = sim.get_state().expect("get_state failed");
 
     assert_ne!(
         snapshot.state_hash, 0,
@@ -50,7 +49,7 @@ fn test_ball_moves_under_physics() {
     use sim_math::Vec2;
 
     let mut sim = Simulation::new(7);
-    let ball_entity = sim.ball_entity;
+    let ball_entity = sim.ball_entity();
 
     // Let the kickoff settle so the lifecycle no longer overwrites
     // velocity on each tick.
@@ -58,14 +57,14 @@ fn test_ball_moves_under_physics() {
 
     // Set a non-zero velocity directly via world mutation.
     {
-        let mut em = sim.world.entity_mut(ball_entity);
+        let mut em = sim.world_mut().entity_mut(ball_entity);
         let mut v = em.get_mut::<VelComp>().expect("ball has Velocity");
         v.0 = Vec2::new(5.0, 0.0);
     }
     // Snapshot initial Position component.
     let initial_pos: (f32, f32) = {
         let p = sim
-            .world
+            .world()
             .entity(ball_entity)
             .get::<PosComp>()
             .expect("ball has Position");
@@ -76,7 +75,7 @@ fn test_ball_moves_under_physics() {
 
     let final_pos: (f32, f32) = {
         let p = sim
-            .world
+            .world()
             .entity(ball_entity)
             .get::<PosComp>()
             .expect("ball has Position");
@@ -100,17 +99,16 @@ fn test_ball_moves_under_physics() {
 #[test]
 fn test_player_positions_update_in_exported_state() {
     let mut sim = Simulation::new(99);
-    let me = sim.match_entity;
 
     // Let the kickoff impulse settle (kickoff → InPlay on tick 0).
     sim.tick();
 
     // Verify get_state reads from Position component by checking that
     // the exported positions match the Position component values.
-    let state = sim.get_state(me).expect("get_state works");
+    let state = sim.get_state().expect("get_state works");
     for player_view in &state.players {
         let entity = Entity::from_bits(player_view.entity_id);
-        let pos = sim.world.entity(entity).get::<Position>().unwrap().0;
+        let pos = sim.world().entity(entity).get::<Position>().unwrap().0;
         assert_eq!(
             player_view.position,
             [pos.x, pos.y],
@@ -124,10 +122,10 @@ fn test_player_positions_update_in_exported_state() {
     }
 
     // Verify again after physics runs
-    let state = sim.get_state(me).expect("get_state works");
+    let state = sim.get_state().expect("get_state works");
     for player_view in &state.players {
         let entity = Entity::from_bits(player_view.entity_id);
-        let pos = sim.world.entity(entity).get::<Position>().unwrap().0;
+        let pos = sim.world().entity(entity).get::<Position>().unwrap().0;
         assert_eq!(
             player_view.position,
             [pos.x, pos.y],

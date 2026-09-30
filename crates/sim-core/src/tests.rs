@@ -39,7 +39,7 @@ fn validate_command_returns_typed_error_for_prematch() {
     let sim = Simulation::new(7);
     // Default state is PreMatch; ChangeFormation should fail.
     let result = sim.validate_command(
-        sim.match_entity,
+        sim.match_entity(),
         &ManagerCommand::ChangeFormation(Formation::FourThreeThree),
     );
     assert!(matches!(
@@ -59,12 +59,12 @@ fn validate_command_does_not_apply_but_apply_validated_command_does() {
     use sim_components::{Formation, ManagerCommand};
     let mut sim = Simulation::new(7);
     // Move to InPlay so ChangeFormation passes validation.
-    sim.world.resource_mut::<Match>().state = MatchState::InPlay;
-    let home_team = sim.world.resource::<Match>().home_team;
+    sim.world_mut().resource_mut::<Match>().state = MatchState::InPlay;
+    let home_team = sim.world().resource::<Match>().home_team;
 
     // Read default formation (FourFourTwo from Simulation::new).
     let default_formation = sim
-        .world
+        .world()
         .entity(home_team)
         .get::<sim_components::Team>()
         .expect("invariant: home team has Team component")
@@ -74,10 +74,10 @@ fn validate_command_does_not_apply_but_apply_validated_command_does() {
     let cmd = ManagerCommand::ChangeFormation(Formation::FourThreeThree);
 
     // validate_command must NOT mutate.
-    sim.validate_command(sim.match_entity, &cmd)
+    sim.validate_command(sim.match_entity(), &cmd)
         .expect("invariant: InPlay state permits ChangeFormation");
     let formation_after_validate = sim
-        .world
+        .world()
         .entity(home_team)
         .get::<sim_components::Team>()
         .expect("invariant: home team has Team component")
@@ -88,9 +88,9 @@ fn validate_command_does_not_apply_but_apply_validated_command_does() {
     );
 
     // apply_validated_command DOES mutate.
-    sim.apply_validated_command(sim.match_entity, cmd);
+    sim.apply_validated_command(sim.match_entity(), cmd);
     let formation_after_apply = sim
-        .world
+        .world()
         .entity(home_team)
         .get::<sim_components::Team>()
         .expect("invariant: home team has Team component")
@@ -105,5 +105,5 @@ fn validate_command_does_not_apply_but_apply_validated_command_does() {
 #[test]
 fn test_simulation_creation() {
     let sim = Simulation::new(12345);
-    assert_eq!(sim.tick, 0);
+    assert_eq!(sim.current_tick(), 0);
 }

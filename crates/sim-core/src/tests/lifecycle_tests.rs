@@ -19,12 +19,12 @@ use sim_components::{Match, MatchClock, MatchState};
 #[test]
 fn test_clock_advances() {
     let mut sim = Simulation::new(42);
-    let me = sim.match_entity;
+    let me = sim.match_entity();
     for _ in 0..60 {
         sim.tick();
     }
     let elapsed_ticks = sim
-        .world
+        .world()
         .entity(me)
         .get::<MatchClock>()
         .expect("match entity has MatchClock component")
@@ -53,7 +53,7 @@ fn test_clock_advances() {
 #[ignore = "full-match test is minutes-long; run only when verifying end-to-end behaviour"]
 fn test_full_match_reaches_full_time() {
     let mut sim = Simulation::new(7);
-    let me = sim.match_entity;
+    let me = sim.match_entity();
     let mut saw_half_2 = false;
     let mut clock_paused_after_half = false;
 
@@ -62,7 +62,7 @@ fn test_full_match_reaches_full_time() {
         for _ in 0..330_000u64 {
             sim.tick();
             let clock = sim
-                .world
+                .world()
                 .entity(me)
                 .get::<MatchClock>()
                 .cloned()
@@ -75,7 +75,7 @@ fn test_full_match_reaches_full_time() {
             if clock.half == 2 && !clock.is_running {
                 clock_paused_after_half = true;
             }
-            state = sim.world.resource::<Match>().state;
+            state = sim.world().resource::<Match>().state;
             if state == MatchState::FullTime {
                 break;
             }
@@ -106,10 +106,10 @@ fn test_full_match_reaches_full_time() {
     // restarted cleanly).
     let mut observed_low_elapsed_in_half_2 = false;
     let mut sim2 = Simulation::new(7);
-    let me2 = sim2.match_entity;
+    let me2 = sim2.match_entity();
     for _ in 0..170_000u64 {
         sim2.tick();
-        let c = sim2.world.entity(me2).get::<MatchClock>().cloned().unwrap();
+        let c = sim2.world().entity(me2).get::<MatchClock>().cloned().unwrap();
         if c.half == 2 && c.elapsed_ticks < 60 {
             observed_low_elapsed_in_half_2 = true;
             break;
@@ -127,7 +127,7 @@ fn test_full_match_reaches_full_time() {
 #[test]
 fn test_half_time_transition_with_added_time() {
     let mut sim = Simulation::new(42);
-    let me = sim.match_entity;
+    let me = sim.match_entity();
 
     // Fast-forward to just before half-time with 3 minutes added time
     // Set clock close to threshold so transition happens quickly
@@ -137,24 +137,24 @@ fn test_half_time_transition_with_added_time() {
         added_time_ticks: 3 * 60 * 60, // 3 minutes added time
         is_running: true,
     };
-    sim.world.resource_mut::<Match>().state = MatchState::InPlay;
+    sim.world_mut().resource_mut::<Match>().state = MatchState::InPlay;
     // Phase F follow-up: MatchClock is a Resource (spec §3). Insert both
     // forms — the Resource is the source of truth for systems; the
     // Component on the entity is kept for backwards compat.
-    sim.world.insert_resource(clock.clone());
-    sim.world.entity_mut(me).insert(clock);
+    sim.world_mut().insert_resource(clock.clone());
+    sim.world_mut().entity_mut(me).insert(clock);
 
     // Run until half-time transition (needs ~60 ticks to reach threshold)
     for _ in 0..100 {
         sim.tick();
-        let state = sim.world.resource::<Match>().state;
+        let state = sim.world().resource::<Match>().state;
         if state == MatchState::HalfTime {
             break;
         }
     }
 
-    let m = sim.world.resource::<Match>();
-    let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+    let m = sim.world().resource::<Match>();
+    let clock = sim.world().entity(me).get::<MatchClock>().unwrap();
     assert_eq!(m.state, MatchState::HalfTime);
     assert!(!clock.is_running);
     assert_eq!(clock.half, 1);
@@ -166,7 +166,7 @@ fn test_half_time_transition_with_added_time() {
 #[test]
 fn test_second_half_kickoff_clock_reset() {
     let mut sim = Simulation::new(42);
-    let me = sim.match_entity;
+    let me = sim.match_entity();
 
     // Set up match at HalfTime state
     let clock = MatchClock {
@@ -175,19 +175,20 @@ fn test_second_half_kickoff_clock_reset() {
         added_time_ticks: 0,
         is_running: false,
     };
-    sim.world.resource_mut::<Match>().state = MatchState::HalfTime;
-    sim.world.entity_mut(me).insert(clock);
+    sim.world_mut().resource_mut::<Match>().state = MatchState::HalfTime;
+    sim.world_mut().entity_mut(me).insert(clock);
 
     // Insert HalfTimeEntryTick resource to trigger transition
-    sim.world.insert_resource(HalfTimeEntryTick {
-        tick: Some(sim.tick),
+    let current_tick = sim.current_tick();
+    sim.world_mut().insert_resource(HalfTimeEntryTick {
+        tick: Some(current_tick),
     });
 
     // Run ticks to trigger HalfTime -> Kickoff -> InPlay (second half) transition
     // The lifecycle system transitions HalfTime -> Kickoff -> InPlay in one tick
     for _ in 0..30 {
         sim.tick();
-        let state = sim.world.resource::<Match>().state;
+        let state = sim.world().resource::<Match>().state;
         // After transition, state will be InPlay (second half)
         if state == MatchState::InPlay {
             break;
@@ -197,8 +198,8 @@ fn test_second_half_kickoff_clock_reset() {
     // Verify clock was reset for second half and state is InPlay (half 2)
     // Note: tick_clock() runs after lifecycle_system(), so after one tick
     // the clock will be at 1 (it was reset to 0, then incremented).
-    let m = sim.world.resource::<Match>();
-    let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+    let m = sim.world().resource::<Match>();
+    let clock = sim.world().entity(me).get::<MatchClock>().unwrap();
     assert_eq!(
         m.state,
         MatchState::InPlay,
@@ -218,7 +219,7 @@ fn test_second_half_kickoff_clock_reset() {
 #[test]
 fn test_clock_pause_resume_stoppage() {
     let mut sim = Simulation::new(42);
-    let me = sim.match_entity;
+    let me = sim.match_entity();
 
     // Set to InPlay with clock running
     let clock = MatchClock {
@@ -227,25 +228,25 @@ fn test_clock_pause_resume_stoppage() {
         added_time_ticks: 0,
         is_running: true,
     };
-    sim.world.resource_mut::<Match>().state = MatchState::InPlay;
+    sim.world_mut().resource_mut::<Match>().state = MatchState::InPlay;
     // Phase F follow-up: MatchClock is a Resource (spec §3). Insert both
     // forms — the Resource is the source of truth for systems; the
     // Component on the entity is kept for backwards compat.
-    sim.world.insert_resource(clock.clone());
-    sim.world.entity_mut(me).insert(clock);
+    sim.world_mut().insert_resource(clock.clone());
+    sim.world_mut().entity_mut(me).insert(clock);
 
     // Run 60 ticks (1 second) - clock should advance
     for _ in 0..60 {
         sim.tick();
     }
-    let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+    let clock = sim.world().entity(me).get::<MatchClock>().unwrap();
     assert_eq!(clock.elapsed_ticks, 30 * 60 * 60 + 60);
 
     // Pause clock (simulate stoppage)
-    if let Some(mut clock) = sim.world.get_resource_mut::<MatchClock>() {
+    if let Some(mut clock) = sim.world_mut().get_resource_mut::<MatchClock>() {
         clock.is_running = false;
     }
-    if let Some(mut clock) = sim.world.get_mut::<MatchClock>(me) {
+    if let Some(mut clock) = sim.world_mut().get_mut::<MatchClock>(me) {
         clock.is_running = false;
     }
 
@@ -253,7 +254,7 @@ fn test_clock_pause_resume_stoppage() {
     for _ in 0..60 {
         sim.tick();
     }
-    let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+    let clock = sim.world().entity(me).get::<MatchClock>().unwrap();
     assert_eq!(
         clock.elapsed_ticks,
         30 * 60 * 60 + 60,
@@ -261,10 +262,10 @@ fn test_clock_pause_resume_stoppage() {
     );
 
     // Resume clock
-    if let Some(mut clock) = sim.world.get_resource_mut::<MatchClock>() {
+    if let Some(mut clock) = sim.world_mut().get_resource_mut::<MatchClock>() {
         clock.is_running = true;
     }
-    if let Some(mut clock) = sim.world.get_mut::<MatchClock>(me) {
+    if let Some(mut clock) = sim.world_mut().get_mut::<MatchClock>(me) {
         clock.is_running = true;
     }
 
@@ -272,7 +273,7 @@ fn test_clock_pause_resume_stoppage() {
     for _ in 0..60 {
         sim.tick();
     }
-    let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+    let clock = sim.world().entity(me).get::<MatchClock>().unwrap();
     assert_eq!(
         clock.elapsed_ticks,
         30 * 60 * 60 + 60 + 60,
@@ -286,7 +287,7 @@ fn test_clock_pause_resume_stoppage() {
 #[test]
 fn test_ai_time_remaining_in_second_half() {
     let mut sim = Simulation::new(42);
-    let me = sim.match_entity;
+    let me = sim.match_entity();
 
     // Set up match in second half, 15 minutes elapsed (60 minutes total match time)
     let clock = MatchClock {
@@ -295,11 +296,11 @@ fn test_ai_time_remaining_in_second_half() {
         added_time_ticks: 0,
         is_running: true,
     };
-    sim.world.resource_mut::<Match>().state = MatchState::InPlay;
-    sim.world.entity_mut(me).insert(clock);
+    sim.world_mut().resource_mut::<Match>().state = MatchState::InPlay;
+    sim.world_mut().entity_mut(me).insert(clock);
 
     // Get the clock and compute time remaining using shared utilities
-    let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+    let clock = sim.world().entity(me).get::<MatchClock>().unwrap();
     let match_remaining_secs = time::match_time_remaining_secs(clock);
     let half_remaining_secs = time::half_time_remaining_secs(clock);
 
@@ -315,9 +316,9 @@ fn test_ai_time_remaining_in_second_half() {
         added_time_ticks: 0,
         is_running: true,
     };
-    sim.world.entity_mut(me).insert(clock);
+    sim.world_mut().entity_mut(me).insert(clock);
 
-    let clock = sim.world.entity(me).get::<MatchClock>().unwrap();
+    let clock = sim.world().entity(me).get::<MatchClock>().unwrap();
     let match_remaining_secs = time::match_time_remaining_secs(clock);
     let half_remaining_secs = time::half_time_remaining_secs(clock);
 

@@ -41,7 +41,7 @@ pub fn replay_with_ticks(
     // overwrite the live resources, so we use the match entity the
     // constructor already gave us.
     let mut simulation = Simulation::new(seed);
-    let match_entity = simulation.match_entity;
+    let match_entity = simulation.match_entity();
 
     // Track state hash history
     let mut state_hash_history = Vec::new();
@@ -85,7 +85,7 @@ pub fn replay_with_ticks(
     }
 
     // Get final state
-    let final_state = simulation.get_state(match_entity)?;
+    let final_state = simulation.get_state()?;
 
     Ok(ReplayResult {
         final_state,
@@ -199,14 +199,13 @@ pub fn load_snapshot(path: &str) -> Result<RecordedSnapshot, String> {
 /// (no match has been created yet).
 pub fn create_snapshot_from_simulation(
     simulation: &Simulation,
-    _match_entity: Entity,
 ) -> Result<RecordedSnapshot, String> {
-    let match_component = simulation.world.resource::<Match>().clone();
+    let match_component = simulation.world().resource::<Match>().clone();
 
     let mut ball_position = [0.0f32; 2];
     // Phase C §4.3: ball entity is identified by `BallMarker`. There is
     // exactly one such entity per match; iterate to find it.
-    for entity in simulation.world.iter_entities() {
+    for entity in simulation.world().iter_entities() {
         if entity.get::<sim_components::BallMarker>().is_some()
             && let Some(pos) = entity.get::<Position>()
         {
@@ -216,7 +215,7 @@ pub fn create_snapshot_from_simulation(
     }
 
     let mut player_positions = Vec::new();
-    for entity in simulation.world.iter_entities() {
+    for entity in simulation.world().iter_entities() {
         if let Some(player) = entity.get::<Player>()
             && let Some(pos) = entity.get::<Position>()
         {
@@ -226,7 +225,7 @@ pub fn create_snapshot_from_simulation(
 
     // Get clock from MatchClock component
     let clock = simulation
-        .world
+        .world()
         .iter_entities()
         .find_map(|e| e.get::<MatchClock>())
         .cloned()
@@ -238,7 +237,7 @@ pub fn create_snapshot_from_simulation(
         });
 
     Ok(RecordedSnapshot {
-        tick: simulation.tick,
+        tick: simulation.current_tick(),
         state_hash: simulation.get_state_hash(),
         ball_position,
         player_positions,
@@ -429,14 +428,13 @@ mod tests {
     #[test]
     fn test_create_snapshot_from_simulation_round_trip() {
         let mut sim = Simulation::new(42);
-        let match_entity = sim.match_entity;
 
         // Advance a few ticks so the snapshot has non-trivial state.
         for _ in 0..10 {
             sim.tick();
         }
 
-        let snapshot = create_snapshot_from_simulation(&sim, match_entity).unwrap();
+        let snapshot = create_snapshot_from_simulation(&sim).unwrap();
 
         let path = "/tmp/test_e2e_snapshot_round_trip.bin";
         save_snapshot(&snapshot, path).unwrap();

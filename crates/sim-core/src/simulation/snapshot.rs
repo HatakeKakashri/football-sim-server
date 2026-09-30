@@ -8,14 +8,12 @@ use sim_components::{Match, MatchClock, Position, RoleComponent, Skill, Stamina,
 use super::Simulation;
 
 impl Simulation {
-    /// Snapshot the current state of the given match.
+    /// Snapshot the current state of the match.
     ///
     /// # Errors
     ///
-    /// Returns an error string if no `Match` resource is registered. The
-    /// `match_id` parameter is retained for API compatibility but is no
-    /// longer used to locate the match (Phase C §4.3).
-    pub fn get_state(&self, _match_id: Entity) -> Result<crate::MatchSnapshot, String> {
+    /// Returns an error string if no `Match` resource is registered.
+    pub fn get_state(&self) -> Result<crate::MatchSnapshot, String> {
         // Phase C §4.3: Match is now a Resource.
         let match_component = self.world.resource::<Match>().clone();
 
@@ -79,11 +77,10 @@ impl Simulation {
             }
         }
 
-        // Get clock view from MatchClock component on the match entity
+        // Get clock view from MatchClock resource (source of truth per spec §3)
         let clock_view = self
             .world
-            .entity(self.match_entity)
-            .get::<MatchClock>()
+            .get_resource::<MatchClock>()
             .map_or(
                 crate::ClockView {
                     elapsed_ticks: 0,

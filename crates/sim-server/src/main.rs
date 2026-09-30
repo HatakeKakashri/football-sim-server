@@ -80,7 +80,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let mut sim = Simulation::new(seed);
-            let match_entity = sim.match_entity;
 
             tracing::info!("Running simulation with seed {seed}...");
             let start = Instant::now();
@@ -88,13 +87,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if full_match {
                 loop {
                     sim.tick();
-                    let m_state = sim.world.resource::<sim_components::Match>().state;
+                    let m_state = sim.world().resource::<sim_components::Match>().state;
                     if m_state == sim_components::MatchState::FullTime {
-                        tracing::info!("[Tick {:06}] FullTime reached", sim.tick);
+                        tracing::info!("[Tick {:06}] FullTime reached", sim.current_tick());
                         break;
                     }
                     // Safety net
-                    if sim.tick > 400_000 {
+                    if sim.current_tick() > 400_000 {
                         tracing::warn!("Exceeded 400k ticks without reaching FullTime");
                         break;
                     }
@@ -102,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 for _ in 0..ticks {
                     sim.tick();
-                    if sim.world.resource::<sim_components::Match>().state
+                    if sim.world().resource::<sim_components::Match>().state
                         == sim_components::MatchState::FullTime
                     {
                         break;
@@ -116,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 clippy::cast_precision_loss,
                 reason = "display-only cast; tick counts at 60 Hz stay far below 2^53"
             )]
-            let ticks_per_sec = sim.tick as f64 / duration.as_secs_f64();
+            let ticks_per_sec = sim.current_tick() as f64 / duration.as_secs_f64();
             tracing::info!(
                 "Simulation completed in {:.2}ms ({:.2} ticks/sec)",
                 duration.as_secs_f64() * 1000.0,
@@ -124,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             if let Some(output_path) = output {
-                let state = sim.get_state(match_entity)?;
+                let state = sim.get_state()?;
                 let json = serde_json::to_string_pretty(&state)?;
                 let mut file = File::create(&output_path)?;
                 file.write_all(json.as_bytes())?;
@@ -144,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let mut sim = Simulation::new(seed);
-            let match_entity = sim.match_entity;
+            let match_entity = sim.match_entity();
 
             // Load commands from JSON file
             let mut file = File::open(commands)?;
@@ -193,7 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             if let Some(output_path) = output {
-                let state = sim.get_state(match_entity)?;
+                let state = sim.get_state()?;
                 let json = serde_json::to_string_pretty(&state)?;
                 let mut file = File::create(&output_path)?;
                 file.write_all(json.as_bytes())?;
@@ -207,7 +206,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let mut sim = Simulation::new(seed);
-            let _match_entity = sim.match_entity;
 
             tracing::info!("Benchmarking simulation with seed {seed}, {ticks} ticks...");
             let start = Instant::now();

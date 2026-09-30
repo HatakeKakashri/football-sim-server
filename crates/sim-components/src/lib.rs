@@ -293,7 +293,7 @@ pub struct Team {
 /// Phase C ECS-shape polish (review §4.3): `Match` is now a Resource
 /// rather than a Component. There is exactly one match per simulation,
 /// and the singleton-resource pattern removes the linear-scan lookups in
-/// `apply_command` / `get_match_entity` (§2.9). `Match` is no longer a
+/// `apply_command` (§2.9). `Match` is no longer a
 /// `Component` — anywhere a system needs match state, take
 /// `Res<Match>` / `ResMut<Match>`. The match-entity slot on
 /// `Simulation::match_entity` is retained for compatibility with consumers

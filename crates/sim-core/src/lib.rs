@@ -227,12 +227,16 @@ impl Simulation {
     /// Covers (in this fixed order, per-entity, entities sorted by
     /// `Entity::to_bits()`): `Position`, `Velocity`, `Stamina`, `Skill`, `Ball`,
     /// `Player`, `Team`, `Match`. After all entity bytes are mixed in, the
-    /// RNG state is appended as the final 4 bytes.
+    /// original seed is appended so two simulations seeded identically
+    /// hash identically.
     ///
-    /// **Excluded** by design: the tick counter and any wall-clock data.
-    /// The hash identifies *state*, not *time* — two identical states
-    /// reached at different ticks must hash equal, which is what makes
-    /// replay divergence detection meaningful.
+    /// **Excluded** by design: the live `SimRng` state, the tick counter,
+    /// and any wall-clock data. The hash identifies *persistent state*,
+    /// not *time* — two identical persistent states reached at different
+    /// ticks must hash equal, which is what makes replay divergence
+    /// detection meaningful. RNG-state divergence still surfaces on the
+    /// next tick through the downstream state it influences (positions,
+    /// velocities, stamina deltas, etc.), just with one tick of latency.
     pub fn get_state_hash(&self) -> u64 {
         use sim_components::{Match, Player, Position, Skill, Stamina, Team, Velocity};
 

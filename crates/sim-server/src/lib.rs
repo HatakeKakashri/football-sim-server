@@ -175,15 +175,6 @@ impl ServerSimulation {
         }
     }
 
-    /// Phase C §4.3: returns the match entity whose `MatchClock` component
-    /// is the source of truth for the clock. Kept as a method to preserve
-    /// the test API; with `Match` as a Resource, callers should generally
-    /// read `simulation.world.resource::<Match>()` directly.
-    #[allow(dead_code, reason = "kept for test API backwards compatibility")]
-    const fn get_match_entity(&self) -> bevy_ecs::prelude::Entity {
-        self.simulation.match_entity
-    }
-
     /// Snapshot the current state of the wrapped simulation.
     ///
     /// # Panics

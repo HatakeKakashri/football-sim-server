@@ -73,12 +73,14 @@ pub fn replay_with_ticks(
     commands: Vec<TimedCommand>,
     total_ticks: u64,
 ) -> Result<ReplayResult, String> {
-    // Create a new simulation with the given seed
+    // Create a new simulation with the given seed. `Simulation::new` already
+    // calls `create_match` internally (spawns ball + 22 players + two teams +
+    // the match entity and inserts the `Ball` and `Match` resources). Calling
+    // `create_match` a second time would orphan the first set of entities and
+    // overwrite the live resources, so we use the match entity the
+    // constructor already gave us.
     let mut simulation = Simulation::new(seed);
-
-    // Create a match
-    let (match_entity, _home_team_entity, _ball_entity) =
-        Simulation::create_match(&mut simulation.world, seed);
+    let match_entity = simulation.match_entity;
 
     // Track state hash history
     let mut state_hash_history = Vec::new();

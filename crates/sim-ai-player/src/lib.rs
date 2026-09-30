@@ -23,7 +23,16 @@ pub const DECISION_CADENCE_TICKS: u64 = 6;
 /// is actually evaluated (i.e. passed the cadence guard). Used by tests
 /// to assert the cadence is in effect; not used by gameplay code.
 #[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct DecisionEvaluationCount(pub u64);
+pub struct DecisionEvaluationCount(u64);
+
+impl DecisionEvaluationCount {
+    /// Current count of players that have cleared the cadence guard.
+    /// Test-only public accessor; gameplay code does not read this value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
 
 /// Map an entity to one of `DECISION_CADENCE_TICKS` decision-cadence
 /// slots. Uses a `SplitMix64` finalize on the entity's packed id bits so
@@ -1400,7 +1409,7 @@ mod tests {
 
         // Phase D assertion: exactly 10 evaluations over 60 ticks at
         // cadence 6. Before Phase D this count was 60 (every tick).
-        let eval_count = world.resource::<DecisionEvaluationCount>().0;
+        let eval_count = world.resource::<DecisionEvaluationCount>().get();
         assert_eq!(
             eval_count, 10,
             "expected exactly 10 evaluations over 60 ticks at cadence 6, got {eval_count}"
@@ -1503,7 +1512,7 @@ mod tests {
             schedule.run(&mut world);
         }
 
-        let eval_count = world.resource::<DecisionEvaluationCount>().0;
+        let eval_count = world.resource::<DecisionEvaluationCount>().get();
         // Each tick of the 60 must evaluate at least one player (since
         // slots cycle through 0..6 every 6 ticks), but never all 22.
         // Pre-Phase D count was 60 × 22 = 1320.

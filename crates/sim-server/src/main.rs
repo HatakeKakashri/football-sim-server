@@ -82,7 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut sim = Simulation::new(seed);
             let match_entity = sim.match_entity;
 
-            println!("Running simulation with seed {seed}...");
+            tracing::info!("Running simulation with seed {seed}...");
             let start = Instant::now();
 
             if full_match {
@@ -90,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sim.tick();
                     let m_state = sim.world.resource::<sim_components::Match>().state;
                     if m_state == sim_components::MatchState::FullTime {
-                        println!("[Tick {:06}] FullTime reached", sim.tick);
+                        tracing::info!("[Tick {:06}] FullTime reached", sim.tick);
                         break;
                     }
                     // Safety net
@@ -117,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 reason = "display-only cast; tick counts at 60 Hz stay far below 2^53"
             )]
             let ticks_per_sec = sim.tick as f64 / duration.as_secs_f64();
-            println!(
+            tracing::info!(
                 "Simulation completed in {:.2}ms ({:.2} ticks/sec)",
                 duration.as_secs_f64() * 1000.0,
                 ticks_per_sec
@@ -128,14 +128,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let json = serde_json::to_string_pretty(&state)?;
                 let mut file = File::create(&output_path)?;
                 file.write_all(json.as_bytes())?;
-                println!("Final state written to {output_path}");
+                tracing::info!("Final state written to {output_path}");
             }
 
             // Phase 0 CLI contract: a deterministic run is reproducible iff
             // two runs with the same seed print the same final state hash.
             // The hash is also available in any JSON snapshot produced above,
             // but printing it on stdout makes the contract literal.
-            println!("final_state_hash: {}", sim.get_state_hash());
+            tracing::info!("final_state_hash: {}", sim.get_state_hash());
         }
 
         Commands::Replay {
@@ -156,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut sorted_commands = command_list;
             sorted_commands.sort_by_key(|&(tick, _)| tick);
 
-            println!(
+            tracing::info!(
                 "Replaying simulation with seed {}, {} commands...",
                 seed,
                 sorted_commands.len()
@@ -187,7 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sim.tick();
             }
             let duration = start.elapsed();
-            println!(
+            tracing::info!(
                 "Replay completed in {:.2}ms",
                 duration.as_secs_f64() * 1000.0
             );
@@ -197,7 +197,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let json = serde_json::to_string_pretty(&state)?;
                 let mut file = File::create(&output_path)?;
                 file.write_all(json.as_bytes())?;
-                println!("Final state written to {output_path}");
+                tracing::info!("Final state written to {output_path}");
             }
         }
 
@@ -209,7 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut sim = Simulation::new(seed);
             let _match_entity = sim.match_entity;
 
-            println!("Benchmarking simulation with seed {seed}, {ticks} ticks...");
+            tracing::info!("Benchmarking simulation with seed {seed}, {ticks} ticks...");
             let start = Instant::now();
             for _ in 0..ticks {
                 sim.tick();
@@ -228,7 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )]
             let ticks_per_sec = ticks as f64 / duration.as_secs_f64();
 
-            println!(
+            tracing::info!(
                 "Benchmark completed: {tick_time_ms:.2}ms per tick, {ticks_per_sec:.2} ticks/sec"
             );
 
@@ -242,7 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
                 let mut file = File::create(&output_path)?;
                 file.write_all(serde_json::to_string_pretty(&benchmark_result)?.as_bytes())?;
-                println!("Benchmark results written to {output_path}");
+                tracing::info!("Benchmark results written to {output_path}");
             }
         }
     }

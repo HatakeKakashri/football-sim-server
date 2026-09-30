@@ -748,20 +748,25 @@ pub fn player_action_execution_system(
 pub const KICK_SPEED_SHOT: f32 = 22.0;
 pub const KICK_SPEED_PASS: f32 = 14.0;
 
+/// Returns the `NearbyEntity` with the smallest `distance` field, or
+/// `None` if the slice is empty. NaN distances are treated as equal
+/// (consistent with the previous inline `unwrap_or(Ordering::Equal)`
+/// pattern).
+fn closest_by_distance(items: &[sim_components::NearbyEntity]) -> Option<&sim_components::NearbyEntity> {
+    items.iter().min_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+}
+
 /// Nearest teammate's absolute position from the player's perception
 /// snapshot, if any. Used to aim a `PassTo` kick at an actual teammate
 /// rather than just continuing the ball in the passer's current heading.
 /// Mirrors the equivalent lookup `steer()` already uses to *move* a player
 /// toward the same teammate for a `PassTo` intent.
 fn nearest_teammate_position(perception: &PerceptionSnapshot) -> Option<Vec2> {
-    perception
-        .nearby_teammates
-        .iter()
-        .min_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+    closest_by_distance(&perception.nearby_teammates)
         .map(|t| t.relative_position + perception.self_position)
 }
 
@@ -849,25 +854,11 @@ fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
     let ball_vel = Vec2::zero(); // Phase 2: ball velocity not yet exposed in perception.
 
     let nearest_opponent_pos = || -> Option<Vec2> {
-        perception
-            .nearby_opponents
-            .iter()
-            .min_by(|a, b| {
-                a.distance
-                    .partial_cmp(&b.distance)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+        closest_by_distance(&perception.nearby_opponents)
             .map(|o| o.relative_position + player_pos)
     };
     let nearest_teammate_pos = || -> Option<Vec2> {
-        perception
-            .nearby_teammates
-            .iter()
-            .min_by(|a, b| {
-                a.distance
-                    .partial_cmp(&b.distance)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+        closest_by_distance(&perception.nearby_teammates)
             .map(|t| t.relative_position + player_pos)
     };
 
@@ -877,11 +868,7 @@ fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
         Intent::Movement(MovementIntent::Intercept) => (ball_pos + ball_vel * 0.5, 9.0),
         Intent::Movement(MovementIntent::HoldPosition) => return Vec2::zero(),
         Intent::Movement(MovementIntent::SupportRun) => {
-            if let Some(worst) = perception.nearby_opponents.iter().min_by(|a, b| {
-                a.distance
-                    .partial_cmp(&b.distance)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }) {
+            if let Some(worst) = closest_by_distance(&perception.nearby_opponents) {
                 let away = player_pos + (player_pos - worst.relative_position);
                 (away, 5.0)
             } else {
@@ -1658,5 +1645,50 @@ mod tests {
         };
         let raw = c.raw_input(&ctx);
         assert!(raw > 25.0 && raw < 30.0, "raw input was {raw}");
+    }
+
+    #[test]
+    fn closest_by_distance_empty() {
+        let empty: Vec<sim_components::NearbyEntity> = Vec::new();
+        assert!(closest_by_distance(&empty).is_none());
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "exact equality against a literal is the point of this smoke check"
+    )]
+    fn closest_by_distance_single() {
+        let one = vec![sim_components::NearbyEntity {
+            entity: bevy_ecs::prelude::Entity::from_raw(1),
+            distance: 5.0,
+            relative_position: sim_math::Vec2::zero(),
+        }];
+        assert_eq!(closest_by_distance(&one).unwrap().distance, 5.0);
+    }
+
+    #[test]
+    fn closest_by_distance_picks_smallest() {
+        let v = vec![
+            sim_components::NearbyEntity {
+                entity: bevy_ecs::prelude::Entity::from_raw(1),
+                distance: 10.0,
+                relative_position: sim_math::Vec2::zero(),
+            },
+            sim_components::NearbyEntity {
+                entity: bevy_ecs::prelude::Entity::from_raw(2),
+                distance: 3.0,
+                relative_position: sim_math::Vec2::zero(),
+            },
+            sim_components::NearbyEntity {
+                entity: bevy_ecs::prelude::Entity::from_raw(3),
+                distance: 7.0,
+                relative_position: sim_math::Vec2::zero(),
+            },
+        ];
+        assert_eq!(
+            closest_by_distance(&v).unwrap().entity,
+            bevy_ecs::prelude::Entity::from_raw(2)
+        );
     }
 }

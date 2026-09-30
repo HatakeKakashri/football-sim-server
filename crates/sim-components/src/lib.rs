@@ -81,9 +81,6 @@ pub enum BallOutOfBoundsType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FoulType {
     DangerousPlay,
-    ProfessionalFoul,
-    Handball,
-    DenyingGoalScoringOpportunity,
 }
 
 /// Phase 3: Rule events emitted by the rules engine.
@@ -207,9 +204,6 @@ pub struct TeamIdComponent(pub TeamId);
 
 #[derive(Component, Debug, Clone)]
 pub struct RoleComponent(pub Role);
-
-#[derive(Component, Debug, Clone)]
-pub struct MatchStateComponent(pub MatchState);
 
 /// Simulation-time clock for the active match.
 ///
@@ -379,19 +373,11 @@ pub enum CardColor {
     Red,
 }
 
-/// Team side (home or away) - used to specify which team's manager is acting
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TeamSide {
-    Home,
-    Away,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ManagerCommand {
     ChangeFormation(Formation),
     Substitute { out: u64, substitute: u64 },
     ChangeMentality(Mentality),
-    SetTactic(Tactic),
 }
 
 /// Error returned by `sim_core::Simulation::apply_command` and the
@@ -407,19 +393,6 @@ pub enum CommandError {
         current_state: crate::MatchState,
         required_state: crate::MatchState,
     },
-    NoSubstitutesRemaining,
-    PlayerNotOnPitch,
-    FormationInvalid,
-    CommandCooldownActive,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Tactic {
-    HighPress,
-    CounterAttack,
-    Possession,
-    LongBall,
-    WingPlay,
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    ActionIntent, Ball, Intent, NearbyEntity, PerceptionSnapshot, Player, Stamina, Skill, Velocity,
+    ActionIntent, Ball, Intent, PerceptionSnapshot, Player, Stamina, Skill, Velocity,
 };
 use sim_math::Vec2;
 use sim_physics::SimRng;
@@ -13,22 +13,6 @@ use sim_physics::SimRng;
 /// speed per action type, not scaled by player skill/power.
 pub const KICK_SPEED_SHOT: f32 = 22.0;
 pub const KICK_SPEED_PASS: f32 = 14.0;
-
-/// Returns the `NearbyEntity` with the smallest `distance` field, or
-/// `None` if the slice is empty. NaN distances are treated as equal
-/// (consistent with the previous inline `unwrap_or(Ordering::Equal)`
-/// pattern).
-#[allow(
-    dead_code,
-    reason = "After F8 the production callers live in `sim_components::intent_dispatch`; this helper remains for direct unit tests in this module"
-)]
-fn closest_by_distance(items: &[NearbyEntity]) -> Option<&NearbyEntity> {
-    items.iter().min_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })
-}
 
 /// Resolve an intent to a target point and an action-specific speed,
 /// then return the unit-direction × speed vector. Target entities are
@@ -215,52 +199,3 @@ pub fn kick_execution_system(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn closest_by_distance_empty() {
-        let empty: Vec<NearbyEntity> = Vec::new();
-        assert!(closest_by_distance(&empty).is_none());
-    }
-
-    #[test]
-    #[allow(
-        clippy::float_cmp,
-        reason = "exact equality against a literal is the point of this smoke check"
-    )]
-    fn closest_by_distance_single() {
-        let one = vec![NearbyEntity {
-            entity: bevy_ecs::prelude::Entity::from_raw(1),
-            distance: 5.0,
-            relative_position: Vec2::zero(),
-        }];
-        assert_eq!(closest_by_distance(&one).unwrap().distance, 5.0);
-    }
-
-    #[test]
-    fn closest_by_distance_picks_smallest() {
-        let v = vec![
-            NearbyEntity {
-                entity: bevy_ecs::prelude::Entity::from_raw(1),
-                distance: 10.0,
-                relative_position: Vec2::zero(),
-            },
-            NearbyEntity {
-                entity: bevy_ecs::prelude::Entity::from_raw(2),
-                distance: 3.0,
-                relative_position: Vec2::zero(),
-            },
-            NearbyEntity {
-                entity: bevy_ecs::prelude::Entity::from_raw(3),
-                distance: 7.0,
-                relative_position: Vec2::zero(),
-            },
-        ];
-        assert_eq!(
-            closest_by_distance(&v).unwrap().entity,
-            bevy_ecs::prelude::Entity::from_raw(2)
-        );
-    }
-}

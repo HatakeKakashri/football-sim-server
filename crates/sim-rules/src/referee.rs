@@ -157,21 +157,6 @@ pub fn foul_detection_system(
         }
     }
 
-    // Phase 1: Detect professional fouls (deliberate handball, DOGSO)
-    // A player is committing professional foul if:
-    // - They have the ball within 1.5m but are not the possessor (handball)
-    // - They are in possession and a opponent is about to score (DOGSO)
-    for (_entity, _player, _pos, vel) in player_query.iter() {
-        let speed = vel.0.length();
-
-        // Deliberate handball: very low movement speed while near ball but not possessing
-        // This is a simplified check - full implementation would need ball position
-        if speed < 0.5 {
-            // Could be a professional foul - player holding ball deliberately
-
-            // Phase 1: just log, don't penalize yet
-        }
-    }
 }
 
 pub fn minimum_player_count_system(team_query: Query<&Team>) {

@@ -19,7 +19,7 @@ pub fn perception_system(
         Query<&Position, With<BallMarker>>,
         Query<&Team>,
     )>,
-    match_res: Res<Match>,
+    _match_res: Res<Match>,
     ball_res: Res<Ball>,
     // Phase F follow-up: MatchClock is a Resource (spec §3). Read it
     // directly via `Res<MatchClock>` instead of a `Query<&MatchClock>`
@@ -53,18 +53,7 @@ pub fn perception_system(
     // player's PerceptionSnapshot (time remaining, etc.). Reading from
     // `Res<MatchClock>` is a single pointer indirection — faster than
     // the previous `Query<&MatchClock>::iter().next()` lookup.
-    let clock = clock_res.clone();
-    // Derive match-context fields from the resource.
-    let (_score_diff, _time_remaining_secs, _home_id, _away_id) = {
-        let diff = i16::from(match_res.score.0) - i16::from(match_res.score.1);
-        let time_remaining_secs = sim_components::time::match_time_remaining_secs(&clock);
-        (
-            diff,
-            time_remaining_secs,
-            sim_components::TeamId(0),
-            sim_components::TeamId(1),
-        )
-    };
+    let _clock = clock_res.clone();
 
     // Snapshot mentalities by team id — two teams only, so a fixed array
     // replaces the HashMap (no allocation, no iteration order nondeterminism).

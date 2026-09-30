@@ -40,9 +40,7 @@ impl Simulation {
                     });
                 }
             }
-            ManagerCommand::ChangeFormation(_)
-            | ManagerCommand::ChangeMentality(_)
-            | ManagerCommand::SetTactic(_) => {
+            ManagerCommand::ChangeFormation(_) | ManagerCommand::ChangeMentality(_) => {
                 if match_component.state != MatchState::InPlay
                     && match_component.state != MatchState::Stoppage
                 {
@@ -91,9 +89,6 @@ impl Simulation {
                 {
                     team.mentality = mentality;
                 }
-            }
-            ManagerCommand::SetTactic(tactic) => {
-                tracing::info!("Tactic set: {tactic:?}");
             }
         }
     }

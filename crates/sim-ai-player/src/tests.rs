@@ -7,9 +7,7 @@
 //! - `decision_tests.rs`: end-to-end cadence / decision-system integration tests.
 //! - `perception_tests.rs`: end-to-end perception-system integration tests.
 //!
-//! `closest_by_distance` is module-private in `execution.rs`, so its unit
-//! tests live inside that submodule (they must be in the same module to
-//! call the private helper).
+//! `closest_by_distance` was removed in Phase G (dead code cleanup).
 
 use crate::brain::intent_kind;
 use crate::{Consideration, ConsiderationContext, tactical_thresholds};

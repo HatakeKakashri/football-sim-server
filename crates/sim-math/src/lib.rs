@@ -184,13 +184,16 @@ impl PitchDimensions {
         Self {
             width: 105.0,
             length: 68.0,
+            // Standard pitch: penalty area is 16.5m from goal line, 40.32m wide.
+            // The pitch is 105m long and 68m wide; goal line at x=0.
             penalty_area: Rect {
-                min: Vec2::new(0.0, 0.0),
-                max: Vec2::new(0.0, 0.0),
+                min: Vec2::new(0.0, 13.84),
+                max: Vec2::new(16.5, 54.16),
             },
+            // Goal area is 5.5m from goal line, 18.32m wide.
             goal_area: Rect {
-                min: Vec2::new(0.0, 0.0),
-                max: Vec2::new(0.0, 0.0),
+                min: Vec2::new(0.0, 24.84),
+                max: Vec2::new(5.5, 43.16),
             },
             center_circle: Circle {
                 center: Vec2::new(52.5, 34.0),

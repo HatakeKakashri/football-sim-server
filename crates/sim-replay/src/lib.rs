@@ -11,45 +11,6 @@ pub struct TimedCommand {
     pub command: ManagerCommand,
 }
 
-#[derive(Debug, Clone, Resource)]
-pub struct ReplaySession {
-    pub seed: u64,
-    pub commands: Vec<TimedCommand>,
-    pub current_tick: u64,
-    pub state_hash_history: Vec<u64>,
-}
-
-#[derive(Debug, Clone, Resource)]
-pub struct SnapshotConfig {
-    pub snapshot_interval: u64,
-    pub last_snapshot_tick: u64,
-}
-
-impl Default for SnapshotConfig {
-    fn default() -> Self {
-        Self {
-            snapshot_interval: 100,
-            last_snapshot_tick: 0,
-        }
-    }
-}
-
-impl ReplaySession {
-    #[must_use]
-    pub const fn new(seed: u64) -> Self {
-        Self {
-            seed,
-            commands: Vec::new(),
-            current_tick: 0,
-            state_hash_history: Vec::new(),
-        }
-    }
-
-    pub fn add_command(&mut self, command: TimedCommand) {
-        self.commands.push(command);
-    }
-}
-
 /// Replay a match from a seed and a list of timed manager commands.
 ///
 /// # Errors
@@ -291,13 +252,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_replay_session() {
-        let session = ReplaySession::new(12345);
-        assert_eq!(session.seed, 12345);
-        assert_eq!(session.current_tick, 0);
-    }
-
-    #[test]
     fn test_replay_determinism() {
         // Smoke-test determinism: 1000 ticks is sufficient to exercise the
         // full pipeline (physics, perception, decisions, lifecycle transitions)
@@ -377,13 +331,6 @@ mod tests {
         assert_eq!(decoded.tick, snapshot.tick);
         assert_eq!(decoded.state_hash, snapshot.state_hash);
         assert_eq!(decoded.score, snapshot.score);
-    }
-
-    #[test]
-    fn test_snapshot_config() {
-        let config = SnapshotConfig::default();
-        assert_eq!(config.snapshot_interval, 100);
-        assert_eq!(config.last_snapshot_tick, 0);
     }
 
     /// Round-trip: serialize a `RecordedSnapshot` to bytes and deserialize

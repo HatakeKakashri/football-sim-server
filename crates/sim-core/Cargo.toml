@@ -14,7 +14,6 @@ sim-ai-manager = { path = "../sim-ai-manager" }
 bevy_ecs.workspace = true
 serde.workspace = true
 smallvec.workspace = true
-rand.workspace = true
 tracing.workspace = true
 
 [lints]

@@ -176,7 +176,7 @@ pub enum MatchEvent {
 
 /// A match snapshot recorded for replay purposes.
 /// Distinct from `sim_core::MatchSnapshot` which is the live state view.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordedSnapshot {
     pub tick: u64,
     pub state_hash: u64,
@@ -186,7 +186,7 @@ pub struct RecordedSnapshot {
     pub clock: MatchClock,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BallSnapshot {
     pub position: [f32; 2],
     pub velocity: [f32; 2],
@@ -195,7 +195,7 @@ pub struct BallSnapshot {
     pub possessor: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerSnapshot {
     pub entity_id: u64,
     pub team_id: TeamId,
@@ -384,5 +384,120 @@ mod tests {
         let config = SnapshotConfig::default();
         assert_eq!(config.snapshot_interval, 100);
         assert_eq!(config.last_snapshot_tick, 0);
+    }
+
+    /// Round-trip: serialize a `RecordedSnapshot` to bytes and deserialize
+    /// back; the result must equal the original. This is the contract that
+    /// `save_snapshot` / `load_snapshot` rely on.
+    #[test]
+    fn test_recorded_snapshot_round_trip() {
+        let snapshot = RecordedSnapshot {
+            tick: 1000,
+            state_hash: 123_456_789,
+            ball_position: [52.5, 34.0],
+            player_positions: vec![
+                ([10.0, 20.0], TeamId(0)),
+                ([50.0, 30.0], TeamId(1)),
+            ],
+            score: (2, 1),
+            clock: MatchClock {
+                elapsed_ticks: 45 * 60 * 60,
+                half: 1,
+                added_time_ticks: 3 * 60,
+                is_running: false,
+            },
+        };
+
+        let encoded = bincode::serialize(&snapshot).unwrap();
+        let decoded: RecordedSnapshot = bincode::deserialize(&encoded).unwrap();
+
+        assert_eq!(decoded, snapshot);
+    }
+
+    /// Round-trip via the file-based save/load API.
+    #[test]
+    fn test_snapshot_save_load_round_trip() {
+        let snapshot = RecordedSnapshot {
+            tick: 500,
+            state_hash: 987_654_321,
+            ball_position: [30.0, 40.0],
+            player_positions: vec![([5.0, 10.0], TeamId(0))],
+            score: (0, 0),
+            clock: MatchClock {
+                elapsed_ticks: 100,
+                half: 1,
+                added_time_ticks: 0,
+                is_running: true,
+            },
+        };
+
+        let path = "/tmp/test_snapshot_round_trip.bin";
+        save_snapshot(&snapshot, path).unwrap();
+        let loaded = load_snapshot(path).unwrap();
+
+        assert_eq!(loaded, snapshot);
+
+        // Clean up
+        std::fs::remove_file(path).ok();
+    }
+
+    /// Round-trip for `BallSnapshot`.
+    #[test]
+    fn test_ball_snapshot_round_trip() {
+        let snapshot = BallSnapshot {
+            position: [52.5, 34.0],
+            velocity: [1.0, 2.0],
+            spin: 0.5,
+            state: BallState::Free,
+            possessor: Some(42),
+        };
+
+        let encoded = bincode::serialize(&snapshot).unwrap();
+        let decoded: BallSnapshot = bincode::deserialize(&encoded).unwrap();
+
+        assert_eq!(decoded, snapshot);
+    }
+
+    /// Round-trip for `PlayerSnapshot`.
+    #[test]
+    fn test_player_snapshot_round_trip() {
+        let snapshot = PlayerSnapshot {
+            entity_id: 7,
+            team_id: TeamId(1),
+            position: [10.0, 20.0],
+            velocity: [0.5, 0.5],
+            stamina: 0.8,
+            role: Role::Striker,
+            skill: 0.75,
+        };
+
+        let encoded = bincode::serialize(&snapshot).unwrap();
+        let decoded: PlayerSnapshot = bincode::deserialize(&encoded).unwrap();
+
+        assert_eq!(decoded, snapshot);
+    }
+
+    /// End-to-end: capture a snapshot from a live simulation, save it,
+    /// load it back, and verify it matches.
+    #[test]
+    fn test_create_snapshot_from_simulation_round_trip() {
+        let mut sim = Simulation::new(42);
+        let match_entity = sim.match_entity;
+
+        // Advance a few ticks so the snapshot has non-trivial state.
+        for _ in 0..10 {
+            sim.tick();
+        }
+
+        let snapshot = create_snapshot_from_simulation(&sim, match_entity).unwrap();
+
+        let path = "/tmp/test_e2e_snapshot_round_trip.bin";
+        save_snapshot(&snapshot, path).unwrap();
+        let loaded = load_snapshot(path).unwrap();
+
+        assert_eq!(loaded, snapshot);
+
+        // Clean up
+        std::fs::remove_file(path).ok();
     }
 }

@@ -63,17 +63,26 @@ pub fn run_one_cadence_window(
     match_entity: Entity,
 ) -> u64 {
     for _ in 0..crate::DECISION_CADENCE_TICKS {
+        // Phase F follow-up: MatchClock is a Resource (spec §3). Update
+        // both forms — the Resource is the source of truth for systems;
+        // the Component on the entity is kept for backwards compat.
+        let elapsed = world
+            .get_resource::<sim_components::MatchClock>()
+            .map_or(0, |c| c.elapsed_ticks)
+            + 1;
+        if let Some(mut clock) = world.get_resource_mut::<sim_components::MatchClock>() {
+            clock.elapsed_ticks = elapsed;
+        }
         if let Some(mut clock) = world
             .entity_mut(match_entity)
             .get_mut::<sim_components::MatchClock>()
         {
-            clock.elapsed_ticks += 1;
+            clock.elapsed_ticks = elapsed;
         }
         schedule.run(world);
     }
     world
-        .entity(match_entity)
-        .get::<sim_components::MatchClock>()
+        .get_resource::<sim_components::MatchClock>()
         .map_or(0, |c| c.elapsed_ticks)
 }
 

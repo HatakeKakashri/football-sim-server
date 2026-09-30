@@ -211,7 +211,17 @@ pub struct RoleComponent(pub Role);
 #[derive(Component, Debug, Clone)]
 pub struct MatchStateComponent(pub MatchState);
 
-#[derive(Component, Debug, Clone, Serialize, Deserialize)]
+/// Simulation-time clock for the active match.
+///
+/// Spec axis: per spec §3, `MatchClock` is a Resource (singleton). It is
+/// also derived as a Component for backwards compatibility with tests and
+/// any external code that builds a `World` by hand; the Resource form is
+/// the source of truth for systems (lifecycle, perception, decision).
+///
+/// Phase F follow-up: the Component form will be removed in a later PR
+/// once all consumers migrate. Until then, `sim-core::create_match`
+/// inserts both forms and keeps them in sync.
+#[derive(Component, Resource, Debug, Clone, Serialize, Deserialize)]
 pub struct MatchClock {
     /// Elapsed time in simulation ticks (60 ticks = 1 second).
     /// Only advances when `is_running == true`.

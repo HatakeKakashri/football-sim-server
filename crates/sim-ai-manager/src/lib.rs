@@ -9,13 +9,11 @@ use sim_components::{Manager, Match, MatchClock, Player, Stamina, Team, time};
 pub fn manager_decision_system(
     mut query: Query<(&mut Manager, &Team)>,
     match_res: Res<Match>,
-    clock_query: Query<&MatchClock>,
+    // Phase F follow-up: MatchClock is a Resource (spec §3).
+    clock_res: Res<MatchClock>,
 ) {
     for (mut manager, _team) in &mut query {
-        let Ok(clock) = clock_query.get_single() else {
-            continue;
-        };
-        let current_tick = clock.elapsed_ticks;
+        let current_tick = clock_res.elapsed_ticks;
 
         if current_tick - manager.last_decision_tick < manager.decision_cooldown {
             continue;
@@ -24,7 +22,7 @@ pub fn manager_decision_system(
         let score_difference = i16::from(match_res.score.0) - i16::from(match_res.score.1);
 
         // Use shared time utilities for consistent time remaining calculation
-        let time_remaining_secs = time::match_time_remaining_secs(clock);
+        let time_remaining_secs = time::match_time_remaining_secs(&clock_res);
 
         let mut total_score = 0.0;
         for factor in &manager.decision_table.factors {
@@ -96,16 +94,14 @@ pub fn substitution_system(
 pub fn mentality_shift_system(
     mut query: Query<(&mut Team,)>,
     match_res: Res<Match>,
-    clock_query: Query<&MatchClock>,
+    // Phase F follow-up: MatchClock is a Resource (spec §3).
+    clock_res: Res<MatchClock>,
 ) {
     for (mut team,) in &mut query {
-        let Ok(clock) = clock_query.get_single() else {
-            continue;
-        };
         let score_difference = i32::from(match_res.score.0) - i32::from(match_res.score.1);
 
         // Use shared time utilities for consistent time remaining calculation (in minutes)
-        let time_remaining_mins = time::match_time_remaining_mins(clock);
+        let time_remaining_mins = time::match_time_remaining_mins(&clock_res);
 
         let new_mentality = if score_difference >= 2 {
             if time_remaining_mins < 15.0 {
@@ -158,12 +154,17 @@ mod tests {
             seed: 12345,
         });
         let match_entity = world.spawn(()).id();
-        world.entity_mut(match_entity).insert(MatchClock {
+        let clock = MatchClock {
             elapsed_ticks: 70 * 60,
             half: 2,
             added_time_ticks: 0,
             is_running: true,
-        });
+        };
+        // Phase F follow-up: MatchClock is a Resource (spec §3). Insert
+        // both forms — the Resource is the source of truth for systems;
+        // the Component on the entity is kept for backwards compat.
+        world.insert_resource(clock.clone());
+        world.entity_mut(match_entity).insert(clock);
 
         let team_entity = world.spawn(()).id();
         world.entity_mut(team_entity).insert(Team {
@@ -281,12 +282,17 @@ mod tests {
         });
         let match_entity = world.spawn(()).id();
         // 5 minutes remaining in match = 85 minutes total elapsed = 45 min (half 1) + 40 min (half 2)
-        world.entity_mut(match_entity).insert(MatchClock {
+        let clock = MatchClock {
             elapsed_ticks: 40 * 60 * 60, // 40 minutes into second half
             half: 2,
             added_time_ticks: 0,
             is_running: true,
-        });
+        };
+        // Phase F follow-up: MatchClock is a Resource (spec §3). Insert
+        // both forms — the Resource is the source of truth for systems;
+        // the Component on the entity is kept for backwards compat.
+        world.insert_resource(clock.clone());
+        world.entity_mut(match_entity).insert(clock);
 
         let team_entity = world.spawn(()).id();
         world.entity_mut(team_entity).insert(Team {

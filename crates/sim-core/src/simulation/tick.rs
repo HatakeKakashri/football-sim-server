@@ -29,14 +29,33 @@ impl Simulation {
     }
 
     /// Advance the match clock by one tick if the clock is running.
+    ///
+    /// Phase F follow-up: `MatchClock` is a Resource (spec §3); the
+    /// Component form on the match entity is kept in sync for backwards
+    /// compat but the Resource is the source of truth.
     fn tick_clock(&mut self) {
-        if let Some(mut clock) = self
+        let elapsed_before = self
             .world
-            .entity_mut(self.match_entity)
-            .get_mut::<MatchClock>()
-            && clock.is_running
-        {
-            clock.elapsed_ticks += 1;
+            .get_resource::<MatchClock>()
+            .map_or(0, |c| c.elapsed_ticks);
+        let is_running = self
+            .world
+            .get_resource::<MatchClock>()
+            .is_some_and(|c| c.is_running);
+
+        if is_running {
+            // Update the Resource form (source of truth).
+            if let Some(mut clock) = self.world.get_resource_mut::<MatchClock>() {
+                clock.elapsed_ticks = elapsed_before + 1;
+            }
+            // Mirror to the Component form for backwards compat.
+            if let Some(mut clock) = self
+                .world
+                .entity_mut(self.match_entity)
+                .get_mut::<MatchClock>()
+            {
+                clock.elapsed_ticks = elapsed_before + 1;
+            }
         }
     }
 }

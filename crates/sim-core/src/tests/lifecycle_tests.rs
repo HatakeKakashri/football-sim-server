@@ -138,6 +138,10 @@ fn test_half_time_transition_with_added_time() {
         is_running: true,
     };
     sim.world.resource_mut::<Match>().state = MatchState::InPlay;
+    // Phase F follow-up: MatchClock is a Resource (spec §3). Insert both
+    // forms — the Resource is the source of truth for systems; the
+    // Component on the entity is kept for backwards compat.
+    sim.world.insert_resource(clock.clone());
     sim.world.entity_mut(me).insert(clock);
 
     // Run until half-time transition (needs ~60 ticks to reach threshold)
@@ -224,6 +228,10 @@ fn test_clock_pause_resume_stoppage() {
         is_running: true,
     };
     sim.world.resource_mut::<Match>().state = MatchState::InPlay;
+    // Phase F follow-up: MatchClock is a Resource (spec §3). Insert both
+    // forms — the Resource is the source of truth for systems; the
+    // Component on the entity is kept for backwards compat.
+    sim.world.insert_resource(clock.clone());
     sim.world.entity_mut(me).insert(clock);
 
     // Run 60 ticks (1 second) - clock should advance
@@ -234,6 +242,9 @@ fn test_clock_pause_resume_stoppage() {
     assert_eq!(clock.elapsed_ticks, 30 * 60 * 60 + 60);
 
     // Pause clock (simulate stoppage)
+    if let Some(mut clock) = sim.world.get_resource_mut::<MatchClock>() {
+        clock.is_running = false;
+    }
     if let Some(mut clock) = sim.world.get_mut::<MatchClock>(me) {
         clock.is_running = false;
     }
@@ -250,6 +261,9 @@ fn test_clock_pause_resume_stoppage() {
     );
 
     // Resume clock
+    if let Some(mut clock) = sim.world.get_resource_mut::<MatchClock>() {
+        clock.is_running = true;
+    }
     if let Some(mut clock) = sim.world.get_mut::<MatchClock>(me) {
         clock.is_running = true;
     }

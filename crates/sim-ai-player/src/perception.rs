@@ -17,11 +17,15 @@ pub fn perception_system(
         Query<(Entity, &Position, &TeamIdComponent)>,
         Query<(Entity, &Position, &TeamIdComponent)>,
         Query<&Position, With<BallMarker>>,
-        Query<&MatchClock>,
         Query<&Team>,
     )>,
     match_res: Res<Match>,
     ball_res: Res<Ball>,
+    // Phase F follow-up: MatchClock is a Resource (spec §3). Read it
+    // directly via `Res<MatchClock>` instead of a `Query<&MatchClock>`
+    // (which used a silent `unwrap_or(MatchClock::default())` fallback
+    // that masked missing-clock bugs).
+    clock_res: Res<MatchClock>,
 ) {
     // Phase C §4.3: Ball state lives on the `Ball` Resource. Ball position
     // is queried from the entity carrying `BallMarker`.
@@ -44,19 +48,12 @@ pub fn perception_system(
         }
     }
 
-    // Phase 2: snapshot the single MatchClock up front (read-only resource
-    // used to fill in match-context fields on each player — time remaining,
-    // etc.). Phase C §4.3: `Match` itself is now a Resource and accessed
-    // directly via the `match_res` parameter above.
-    let clock = {
-        let clock_q = queries.p3();
-        clock_q.iter().next().cloned().unwrap_or(MatchClock {
-            elapsed_ticks: 0,
-            half: 1,
-            added_time_ticks: 0,
-            is_running: true,
-        })
-    };
+    // Phase F follow-up: MatchClock is a Resource. Snapshot once at the
+    // top of the system for use filling in match-context fields on each
+    // player's PerceptionSnapshot (time remaining, etc.). Reading from
+    // `Res<MatchClock>` is a single pointer indirection — faster than
+    // the previous `Query<&MatchClock>::iter().next()` lookup.
+    let clock = clock_res.clone();
     // Derive match-context fields from the resource.
     let (_score_diff, _time_remaining_secs, _home_id, _away_id) = {
         let diff = i16::from(match_res.score.0) - i16::from(match_res.score.1);
@@ -73,7 +70,7 @@ pub fn perception_system(
     // replaces the HashMap (no allocation, no iteration order nondeterminism).
     let mut mentality_by_team: [f32; 2] = [0.0, 0.0];
     {
-        let q = queries.p4();
+        let q = queries.p3();
         for team in q.iter() {
             let m = match team.mentality {
                 sim_components::Mentality::Defend => -0.5,

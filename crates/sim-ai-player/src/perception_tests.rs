@@ -27,6 +27,13 @@ fn test_perception_records_real_entity_ids() {
         last_touched_by: None,
         kick_velocity: None,
     });
+    // Phase F follow-up: MatchClock is a Resource (spec §3).
+    world.insert_resource(sim_components::MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    });
 
     // Two opposing players within perception range.
     let home_player = world.spawn(()).id();

@@ -84,14 +84,17 @@ fn test_stamina_based_decision() {
     });
     // Phase D: player_decision_system requires this resource.
     world.insert_resource(DecisionEvaluationCount::default());
-    world
-        .entity_mut(match_entity)
-        .insert(sim_components::MatchClock {
-            elapsed_ticks: 0,
-            half: 1,
-            added_time_ticks: 0,
-            is_running: true,
-        });
+    // Phase F follow-up: MatchClock is a Resource (spec §3). Insert both
+    // forms — the Resource is the source of truth for systems; the
+    // Component on the entity is kept for backwards compat.
+    let clock = sim_components::MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    };
+    world.insert_resource(clock.clone());
+    world.entity_mut(match_entity).insert(clock);
 
     // Run schedule.
     // Phase D: drive a full cadence window (6 ticks) so the player
@@ -192,14 +195,17 @@ fn test_passing_option() {
     });
     // Phase D: player_decision_system requires this resource.
     world.insert_resource(DecisionEvaluationCount::default());
-    world
-        .entity_mut(match_entity)
-        .insert(sim_components::MatchClock {
-            elapsed_ticks: 0,
-            half: 1,
-            added_time_ticks: 0,
-            is_running: true,
-        });
+    // Phase F follow-up: MatchClock is a Resource (spec §3). Insert both
+    // forms — the Resource is the source of truth for systems; the
+    // Component on the entity is kept for backwards compat.
+    let clock = sim_components::MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    };
+    world.insert_resource(clock.clone());
+    world.entity_mut(match_entity).insert(clock);
 
     // Run schedule.
     // Phase D: drive a full cadence window (6 ticks) so the player
@@ -304,14 +310,17 @@ fn test_defender_tackle() {
     });
     // Phase D: player_decision_system requires this resource.
     world.insert_resource(DecisionEvaluationCount::default());
-    world
-        .entity_mut(match_entity)
-        .insert(sim_components::MatchClock {
-            elapsed_ticks: 0,
-            half: 1,
-            added_time_ticks: 0,
-            is_running: true,
-        });
+    // Phase F follow-up: MatchClock is a Resource (spec §3). Insert both
+    // forms — the Resource is the source of truth for systems; the
+    // Component on the entity is kept for backwards compat.
+    let clock = sim_components::MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    };
+    world.insert_resource(clock.clone());
+    world.entity_mut(match_entity).insert(clock);
 
     // Run systems
     let mut schedule = Schedule::default();
@@ -408,14 +417,17 @@ fn test_decision_cadence_does_not_re_evaluate_every_tick() {
     });
     // Phase D: player_decision_system requires this resource.
     world.insert_resource(DecisionEvaluationCount::default());
-    world
-        .entity_mut(match_entity)
-        .insert(sim_components::MatchClock {
-            elapsed_ticks: 0,
-            half: 1,
-            added_time_ticks: 0,
-            is_running: true,
-        });
+    // Phase F follow-up: MatchClock is a Resource (spec §3). Insert both
+    // forms — the Resource is the source of truth for systems; the
+    // Component on the entity is kept for backwards compat.
+    let clock = sim_components::MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    };
+    world.insert_resource(clock.clone());
+    world.entity_mut(match_entity).insert(clock);
 
     let mut schedule = Schedule::default();
     schedule.add_systems(player_decision_system);
@@ -425,11 +437,21 @@ fn test_decision_cadence_does_not_re_evaluate_every_tick() {
     // cadence = 6, exactly 60 / 6 = 10 of those ticks should be
     // a player's evaluation tick.
     for _ in 0..60 {
+        // Phase F follow-up: MatchClock is a Resource (spec §3). Update
+        // both forms — the Resource is the source of truth for systems;
+        // the Component on the entity is kept for backwards compat.
+        let elapsed = world
+            .get_resource::<sim_components::MatchClock>()
+            .map_or(0, |c| c.elapsed_ticks)
+            + 1;
+        if let Some(mut clock) = world.get_resource_mut::<sim_components::MatchClock>() {
+            clock.elapsed_ticks = elapsed;
+        }
         if let Some(mut clock) = world
             .entity_mut(match_entity)
             .get_mut::<sim_components::MatchClock>()
         {
-            clock.elapsed_ticks += 1;
+            clock.elapsed_ticks = elapsed;
         }
         schedule.run(&mut world);
     }

@@ -152,8 +152,16 @@ pub fn apply_transition(
     ball_entity: Entity,
     world: &mut World,
 ) {
-    // Apply clock mutation.
+    // Apply clock mutation. Phase F follow-up: MatchClock is a Resource
+    // (spec §3). Write to the Resource form (source of truth); the
+    // Component form on the match entity is kept in sync for backwards
+    // compat with tests + external consumers.
     if let Some(clock) = decision.new_clock.clone() {
+        if let Some(mut existing) = world.get_resource_mut::<MatchClock>() {
+            *existing = clock.clone();
+        } else {
+            world.insert_resource(clock.clone());
+        }
         world.entity_mut(match_entity).insert(clock);
     }
 
@@ -207,7 +215,9 @@ pub fn lifecycle_system(
 
     for _iteration in 0..MAX_TRANSITIONS_PER_TICK {
         let current_state = world.resource::<Match>().state;
-        let clock = world.entity(match_entity).get::<MatchClock>().cloned();
+        // Phase F follow-up: MatchClock is a Resource. Read from the
+        // Resource form (source of truth).
+        let clock = world.get_resource::<MatchClock>().cloned();
 
         // HalfTime entry-tick persistence: on the first HalfTime tick the
         // entry resource is None; the decision reads it to compute

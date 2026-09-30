@@ -54,13 +54,18 @@ pub fn player_decision_system(
         &TeamIdComponent,
     )>,
     pitch_control: Option<Res<PitchControlGrid>>,
-    clock_q: Query<&MatchClock>,
+    // Phase F follow-up: MatchClock is a Resource (spec §3). Read it
+    // directly via `Res<MatchClock>` instead of the previous
+    // `Query<&MatchClock>` (which used a silent `.iter().next().map_or(0)`
+    // fallback that masked missing-clock bugs).
+    clock_res: Res<MatchClock>,
     mut eval_count: ResMut<DecisionEvaluationCount>,
 ) {
-    // Snapshot the clock once per system run (Bevy lets us borrow the
-    // Query here even though `query` is a separate Query — disjoint
-    // access on different component sets).
-    let elapsed_ticks = clock_q.iter().next().map_or(0, |c| c.elapsed_ticks);
+    // Snapshot the clock once per system run. Reading from `Res<MatchClock>`
+    // is a single pointer indirection — faster than the previous
+    // `Query<&MatchClock>::iter().next()` lookup and free of the silent
+    // default-on-missing fallback.
+    let elapsed_ticks = clock_res.elapsed_ticks;
     let phase_slot = elapsed_ticks % DECISION_CADENCE_TICKS;
 
     for (entity, mut player, utility_brain, perception, stamina, skill, _role, _team_id) in

@@ -319,12 +319,14 @@ impl Simulation {
             state: MatchState::PreMatch,
             seed,
         };
-        // Phase C §4.3: Match is now a Resource, no longer a Component on
-        // the entity. The match entity keeps its MatchClock component for
-        // backwards compatibility (lifecycle_system still uses the entity
-        // for clock reads); future Phase D work may move that to a
-        // resource too.
+        // Phase C §4.3: Match is a Resource, no longer a Component on
+        // the entity. Phase F follow-up: MatchClock is also a Resource
+        // (per spec §3) so systems can read it without scanning entities.
+        // The Component form is preserved on the match entity for
+        // backwards compatibility with tests + external code that builds
+        // worlds by hand; the Resource form is the source of truth.
         world.insert_resource(match_resource);
+        world.insert_resource(initial_clock.clone());
         world.entity_mut(match_entity).insert(initial_clock);
 
         (match_entity, home_team_entity, ball_entity)

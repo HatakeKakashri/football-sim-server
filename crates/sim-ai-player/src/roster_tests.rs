@@ -30,15 +30,18 @@ fn test_cadence_full_roster_load_distribution() {
     });
 
     // MatchClock on a single entity, as the production code does.
+    // Phase F follow-up: MatchClock is a Resource (spec §3). Insert both
+    // forms — the Resource is the source of truth for systems; the
+    // Component on the entity is kept for backwards compat.
     let match_entity = world.spawn(()).id();
-    world
-        .entity_mut(match_entity)
-        .insert(sim_components::MatchClock {
-            elapsed_ticks: 0,
-            half: 1,
-            added_time_ticks: 0,
-            is_running: true,
-        });
+    let clock = sim_components::MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    };
+    world.insert_resource(clock.clone());
+    world.entity_mut(match_entity).insert(clock);
 
     // 22-player roster (Phase 3 default), 11 per team.
     for team in 0..2u8 {

@@ -110,13 +110,13 @@ As the developer, I want ball state and referee state visible on the same timeli
 - **FR-011**: System MUST structure the trace with one process per player, decomposed into a Position thread (counter tracks for position/velocity/stamina) and a Decision thread (nested spans: tick → action → consideration).
 - **FR-012**: System MUST structure the ball, and the referee (when present), as their own distinct processes in the trace.
 - **FR-013**: System MUST NOT install a tracing subscriber, and MUST incur no meaningful per-tick cost, when `--trace-out` is not supplied.
-- **FR-014**: System MUST remove the existing ad hoc `println!`-based "DEBUG INSTRUMENTATION (temporary, for phase2 validation)" block in `sim-server`'s `main.rs` as part of this work, with no stdout replacement.
+- **FR-014**: System MUST remove the existing ad hoc `println!`-based "DEBUG INSTRUMENTATION (temporary, for phase2 validation)" block in `sim-server`'s `main.rs` as part of this work, with no stdout replacement. **Status: Already satisfied** — the block does not exist in the current codebase; `main.rs` already uses `tracing::info!` for all output.
 
 ### Key Entities
 
 - **TelemetryConfig**: Recording configuration — coarse interval (ticks), optional full-resolution tick range. Lives in the new `sim-telemetry` crate; inserted as a per-tick resource the same way `CurrentTick` is today.
 - **Decision Trace Event**: Not a persisted Rust struct — realized as `tracing` spans/events emitted inline from `player_decision_system` (nested tick → action → consideration), carrying the same data that already exists transiently in that system's scoring loop.
-- **Player, Ball, Referee**: Existing entities/components (`sim-components`); this feature reads their current state for emission and does not add new fields to them.
+- **Player, Ball, Referee**: Existing entities/components (`sim-components`); this feature reads their current state for emission and does not add new fields to them. Note: `Ball` is a `Resource` (not a `Component`) in the current codebase; `Referee` is a `Component` that is never instantiated.
 
 ## Success Criteria *(mandatory)*
 
@@ -134,5 +134,5 @@ As the developer, I want ball state and referee state visible on the same timeli
 - Perfetto UI is the intended viewer; no custom dashboard is built as part of this work.
 - `data-model.md` for `001-football-sim-engine` already documents the match entity as containing "one Referee entity" — in the current codebase, no such entity is ever spawned. This feature treats that as a pre-existing gap to read around, not to fix.
 - Disk/IO failures during trace writing are accepted as an unhandled risk, consistent with this track's documented priority of a working simulation over infra hardening.
-- `tracing` and `tracing-chrome` are added as new workspace dependencies; no other public crate APIs change as a result of this feature.
+- `tracing` is already a workspace dependency; `tracing-chrome` is added as a new workspace dependency. No other public crate APIs change as a result of this feature.
 - The Utility AI's per-consideration scoring data already exists transiently inside `player_decision_system`'s scoring loop; this feature adds inline `tracing::event!` calls at that existing computation site rather than restructuring the loop's return type.

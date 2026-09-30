@@ -28,7 +28,7 @@ Counter tracks (Chrome trace `ph: "C"` events), one per field, emitted at every 
 
 ## Player Process — `Decision` Thread
 
-One **duration span pair** (`ph: "B"` begin + `ph: "E"` end) per recorded tick, named `"decision @ tick <n>"`. Nested inside it, one duration span pair per action evaluated that tick, named for the action (`"Shoot"`, `"Pass"`, `"Dribble"`, `"Cross"`, `"HoldPossession"`), each carrying:
+One **duration span pair** (`ph: "B"` begin + `ph: "E"` end) per recorded tick, named `"decision @ tick <n>"`. Nested inside it, one duration span pair per action evaluated that tick, named for the action (`"Shoot"`, `"Pass"`, `"Dribble"`, `"Cross"`, `"HoldPossession"`). **Implementation note**: Action names are derived from the `Intent` variant of each `PlayerAction` (e.g., `Action(ShootAtGoal(_))` → `"Shoot"`, `Action(PassTo)` → `"Pass"`, `Movement(HoldPosition)` → `"HoldPossession"`). A mapping function will be added to `sim-ai-player` during implementation. Each action span carries:
 
 > **Note**: `tracing-chrome` emits `B`/`E` pairs for `tracing::span!` by default. This is the canonical Perfetto-compatible representation. The schema accepts `B`/`E` pairs; `"X"` complete events are also valid if emitted manually, but `B`/`E` is the expected output from the `span!`-based implementation.
 

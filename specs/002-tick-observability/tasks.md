@@ -18,7 +18,9 @@
 **Purpose**: New crate scaffolding and workspace wiring, no behavior yet
 
 - [ ] T001 Create `sim-telemetry` crate: `TelemetryConfig` struct, `should_record(tick, config) -> bool`, and CLI-arg parsing helpers for `--trace-interval-ticks` / `--trace-full-range` validation (reject `interval_ticks == 0`, reject `start > end`, clamp out-of-bounds ranges)
-- [ ] T002 [P] Add `tracing` and `tracing-chrome` to the workspace `Cargo.toml`
+- [ ] T001a [P] Add `Consideration::name()` method to `sim-ai-player` returning snake_case variant identifiers (e.g. `"distance_to_goal"`)
+- [ ] T001b [P] Add `ResponseCurve::name()` method to `sim-ai-core` returning variant identifiers (e.g. `"linear"`, `"logistic"`, `"step"`)
+- [ ] T002 [P] Add `tracing-chrome` to the workspace `Cargo.toml` (`tracing` already present)
 - [ ] T003 [P] In `sim-telemetry`, add the `tracing-chrome` subscriber bootstrap function returning the flush guard, taking the `--trace-out` path
 - [ ] T004 Add `sim-telemetry` as a dependency of `sim-core`, `sim-ai-player`, `sim-rules`, `sim-server`
 
@@ -42,7 +44,7 @@
 **Independent Test**: Run a short simulation with tracing enabled, open the file in Perfetto UI, confirm every action considered by a player at a recorded tick is visible with all of its considerations' raw/weight/curve/score values, and the chosen action is marked.
 
 - [ ] T007 [US1] In `sim-ai-player::player_decision_system`, read the per-tick "should record" resource; when true, open a `tracing::span!("player_decision", tick, player = ?entity)` for the player
-- [ ] T008 [US1] Within that span, wrap the existing per-action scoring loop with a nested `tracing::span!` per action (name = action variant), recording `aggregate_score` and `chosen` as span fields once the winner is known
+- [ ] T008 [US1] Within that span, wrap the existing per-action scoring loop with a nested `tracing::span!` per action (name derived from `Intent` variant, e.g. `"Shoot"`, `"Pass"`, `"HoldPossession"`), recording `aggregate_score` and `chosen` as span fields once the winner is known
 - [ ] T009 [US1] Within each action span, emit a `tracing::event!` per consideration evaluated, with `raw`, `curve`, `weight`, `score` fields, at the point those values are already computed in the existing loop — no restructuring of the loop's return type
 - [ ] T010 [US1] Integration test: run ~120 ticks with tracing enabled to a temp file, parse the output as JSON, assert every expected action/consideration name appears at least once
 
@@ -96,7 +98,7 @@
 **Purpose**: Cross-cutting correctness and the explicit cleanup decision from this session's clarifications
 
 - [ ] T019 Test (SC-004): run the same seed/tick-count simulation twice, once with `--trace-out` set and once without; assert the final state hash is identical
-- [ ] T020 Remove the existing "DEBUG INSTRUMENTATION (temporary, for phase2 validation)" `println!` block from `sim-server`'s `main.rs`, with no stdout replacement (FR-014 / this session's explicit decision)
+- [x] T020 Remove the existing "DEBUG INSTRUMENTATION (temporary, for phase2 validation)" `println!` block from `sim-server`'s `main.rs`, with no stdout replacement (FR-014 / this session's explicit decision) — **Already satisfied**: the block does not exist in the current codebase; `main.rs` already uses `tracing::info!` for all output.
 - [ ] T021 [P] Update `specs/002-tick-observability/checklists/requirements.md` status if any items were deferred during implementation
 
 ---

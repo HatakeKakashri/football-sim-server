@@ -37,7 +37,7 @@ Sourced from existing `Position`, `Velocity`, `Stamina` components — no new fi
 
 ### Ball Snapshot (per recorded tick)
 
-Sourced from the existing `Ball` component.
+Sourced from the existing `Ball` resource (note: `Ball` is a Bevy `Resource`, not a `Component`, in the current codebase).
 
 | Field | Source | Description |
 |-------|--------|-------------|
@@ -49,7 +49,7 @@ Sourced from the existing `Ball` component.
 
 ### Decision Trace (per player, per recorded tick)
 
-Sourced from the values already computed transiently inside `player_decision_system`'s scoring loop, at `sim-ai-player/src/lib.rs`.
+Sourced from the values already computed transiently inside `player_decision_system`'s scoring loop, at `sim-ai-player/src/decision.rs`. Note: `Consideration` and `ResponseCurve` currently lack `name()` methods; these will be added during implementation to produce the snake_case identifiers required by `contracts/trace-schema.md`.
 
 - One `tracing` span per player per recorded tick (`player_decision`).
 - One nested span per action evaluated that tick (`Shoot`, `Pass`, `Dribble`, `Cross`, `HoldPossession`), carrying a `chosen: bool` field.
@@ -84,7 +84,7 @@ Sourced from the existing (currently never-instantiated) `Referee` component in 
 
 This mapping is deliberately a *fourth* snapshot concept, independent of:
 - `specs/001-football-sim-engine/contracts/state-snapshot.md` (persistence/recovery contract)
-- `sim-replay::MatchSnapshot` (replay divergence testing)
+- `sim-replay::RecordedSnapshot` (replay divergence testing)
 - `sim-core::MatchSnapshot` / `get_state()` (live client-facing query)
 
 None of those three carry decision-trace or referee data, and their design goals (compactness, versioning, checksums) actively conflict with this feature's goal of maximum, undropped detail. No shared struct is introduced between them.

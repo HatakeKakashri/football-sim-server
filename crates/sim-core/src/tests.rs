@@ -25,6 +25,10 @@ mod integration_tests;
 mod lifecycle_tests;
 #[cfg(test)]
 mod state_hash_tests;
+#[cfg(test)]
+mod team_id_tests;
+#[cfg(test)]
+mod telemetry_tests;
 
 use crate::Simulation;
 use sim_components::{Match, MatchState};

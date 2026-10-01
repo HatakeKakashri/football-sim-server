@@ -226,6 +226,9 @@ impl Simulation {
                 team_id: TeamId(0),
                 intent: None,
             });
+            world
+                .entity_mut(player_entity)
+                .insert(sim_components::TeamIdComponent(TeamId(0)));
             world.entity_mut(player_entity).insert(Position(pos));
             world
                 .entity_mut(player_entity)
@@ -279,6 +282,9 @@ impl Simulation {
                 team_id: TeamId(1),
                 intent: None,
             });
+            world
+                .entity_mut(player_entity)
+                .insert(sim_components::TeamIdComponent(TeamId(1)));
             world.entity_mut(player_entity).insert(Position(pos));
             world
                 .entity_mut(player_entity)

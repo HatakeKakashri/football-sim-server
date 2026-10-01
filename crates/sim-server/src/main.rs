@@ -2,8 +2,12 @@ use clap::{Parser, Subcommand};
 
 use sim_components::ManagerCommand;
 use sim_core::Simulation;
+use sim_server::simulate::{SimulateOptions, run_simulate};
+use sim_server::telemetry_cli::TraceOptions;
+use sim_telemetry::TelemetryConfig;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -32,6 +36,18 @@ enum Commands {
         /// Output file for the final state (JSON)
         #[arg(short, long)]
         output: Option<String>,
+
+        /// Write a Perfetto-compatible Chrome JSON trace to this path
+        #[arg(long)]
+        trace_out: Option<PathBuf>,
+
+        /// Record a snapshot every N ticks (requires --trace-out to have effect)
+        #[arg(long, default_value_t = TelemetryConfig::DEFAULT_INTERVAL_TICKS)]
+        trace_interval_ticks: u64,
+
+        /// Record every tick in the inclusive range `<start>-<end>` (requires --trace-out)
+        #[arg(long)]
+        trace_full_range: Option<String>,
     },
 
     /// Replay a simulation with manager commands
@@ -78,63 +94,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ticks,
             full_match,
             output,
+            trace_out,
+            trace_interval_ticks,
+            trace_full_range,
         } => {
-            let mut sim = Simulation::new(seed);
-
-            tracing::info!("Running simulation with seed {seed}...");
-            let start = Instant::now();
-
-            if full_match {
-                loop {
-                    sim.tick();
-                    let m_state = sim.world().resource::<sim_components::Match>().state;
-                    if m_state == sim_components::MatchState::FullTime {
-                        tracing::info!("[Tick {:06}] FullTime reached", sim.current_tick());
-                        break;
-                    }
-                    // Safety net
-                    if sim.current_tick() > 400_000 {
-                        tracing::warn!("Exceeded 400k ticks without reaching FullTime");
-                        break;
-                    }
-                }
-            } else {
-                for _ in 0..ticks {
-                    sim.tick();
-                    if sim.world().resource::<sim_components::Match>().state
-                        == sim_components::MatchState::FullTime
-                    {
-                        break;
-                    }
-                }
-            }
-            let duration = start.elapsed();
-            // Display-only conversion: 60 Hz ticks stay well below 2^53,
-            // so the `u64 -> f64` cast is exact for any plausible match.
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "display-only cast; tick counts at 60 Hz stay far below 2^53"
-            )]
-            let ticks_per_sec = sim.current_tick() as f64 / duration.as_secs_f64();
-            tracing::info!(
-                "Simulation completed in {:.2}ms ({:.2} ticks/sec)",
-                duration.as_secs_f64() * 1000.0,
-                ticks_per_sec
+            let report = run_simulate(&SimulateOptions {
+                seed,
+                ticks,
+                full_match,
+                output,
+                trace: TraceOptions {
+                    out: trace_out,
+                    interval_ticks: trace_interval_ticks,
+                    full_range: trace_full_range,
+                },
+            })?;
+            tracing::debug!(
+                "simulate finished at tick {} (hash {})",
+                report.ticks_run,
+                report.final_state_hash
             );
-
-            if let Some(output_path) = output {
-                let state = sim.get_state()?;
-                let json = serde_json::to_string_pretty(&state)?;
-                let mut file = File::create(&output_path)?;
-                file.write_all(json.as_bytes())?;
-                tracing::info!("Final state written to {output_path}");
-            }
-
-            // Phase 0 CLI contract: a deterministic run is reproducible iff
-            // two runs with the same seed print the same final state hash.
-            // The hash is also available in any JSON snapshot produced above,
-            // but printing it on stdout makes the contract literal.
-            tracing::info!("final_state_hash: {}", sim.get_state_hash());
         }
 
         Commands::Replay {

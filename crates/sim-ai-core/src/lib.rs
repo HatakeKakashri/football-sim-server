@@ -54,6 +54,16 @@ pub enum ResponseCurve {
 }
 
 impl ResponseCurve {
+    /// Stable `snake_case` identifier of the curve variant (used by traces).
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Linear { .. } => "linear",
+            Self::Logistic { .. } => "logistic",
+            Self::Step { .. } => "step",
+        }
+    }
+
     /// Evaluate the curve at the given input, returning a `Score` clamped
     /// to `[0.0, 1.0]`.
     ///
@@ -105,6 +115,31 @@ pub fn geometric_mean(values: &[f32]) -> f32 {
     reason = "tests assert exact Score values after clamping"
 )]
 mod tests {
+    #[test]
+    fn curve_name_identifies_each_variant() {
+        assert_eq!(
+            ResponseCurve::Linear { min: 0.0, max: 1.0 }.name(),
+            "linear"
+        );
+        assert_eq!(
+            ResponseCurve::Logistic {
+                midpoint: 0.5,
+                steepness: 4.0
+            }
+            .name(),
+            "logistic"
+        );
+        assert_eq!(
+            ResponseCurve::Step {
+                threshold: 0.5,
+                below: 0.0,
+                above: 1.0
+            }
+            .name(),
+            "step"
+        );
+    }
+
     use super::*;
 
     #[test]

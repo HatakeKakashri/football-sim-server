@@ -11,10 +11,14 @@ sim-rules = { path = "../sim-rules" }
 sim-ai-player = { path = "../sim-ai-player" }
 sim-ai-core = { path = "../sim-ai-core" }
 sim-ai-manager = { path = "../sim-ai-manager" }
+sim-telemetry = { path = "../sim-telemetry" }
 bevy_ecs.workspace = true
 serde.workspace = true
 smallvec.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+serde_json = "1"
 
 [lints]
 workspace = true

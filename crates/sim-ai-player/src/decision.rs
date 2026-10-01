@@ -7,8 +7,10 @@ use sim_components::{
     Intent, MatchClock, PerceptionSnapshot, Player, RoleComponent, Skill, Stamina, TeamIdComponent,
 };
 use sim_physics::PitchControlGrid;
+use sim_telemetry::TraceGate;
 
 use crate::brain::{UtilityBrain, intent_kind};
+use crate::decision_trace::{ConsiderationTrace, DecisionTraceScratch};
 use crate::{
     ConsiderationContext, DECISION_CADENCE_TICKS, DecisionEvaluationCount, player_stagger_slot,
 };
@@ -60,7 +62,12 @@ pub fn player_decision_system(
     // fallback that masked missing-clock bugs).
     clock_res: Res<MatchClock>,
     mut eval_count: ResMut<DecisionEvaluationCount>,
+    // Telemetry (feature 002): `None`/all-false when tracing is disabled, in
+    // which case the scratch buffer is never touched and nothing is emitted.
+    gate: Option<Res<TraceGate>>,
+    mut scratch: Local<DecisionTraceScratch>,
 ) {
+    let tracing_decisions = gate.is_some_and(|g| g.decisions());
     // Snapshot the clock once per system run. Reading from `Res<MatchClock>`
     // is a single pointer indirection — faster than the previous
     // `Query<&MatchClock>::iter().next()` lookup and free of the silent
@@ -68,8 +75,7 @@ pub fn player_decision_system(
     let elapsed_ticks = clock_res.elapsed_ticks;
     let phase_slot = elapsed_ticks % DECISION_CADENCE_TICKS;
 
-    for (entity, mut player, utility_brain, perception, stamina, skill, _role, _team_id) in
-        &mut query
+    for (entity, mut player, utility_brain, perception, stamina, skill, role, team_id) in &mut query
     {
         // Phase D: cadence guard. Skip if not on this player's slot.
         if player_stagger_slot(entity) != phase_slot {
@@ -80,9 +86,15 @@ pub fn player_decision_system(
 
         // Evaluate each action.
         let mut best_action: Option<(Intent, f32)> = None;
+        if tracing_decisions {
+            scratch.clear();
+        }
 
         for action in &utility_brain.actions {
             let mut consideration_scores: Vec<f32> = Vec::new();
+            if tracing_decisions {
+                scratch.begin_action(intent_kind(&action.intent));
+            }
 
             for consideration in &action.considerations {
                 // Compute the raw input for this consideration from the
@@ -98,11 +110,23 @@ pub fn player_decision_system(
                 let raw = consideration.raw_input(&ctx);
                 let score = consideration.curve().evaluate(raw).raw();
                 consideration_scores.push(score);
+                if tracing_decisions {
+                    scratch.push_consideration(ConsiderationTrace {
+                        name: consideration.name(),
+                        raw,
+                        curve: consideration.curve().name(),
+                        weight: consideration.weight(),
+                        score,
+                    });
+                }
             }
 
             if consideration_scores.is_empty() {
                 // No considerations ⇒ fixed baseline.
                 let baseline = 0.6;
+                if tracing_decisions {
+                    scratch.finish_action(baseline);
+                }
                 if let Some((_, best)) = best_action {
                     if baseline > best {
                         best_action = Some((action.intent, baseline));
@@ -126,6 +150,9 @@ pub fn player_decision_system(
             {
                 aggregate += utility_brain.hysteresis;
             }
+            if tracing_decisions {
+                scratch.finish_action(aggregate);
+            }
 
             if let Some((_, best)) = best_action {
                 if aggregate > best {
@@ -134,6 +161,16 @@ pub fn player_decision_system(
             } else {
                 best_action = Some((action.intent, aggregate));
             }
+        }
+
+        if tracing_decisions {
+            scratch.emit(
+                entity,
+                team_id.0,
+                role.0,
+                elapsed_ticks,
+                best_action.map(|(_, score)| score),
+            );
         }
 
         if let Some((intent, _score)) = best_action {

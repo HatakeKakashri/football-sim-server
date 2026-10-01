@@ -1,6 +1,6 @@
 //! `Simulation` and `SimulationSet`: the public surface of `sim-core`.
 
-mod brain_default;
+pub mod brain_default;
 mod commands;
 mod construct;
 mod formation;
@@ -8,6 +8,7 @@ pub mod lifecycle;
 mod snapshot;
 pub mod state_hash;
 mod tick;
+pub mod trace_emit;
 
 pub use lifecycle::lifecycle_system;
 

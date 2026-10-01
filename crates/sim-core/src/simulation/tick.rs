@@ -12,6 +12,9 @@ impl Simulation {
         self.world
             .insert_resource(sim_rules::CurrentTick(self.tick));
 
+        // Feature 002: recompute what this tick records (no-op without telemetry).
+        super::trace_emit::advance_trace_gate(&mut self.world);
+
         self.schedule.run(&mut self.world);
 
         // lifecycle_system takes the current tick counter.

@@ -8,11 +8,16 @@
 //! `DECISION_CADENCE_TICKS` + `player_stagger_slot`.
 
 pub(crate) mod brain;
+#[cfg(test)]
+mod consideration_name_tests;
 mod decision;
-mod execution;
-mod perception;
 #[cfg(test)]
 mod decision_tests;
+mod decision_trace;
+#[cfg(test)]
+mod decision_trace_tests;
+mod execution;
+mod perception;
 #[cfg(test)]
 mod perception_tests;
 #[cfg(test)]
@@ -132,8 +137,16 @@ pub struct ConsiderationContext<'a> {
 /// non-exhaustive otherwise), which keeps the accessors in lock-step with
 /// the enum definition.
 macro_rules! consideration_accessors {
-    ( $( $variant:ident { weight: $w:expr, curve: $c:expr } ),+ $(,)? ) => {
+    ( $( $variant:ident { weight: $w:expr, curve: $c:expr, name: $n:expr } ),+ $(,)? ) => {
         impl Consideration {
+            /// Stable `snake_case` identifier of the variant (used by traces).
+            #[must_use]
+            pub const fn name(&self) -> &'static str {
+                match self {
+                    $( Self::$variant { .. } => $n, )+
+                }
+            }
+
             #[must_use]
             pub const fn weight(&self) -> f32 {
                 match self {
@@ -152,24 +165,24 @@ macro_rules! consideration_accessors {
 }
 
 consideration_accessors! {
-    DistanceToTarget    { weight: _, curve: _ },
-    DistanceToBall      { weight: _, curve: _ },
-    Stamina             { weight: _, curve: _ },
-    PitchControlAtBall  { weight: _, curve: _ },
-    PassAngleClear      { weight: _, curve: _ },
-    TeammateDistance    { weight: _, curve: _ },
-    TeammateSpace       { weight: _, curve: _ },
-    DistanceToGoal      { weight: _, curve: _ },
-    GoalAngle           { weight: _, curve: _ },
-    DefenderPressure    { weight: _, curve: _ },
-    DistanceToOpponent  { weight: _, curve: _ },
-    SkillDiff           { weight: _, curve: _ },
-    DistanceToMarked    { weight: _, curve: _ },
-    DefensivePosition   { weight: _, curve: _ },
-    DistanceToPress     { weight: _, curve: _ },
-    SpaceAhead          { weight: _, curve: _ },
-    TeammateBall        { weight: _, curve: _ },
-    FormationDiscipline { weight: _, curve: _ },
+    DistanceToTarget { weight: _, curve: _, name: "distance_to_target" },
+    DistanceToBall { weight: _, curve: _, name: "distance_to_ball" },
+    Stamina { weight: _, curve: _, name: "stamina" },
+    PitchControlAtBall { weight: _, curve: _, name: "pitch_control_at_ball" },
+    PassAngleClear { weight: _, curve: _, name: "pass_angle_clear" },
+    TeammateDistance { weight: _, curve: _, name: "teammate_distance" },
+    TeammateSpace { weight: _, curve: _, name: "teammate_space" },
+    DistanceToGoal { weight: _, curve: _, name: "distance_to_goal" },
+    GoalAngle { weight: _, curve: _, name: "goal_angle" },
+    DefenderPressure { weight: _, curve: _, name: "defender_pressure" },
+    DistanceToOpponent { weight: _, curve: _, name: "distance_to_opponent" },
+    SkillDiff { weight: _, curve: _, name: "skill_diff" },
+    DistanceToMarked { weight: _, curve: _, name: "distance_to_marked" },
+    DefensivePosition { weight: _, curve: _, name: "defensive_position" },
+    DistanceToPress { weight: _, curve: _, name: "distance_to_press" },
+    SpaceAhead { weight: _, curve: _, name: "space_ahead" },
+    TeammateBall { weight: _, curve: _, name: "teammate_ball" },
+    FormationDiscipline { weight: _, curve: _, name: "formation_discipline" },
 }
 
 /// Tactical distance thresholds (metres) used by `Consideration::raw_input`

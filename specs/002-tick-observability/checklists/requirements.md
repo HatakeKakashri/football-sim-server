@@ -30,6 +30,13 @@
 - [x] Feature meets measurable outcomes defined in Success Criteria
 - [x] No unmotivated implementation details leak into specification
 
+## Amended / deferred during implementation (2026-10-01)
+
+- **SC-002 was amended** (decision window `[t, t+5]`; see `spec.md`). The original wording was unachievable under the 6-tick decision cadence.
+- **Not verified in Perfetto itself.** The produced trace was validated structurally (see `tasks.md` T010/T018) but not loaded into Perfetto UI or `trace_processor`; SC-005 remains to be confirmed by a human.
+- **Default output size** *(resolved 2026-10-01)*: at the original default interval of 60 a full match produced ~660 MB, at odds with User Story 2's "not unmanageably large" intent. FR-002 was amended: the default is now 600 ticks (reported ~67 MB per full match; unverified, see `verification.md`).
+- `Referee` is still never spawned (pre-existing, out of scope); referee emission is tested with a hand-spawned `Referee`.
+
 ## Notes
 
 - One item (non-technical-stakeholder framing) is knowingly not satisfied and is explained above rather than checked off by default — consistent with this project's stated preference that gaps be surfaced, not silently smoothed over.

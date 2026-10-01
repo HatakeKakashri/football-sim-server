@@ -10,7 +10,7 @@ Recording configuration, inserted as a Bevy ECS resource each tick the same way 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| interval_ticks | `u64` | Coarse recording cadence. A snapshot is recorded every `interval_ticks` ticks. Default `60` (~1s at fixed 60Hz timestep). MUST be `> 0`. |
+| interval_ticks | `u64` | Coarse recording cadence. A snapshot is recorded every `interval_ticks` ticks. Default `600` (~10s at fixed 60Hz timestep; was `60` until 2026-10-01, see FR-002). MUST be `> 0`. |
 | full_range | `Option<(u64, u64)>` | Inclusive tick range `(start, end)` recorded at full resolution (every tick), independent of `interval_ticks`. Clamped to `0..total_ticks` if out of bounds. |
 
 **Validation Rules**:
@@ -52,7 +52,7 @@ Sourced from the existing `Ball` resource (note: `Ball` is a Bevy `Resource`, no
 Sourced from the values already computed transiently inside `player_decision_system`'s scoring loop, at `sim-ai-player/src/decision.rs`. Note: `Consideration` and `ResponseCurve` currently lack `name()` methods; these will be added during implementation to produce the snake_case identifiers required by `contracts/trace-schema.md`.
 
 - One `tracing` span per player per recorded tick (`player_decision`).
-- One nested span per action evaluated that tick (`Shoot`, `Pass`, `Dribble`, `Cross`, `HoldPossession`), carrying a `chosen: bool` field.
+- One nested span per action evaluated that tick (named by `intent_kind()`: `MoveToPosition`, `ChaseBall`, `PassTo`, `ShootAtGoal`, `Tackle`, `MarkOpponent`, `Press`, `SupportRun`, `HoldPosition`), carrying a `chosen: bool` field.
 - Within each action span, one field set per consideration evaluated:
 
 | Field | Description |
@@ -76,7 +76,7 @@ Sourced from the existing (currently never-instantiated) `Referee` component in 
 
 | Perfetto concept | Maps to |
 |---|---|
-| Process `"<Team> #<num> — <Role>"` | One per player |
+| Process `"<Team> <entity index> — <Role>"` | One per player (no squad number exists in the codebase) |
 | ↳ Thread `Position` | Counter tracks: x, y, vx, vy, stamina |
 | ↳ Thread `Decision` | Span per recorded tick → nested span per action → args per consideration |
 | Process `"Ball"` | Counter tracks (position, velocity, spin) + instant events (state/possession changes) |

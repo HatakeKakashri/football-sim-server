@@ -31,7 +31,7 @@ As the developer, I want to open a recorded match trace and see, for any player 
 
 **Acceptance Scenarios**:
 
-1. **Given** a recorded tick where a player considered Shoot, Pass, Dribble, and HoldPossession, **When** the trace is opened in Perfetto, **Then** all four actions appear as nested spans under that player's Decision track for that tick, none omitted.
+1. **Given** a recorded tick where a player considered `ShootAtGoal`, `PassTo`, `ChaseBall`, and `HoldPosition` (action names are the `intent_kind()` strings of the real brain), **When** the trace is opened in Perfetto, **Then** all four actions appear as nested spans under that player's Decision track for that tick, none omitted.
 2. **Given** an action span for "Pass" with three considerations evaluated, **When** the span is inspected in Perfetto's argument panel, **Then** each consideration's name, raw input, weight/curve, and resulting score are all visible.
 3. **Given** a tick where "Shoot" was the winning action, **When** the trace is inspected, **Then** the "Shoot" span is distinguishably marked as chosen among the sibling action spans.
 
@@ -47,7 +47,7 @@ As the developer, I want a recording that spans an entire match by default witho
 
 **Acceptance Scenarios**:
 
-1. **Given** a simulation of `T` ticks and `--trace-interval-ticks 60` (the default), **When** the run completes, **Then** the trace contains one recorded snapshot roughly every 60 ticks, not every tick.
+1. **Given** a simulation of `T` ticks and `--trace-interval-ticks 600` (the default, *amended 2026-10-01*), **When** the run completes, **Then** the trace contains one recorded snapshot roughly every 600 ticks, not every tick.
 2. **Given** `--trace-out` is not supplied, **When** the simulation runs, **Then** no trace file is produced and no tracing subscriber is installed.
 
 ---
@@ -98,7 +98,7 @@ As the developer, I want ball state and referee state visible on the same timeli
 ### Functional Requirements
 
 - **FR-001**: System MUST allow enabling trace recording via a CLI flag (`--trace-out <path>`) on the `simulate` subcommand; omitting it MUST fully disable tracing with no subscriber installed.
-- **FR-002**: System MUST default to a coarse recording interval of 60 ticks (~1 second at the fixed 60 Hz timestep), overridable via `--trace-interval-ticks <n>`.
+- **FR-002** *(amended 2026-10-01)*: System MUST default to a coarse recording interval of 600 ticks (~10 seconds at the fixed 60 Hz timestep), overridable via `--trace-interval-ticks <n>`. *(Originally 60 ticks; at that default a full match produced ~660 MB, contradicting User Story 2's intent that a default recording stays manageable. The default lives in the single constant `TelemetryConfig::DEFAULT_INTERVAL_TICKS`.)*
 - **FR-003**: System MUST support an optional `--trace-full-range <start>-<end>` flag causing every tick within that inclusive range to be recorded at full resolution, regardless of `--trace-interval-ticks`.
 - **FR-004**: System MUST write both the coarse-interval recordings and any full-resolution range recordings into a single output file on one shared timeline.
 - **FR-005**: System MUST emit, for every recorded tick, position and velocity for the ball and for every player entity.
@@ -123,7 +123,7 @@ As the developer, I want ball state and referee state visible on the same timeli
 ### Measurable Outcomes
 
 - **SC-001**: A `simulate` run with `--trace-out` produces a file that parses as well-formed Chrome Trace JSON.
-- **SC-002**: For a run with only `--trace-interval-ticks` set (no full-resolution range), the number of recorded snapshots equals `total_ticks / interval_ticks` (±1 at the boundary), and no player, action, or consideration is omitted from any recorded snapshot.
+- **SC-002** *(amended 2026-10-01)*: For a run with only `--trace-interval-ticks` set (no full-resolution range), the number of recorded snapshots (position/ball counters) equals `total_ticks / interval_ticks` (±1 at the boundary), and **decisions are traced for every tick in `[t, t+DECISION_CADENCE_TICKS-1]` of each recorded tick `t`**, so every player — each is evaluated exactly once per cadence window — has its complete action/consideration tree recorded; no evaluated player, action, or consideration is omitted. (Original wording required all 22 players at the single tick `t`, which is impossible: only ~1/6 of players are evaluated on any given tick.)
 - **SC-003**: Adding `--trace-full-range` covering `R` ticks adds full-detail snapshots for each of those `R` ticks (beyond whatever coarse snapshots already existed inside that range), in the same output file.
 - **SC-004**: A `simulate` run's final state hash is identical whether or not `--trace-out` is supplied — confirms recording has zero effect on simulation determinism.
 - **SC-005**: Opening the produced file in Perfetto UI shows one process per player plus a Ball process (and a Referee process, when applicable) with no manual transformation of the file required.
@@ -134,5 +134,5 @@ As the developer, I want ball state and referee state visible on the same timeli
 - Perfetto UI is the intended viewer; no custom dashboard is built as part of this work.
 - `data-model.md` for `001-football-sim-engine` already documents the match entity as containing "one Referee entity" — in the current codebase, no such entity is ever spawned. This feature treats that as a pre-existing gap to read around, not to fix.
 - Disk/IO failures during trace writing are accepted as an unhandled risk, consistent with this track's documented priority of a working simulation over infra hardening.
-- `tracing` is already a workspace dependency; `tracing-chrome` is added as a new workspace dependency. No other public crate APIs change as a result of this feature.
+- `tracing` is already a workspace dependency; `tracing-subscriber` (and `serde_json`, in `sim-telemetry`) are added instead of `tracing-chrome`, which cannot produce the contract (see `docs/superpowers/specs/2026-10-01-tick-observability-design.md`). The new public API outside `sim-telemetry` is exactly: `Consideration::name()`, `ResponseCurve::name()` and `Simulation::enable_telemetry(TelemetryConfig)` (the single switch that turns tracing on; without it no trace code runs). `sim_core::simulation::{brain_default, trace_emit}` are `pub mod` only inside the private `simulation` module (the same pattern as `lifecycle` and `state_hash`), so they are crate-internal and not part of the crate's external surface.
 - The Utility AI's per-consideration scoring data already exists transiently inside `player_decision_system`'s scoring loop; this feature adds inline `tracing::event!` calls at that existing computation site rather than restructuring the loop's return type.

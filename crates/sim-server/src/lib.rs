@@ -1,3 +1,6 @@
+pub mod simulate;
+pub mod telemetry_cli;
+
 use sim_components::ManagerCommand;
 use sim_core::{MatchSnapshot, Simulation};
 

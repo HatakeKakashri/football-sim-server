@@ -12,7 +12,7 @@ Add post-hoc, file-based observability of match ticks: player positions and full
 
 **Language/Version**: Rust (edition 2024), consistent with the rest of the workspace
 
-**New Dependencies**: `tracing-chrome` (`tracing` already present). No other workspace dependency changes.
+**New Dependencies**: `tracing-subscriber` (`registry`+`std` only) and `serde_json` in `sim-telemetry`; `tracing` in `sim-ai-player`. `tracing-chrome` was evaluated and rejected — see `docs/superpowers/specs/2026-10-01-tick-observability-design.md`.
 
 **New Crate**: `sim-telemetry` — a leaf crate (no dependency on `sim-core`, to avoid a cycle: `sim-core` depends on `sim-ai-player`, and `sim-ai-player` needs `sim-telemetry`, so `sim-telemetry` must sit below both, alongside `sim-components`/`sim-math`).
 
@@ -37,7 +37,7 @@ Add post-hoc, file-based observability of match ticks: player positions and full
 
 The following discrepancies between the original spec and the current codebase have been identified and addressed:
 
-1. **`tracing` already present**: The workspace `Cargo.toml` already includes `tracing = "0.1"`. Only `tracing-chrome` needs to be added.
+1. **`tracing` already present**: The workspace `Cargo.toml` already includes `tracing = "0.1"`. `tracing-subscriber` is added; `tracing-chrome` is not (superseded).
 2. **FR-014 already satisfied**: The "DEBUG INSTRUMENTATION (temporary, for phase2 validation)" `println!` block does not exist in `sim-server/src/main.rs`. The file already uses `tracing::info!` for all output.
 3. **`Ball` is a Resource, not a Component**: The spec's `data-model.md` refers to the "existing `Ball` component." In the current codebase, `Ball` is a Bevy `Resource` (`sim_components::Ball`), while the ball entity carries `Position`, `Velocity`, and `BallMarker` components. Implementation reads `Res<Ball>` for state and `Query<&Position, With<BallMarker>>` for position.
 4. **`sim-replay::MatchSnapshot` naming**: The spec refers to `sim-replay::MatchSnapshot`; the actual struct is `sim-replay::RecordedSnapshot`.
@@ -48,7 +48,7 @@ The following discrepancies between the original spec and the current codebase h
 ## Architecture
 
 ```
-sim-telemetry (leaf crate: TelemetryConfig, should_record(), tracing-chrome subscriber setup + guard)
+sim-telemetry (leaf crate: TelemetryConfig, should_record(), custom Chrome-JSON `tracing_subscriber::Layer` + flush guard)
       ^                    ^                         ^                        ^
       |                    |                         |                       |
   sim-core            sim-ai-player               sim-rules              sim-server
@@ -66,11 +66,11 @@ Per-tick sequence:
 1. `Simulation::tick()` computes `should_record(current_tick, config)` once and inserts/updates a resource read by downstream systems (mirrors existing `CurrentTick` resource insertion).
 2. `player_decision_system` reads that resource. When true, it wraps its existing per-action, per-consideration scoring loop in `tracing::span!`/`tracing::event!` calls at the point where those values are already computed — no change to the loop's return type or control flow when tracing is disabled or the tick isn't selected.
 3. A ball-state system and a referee system (new, small; referee gated on `Query<&Referee>` being non-empty) emit their own events on the same recorded ticks.
-4. `sim-server` installs the `tracing-chrome` subscriber only when `--trace-out` is supplied, before the simulation loop starts, and holds the flush guard until the process exits.
+4. `sim-server` installs the Chrome trace layer only when `--trace-out` is supplied, before the simulation loop starts, and holds the flush guard until the process exits.
 
 ## Phase Breakdown
 
-- **Phase 0 (Research)**: Confirm `tracing-chrome`'s API for the flush-guard pattern and nested span → Chrome "duration event" conversion behavior; confirm `tracing::enabled!()` short-circuit cost is negligible when no subscriber is installed. No open unknowns expected to block design; this is a well-trodden pattern in the Rust ecosystem.
+- **Phase 0 (Research)**: (Superseded: `tracing-chrome` 0.7.2 was probed and rejected.) Original goal: confirm `tracing-chrome`'s API for the flush-guard pattern and nested span → Chrome "duration event" conversion behavior; confirm `tracing::enabled!()` short-circuit cost is negligible when no subscriber is installed. No open unknowns expected to block design; this is a well-trodden pattern in the Rust ecosystem.
 - **Phase 1 (Design)**: This plan + `data-model.md` + `contracts/trace-schema.md`.
 - **Phase 2 (Tasks)**: See `tasks.md`.
 

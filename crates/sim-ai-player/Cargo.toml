@@ -10,6 +10,11 @@ sim-ai-core = { path = "../sim-ai-core" }
 sim-physics = { path = "../sim-physics" }
 bevy_ecs.workspace = true
 smallvec.workspace = true
+tracing.workspace = true
+sim-telemetry = { path = "../sim-telemetry" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json = "1"

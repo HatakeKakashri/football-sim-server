@@ -10,6 +10,7 @@ use sim_components::{
     Ball, BallMarker, BallState, Match, Position, RuleEvent, Velocity,
 };
 use sim_math::Vec2;
+use sim_telemetry::TelemetryConfig;
 
 use crate::constants::{CENTER_SPOT, GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH};
 use crate::out_of_bounds::calculate_oob_restart_position;
@@ -27,7 +28,8 @@ pub fn goal_detection_system(
     ball_query: Query<(Entity, &Position), With<BallMarker>>,
     mut match_res: ResMut<Match>,
     mut ball: ResMut<Ball>,
-    current_tick: Res<CurrentTick>,
+    current_tick: Option<Res<CurrentTick>>,
+    telemetry: Option<Res<TelemetryConfig>>,
 ) {
     // First pass: collect goal events (avoid borrow conflicts)
     let mut goal_events: Vec<(Entity, sim_components::TeamId, (u8, u8))> = Vec::new();
@@ -51,6 +53,14 @@ pub fn goal_detection_system(
                     final_score.0,
                     final_score.1
                 );
+                if telemetry.is_some() {
+                    sim_telemetry::emit::goal(
+                        current_tick.as_deref().map_or(0, |t| t.0),
+                        1,
+                        final_score.0,
+                        final_score.1,
+                    );
+                }
             }
             // Home goal: ball at x >= PITCH_LENGTH (right goal)
             else if ball_pos.0.x >= PITCH_LENGTH {
@@ -62,6 +72,14 @@ pub fn goal_detection_system(
                     final_score.0,
                     final_score.1
                 );
+                if telemetry.is_some() {
+                    sim_telemetry::emit::goal(
+                        current_tick.as_deref().map_or(0, |t| t.0),
+                        0,
+                        final_score.0,
+                        final_score.1,
+                    );
+                }
             }
         }
     }
@@ -75,7 +93,8 @@ pub fn goal_detection_system(
         });
         commands.insert_resource(PendingRestart {
             event: Some(RuleEvent::KickoffRestart),
-            restart_tick: current_tick.0 + crate::constants::KICKOFF_RESTART_TICKS,
+            restart_tick: current_tick.as_deref().map_or(0, |t| t.0)
+                + crate::constants::KICKOFF_RESTART_TICKS,
         });
     }
 }
@@ -92,15 +111,16 @@ pub fn restart_system(
     mut commands: Commands,
     mut ball_query: Query<(Entity, &mut Position, &mut Velocity), With<BallMarker>>,
     rule_event_query: Query<(Entity, &RuleEvent)>,
-    current_tick: Res<CurrentTick>,
+    current_tick: Option<Res<CurrentTick>>,
     pending_restart: Option<Res<PendingRestart>>,
     mut ball: ResMut<Ball>,
+    telemetry: Option<Res<TelemetryConfig>>,
 ) {
     // Handle KickoffRestart from goal (delayed by 60 ticks)
     if let Some(pr) = pending_restart
         && let Some(event) = &pr.event
         && matches!(event, RuleEvent::KickoffRestart)
-        && current_tick.0 >= pr.restart_tick
+        && current_tick.as_deref().map_or(0, |t| t.0) >= pr.restart_tick
     {
         // Place ball at center spot
         if let Ok((_, mut pos, mut vel)) = ball_query.get_single_mut() {
@@ -112,6 +132,9 @@ pub fn restart_system(
             // into the restart would inject a phantom impulse on
             // the next tick's Physics set.
             ball.kick_velocity = None;
+            if telemetry.is_some() {
+                sim_telemetry::emit::kickoff(current_tick.as_deref().map_or(0, |t| t.0));
+            }
         }
         // Clear pending restart
         commands.remove_resource::<PendingRestart>();
@@ -133,6 +156,19 @@ pub fn restart_system(
             ball.state = BallState::Free;
             // Drop any pending kick velocity — see goal-restart arm above.
             ball.kick_velocity = None;
+            let kind = match oob_type {
+                sim_components::BallOutOfBoundsType::ThrowIn => "throw_in",
+                sim_components::BallOutOfBoundsType::GoalKick => "goal_kick",
+                sim_components::BallOutOfBoundsType::Corner => "corner",
+            };
+            if telemetry.is_some() {
+                sim_telemetry::emit::restart(
+                    current_tick.as_deref().map_or(0, |t| t.0),
+                    kind,
+                    restart_pos.x,
+                    restart_pos.y,
+                );
+            }
             processed_entities.push(ball_entity);
         }
     }

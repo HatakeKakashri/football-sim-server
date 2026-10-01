@@ -8,6 +8,9 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{Match, MatchClock, Referee, time};
+use sim_telemetry::TelemetryConfig;
+
+use crate::CurrentTick;
 
 /// Added time granted per stoppage event, in seconds (0.5 min).
 const ADDED_SECS_PER_STOPPAGE_EVENT: u64 = 30;
@@ -45,6 +48,8 @@ pub fn added_time_calculation_system(
 pub fn match_duration_enforcement_system(
     mut match_res: ResMut<Match>,
     mut clock_query: Query<&mut MatchClock>,
+    current_tick: Option<Res<CurrentTick>>,
+    telemetry: Option<Res<TelemetryConfig>>,
 ) {
     // First check if clock is running
     let is_running = clock_query.get_single().is_ok_and(|c| c.is_running);
@@ -63,6 +68,8 @@ pub fn match_duration_enforcement_system(
         }
         // Need to re-query to get half
         let half = clock_query.get_single().map_or(1, |c| c.half);
+        let (score_home, score_away) = match_res.score;
+        let is_full_time = half != 1;
         if half == 1 {
             match_res.state = sim_components::MatchState::HalfTime;
             tracing::info!(
@@ -76,6 +83,14 @@ pub fn match_duration_enforcement_system(
                 "Full time! Score: {}-{}",
                 match_res.score.0,
                 match_res.score.1
+            );
+        }
+        if telemetry.is_some() {
+            sim_telemetry::emit::half_time(
+                current_tick.map_or(0, |t| t.0),
+                score_home,
+                score_away,
+                is_full_time,
             );
         }
     }

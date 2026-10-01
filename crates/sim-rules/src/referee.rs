@@ -10,6 +10,9 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{Ball, BallMarker, Match, Player, Position, Team, TeamId, TeamIdComponent, Velocity};
+use sim_telemetry::TelemetryConfig;
+
+use crate::CurrentTick;
 
 /// Phase 3: Offside detection system (Law 11).
 ///
@@ -36,6 +39,8 @@ pub fn offside_detection_system(
     ball_query: Query<&Position, With<BallMarker>>,
     player_query: Query<(Entity, &Position, &TeamIdComponent), Without<BallMarker>>,
     ball: Res<Ball>,
+    current_tick: Option<Res<CurrentTick>>,
+    telemetry: Option<Res<TelemetryConfig>>,
     mut tick_counter: Local<u32>,
 ) {
     *tick_counter += 1;
@@ -92,6 +97,14 @@ pub fn offside_detection_system(
                 pos.0.y,
                 toucher_team_id
             );
+            if telemetry.is_some() {
+                sim_telemetry::emit::offside(
+                    current_tick.as_deref().map_or(0, |t| t.0),
+                    toucher_team_id,
+                    pos.0.x,
+                    pos.0.y,
+                );
+            }
         }
     }
 }
@@ -109,6 +122,8 @@ pub fn foul_detection_system(
     mut commands: Commands,
     player_query: Query<(Entity, &Player, &Position, &Velocity)>,
     match_res: Res<Match>,
+    current_tick: Option<Res<CurrentTick>>,
+    telemetry: Option<Res<TelemetryConfig>>,
 ) {
     // Skip if match is not in play
     if match_res.state != sim_components::MatchState::InPlay {
@@ -152,6 +167,13 @@ pub fn foul_detection_system(
                         foulee: e1.to_bits(),
                         foul_type: sim_components::FoulType::DangerousPlay,
                     });
+                    if telemetry.is_some() {
+                        sim_telemetry::emit::foul(
+                            current_tick.as_deref().map_or(0, |t| t.0),
+                            e1.to_bits(),
+                            e2.to_bits(),
+                        );
+                    }
                 }
             }
         }
@@ -159,7 +181,11 @@ pub fn foul_detection_system(
 
 }
 
-pub fn minimum_player_count_system(team_query: Query<&Team>) {
+pub fn minimum_player_count_system(
+    team_query: Query<&Team>,
+    current_tick: Option<Res<CurrentTick>>,
+    telemetry: Option<Res<TelemetryConfig>>,
+) {
     for team in team_query.iter() {
         let player_count = team.players.len();
         if player_count < 7 {
@@ -168,6 +194,13 @@ pub fn minimum_player_count_system(team_query: Query<&Team>) {
                 team.name,
                 player_count
             );
+            if telemetry.is_some() {
+                sim_telemetry::emit::low_player_count(
+                    current_tick.as_deref().map_or(0, |t| t.0),
+                    &team.name,
+                    player_count,
+                );
+            }
         }
     }
 }

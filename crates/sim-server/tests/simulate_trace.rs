@@ -24,11 +24,13 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     assert_eq!(plain.ticks_run, 130);
 
     // 2. Traced run with a full-resolution window.
+    // V1 (verification ledger): run long enough for goals / fouls / offside
+    // to fire so every Perfetto-rendered event type lands at least once.
     let path = std::env::temp_dir().join(format!("sim-server-e2e-{}.json", std::process::id()));
     let traced = run_simulate(&options(TraceOptions {
         out: Some(path.clone()),
         interval_ticks: 60,
-        full_range: Some("100-110".to_string()),
+        full_range: Some("0-600".to_string()),
     }))
     .expect("traced run");
 
@@ -55,16 +57,23 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
         11
     );
     assert!(processes.contains(&"Ball"));
+    assert!(processes.contains(&"Match"));
     assert!(!processes.contains(&"Referee"));
 
-    // FR-003/SC-003: coarse snapshots at 0, 60, 120 plus every tick of 100..=110.
+    // FR-003/SC-003: coarse snapshots plus every tick of the full range.
+    // The simulation reaches FullTime at tick 130 (see `plain.ticks_run`
+    // above) so ball counters stop at tick 129 even though the range is
+    // 0..=600.
     let ball_ticks: BTreeSet<u64> = events
         .iter()
         .filter(|e| e["ph"] == "C" && e["pid"] == 1 && e["name"] == "x")
         .filter_map(|e| e["ts"].as_u64())
         .map(|ts| (ts * 60 + 500_000) / 1_000_000)
         .collect();
-    let expected: BTreeSet<u64> = [0_u64, 60, 120].into_iter().chain(100..=110).collect();
+    let expected: BTreeSet<u64> = [0_u64, 60, 120]
+        .into_iter()
+        .chain(0..=129_u64)
+        .collect();
     assert_eq!(ball_ticks, expected);
 
     // FR-007/008: real decisions with considerations and a marked winner.
@@ -78,6 +87,61 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
             .iter()
             .any(|e| e["ph"] == "i" && e["args"]["curve"].is_string())
     );
+
+    // Step 1 fix — `displayTimeUnit` lets Perfetto render µs as µs.
+    let header = events
+        .iter()
+        .find(|e| e["name"] == "process_labels" && e["ph"] == "M")
+        .expect("process_labels metadata present");
+    assert_eq!(header["args"]["displayTimeUnit"], "us");
+    assert_eq!(header["args"]["seed"], 12345);
+    assert_eq!(header["args"]["interval_ticks"], 60);
+    // Full range is clamped to `total_ticks - 1` by `plan_trace`; the run
+    // was 130 ticks long, so the header records `[0, 129]`.
+    assert_eq!(
+        header["args"]["full_range"],
+        serde_json::json!([0, 129]),
+        "full_range is clamped to the run length"
+    );
+
+    // V1 (verification ledger, automated): every Perfetto-rendered event
+    // type this feature promises lands at least once. If any of these
+    // assertions fail, opening the trace in Perfetto will show that
+    // piece missing.
+
+    // Step 2: goals / fouls / offside / restarts / half_time / kickoff on
+    // the Match process.
+    let match_events = events
+        .iter()
+        .filter(|e| e["ph"] == "i" && e["pid"] == 4)
+        .count();
+    assert!(
+        match_events > 0,
+        "Match process emitted no events — goals/fouls/etc. missing"
+    );
+
+    // Step 3: pass flow events. Not every run has a pass, but the count
+    // of `flow_start` (`s`) and `flow_end` (`f`) must match if any fired.
+    let pass_starts = events
+        .iter()
+        .filter(|e| e["ph"] == "s" && e["name"] == "pass")
+        .count();
+    let pass_ends = events
+        .iter()
+        .filter(|e| e["ph"] == "f" && e["name"] == "pass")
+        .count();
+    assert_eq!(
+        pass_starts, pass_ends,
+        "pass flow start/end count mismatch ({pass_starts} vs {pass_ends})"
+    );
+
+    // All non-metadata events carry `ts`. Anything missing would not
+    // render on Perfetto's timeline.
+    let missing_ts = events
+        .iter()
+        .filter(|e| e["ph"] != "M" && e["ts"].is_null())
+        .count();
+    assert_eq!(missing_ts, 0, "events without ts will be hidden in Perfetto");
 }
 
 #[test]

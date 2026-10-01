@@ -8,6 +8,7 @@ use serde_json::Value;
 use tracing_subscriber::layer::SubscriberExt;
 
 use crate::ChromeTraceLayer;
+use crate::metadata::TraceMetadata;
 
 #[derive(Clone, Default)]
 struct SharedBuf(Arc<Mutex<Vec<u8>>>);
@@ -32,8 +33,22 @@ impl Write for SharedBuf {
 /// Panics if the produced document is not a well-formed JSON array, which is
 /// exactly the property callers use this helper to assert.
 pub fn capture_trace(body: impl FnOnce()) -> Vec<Value> {
+    capture_trace_with(body, None)
+}
+
+/// Like [`capture_trace`] but stamps a `process_labels` metadata event up front
+/// when `metadata` is `Some`; `None` matches the pre-feature behaviour exactly.
+///
+/// # Panics
+///
+/// Panics if the produced document is not a well-formed JSON array (same
+/// invariant as [`capture_trace`]).
+pub fn capture_trace_with(body: impl FnOnce(), metadata: Option<TraceMetadata>) -> Vec<Value> {
     let buf = SharedBuf::default();
-    let (layer, guard) = ChromeTraceLayer::new(buf.clone());
+    let (layer, guard) = metadata.map_or_else(
+        || ChromeTraceLayer::new(buf.clone()),
+        |m| ChromeTraceLayer::with_metadata(buf.clone(), Some(m)),
+    );
     let subscriber = tracing_subscriber::registry().with(layer);
     tracing::subscriber::with_default(subscriber, body);
     guard

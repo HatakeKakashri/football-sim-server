@@ -5,6 +5,7 @@ use std::io::Write;
 use std::time::Instant;
 
 use sim_core::Simulation;
+use sim_telemetry::TraceMetadata;
 
 use crate::telemetry_cli::{TraceOptions, plan_trace};
 
@@ -50,7 +51,13 @@ pub fn run_simulate(
     let trace_plan = plan_trace(&options.trace, total_ticks).map_err(|e| e.to_string())?;
     let trace_guard = trace_plan
         .as_ref()
-        .map(|plan| sim_telemetry::install(&plan.path))
+        .map(|plan| {
+            // Stamp seed + interval + full range into the trace header so
+            // Perfetto reads microseconds as microseconds and a developer
+            // opening the file 6 months from now knows what they ran.
+            let metadata = TraceMetadata::new(seed, plan.config.interval_ticks(), plan.config.full_range());
+            sim_telemetry::install_with_metadata(&plan.path, Some(metadata))
+        })
         .transpose()
         .map_err(|e| e.to_string())?;
 

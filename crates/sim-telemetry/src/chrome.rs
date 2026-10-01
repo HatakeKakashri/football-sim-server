@@ -17,6 +17,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::emit::TRACE_TARGET;
+use crate::metadata::TraceMetadata;
 
 const MICROS_PER_SECOND: u64 = 1_000_000;
 const TICKS_PER_SECOND: u64 = 60;
@@ -39,6 +40,7 @@ struct State<W> {
     seen_threads: BTreeSet<(u64, u64)>,
     last_tick: Option<u64>,
     seq: u64,
+    metadata: Option<TraceMetadata>,
 }
 
 /// Closes the JSON array and flushes when dropped or `finish`ed.
@@ -94,6 +96,18 @@ impl<W: Write + Send + 'static> ChromeTraceLayer<W> {
     /// Create a layer writing to `out`, plus the guard that finalises it.
     #[must_use]
     pub fn new(out: W) -> (Self, TraceGuard) {
+        Self::with_metadata(out, None)
+    }
+
+    /// Create a layer that stamps a `process_labels` metadata event at startup
+    /// carrying the run's `displayTimeUnit`, seed, interval, and full range.
+    ///
+    /// The metadata event fixes the
+    /// [microsecond-vs-millisecond rendering bug](https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU/preview)
+    /// (Perfetto defaults to ms; we write µs) and lets a developer opening a
+    /// trace 6 months from now see what they ran.
+    #[must_use]
+    pub fn with_metadata(out: W, metadata: Option<TraceMetadata>) -> (Self, TraceGuard) {
         let shared = Arc::new(Mutex::new(State {
             out,
             first: true,
@@ -103,6 +117,7 @@ impl<W: Write + Send + 'static> ChromeTraceLayer<W> {
             seen_threads: BTreeSet::new(),
             last_tick: None,
             seq: 0,
+            metadata,
         }));
         (
             Self {
@@ -113,17 +128,53 @@ impl<W: Write + Send + 'static> ChromeTraceLayer<W> {
     }
 }
 
+/// Build the run-header `M` event. Carries `displayTimeUnit` so Perfetto
+/// renders the trace in microseconds (we write µs) rather than its default
+/// of milliseconds. Also carries run identity so a developer opening the
+/// file 6 months from now knows what they ran.
+fn build_metadata_event(metadata: &TraceMetadata) -> Value {
+    let mut args = Map::new();
+    args.insert("displayTimeUnit".into(), Value::String("us".into()));
+    args.insert("seed".into(), metadata.seed().into());
+    args.insert("interval_ticks".into(), metadata.interval_ticks().into());
+    if let Some((start, end)) = metadata.full_range() {
+        args.insert("full_range".into(), json!([start, end]));
+    }
+    json!({
+        "name": "process_labels",
+        "ph": "M",
+        "pid": 0,
+        "tid": 0,
+        "args": Value::Object(args),
+    })
+}
+
 impl<W: Write> State<W> {
     fn put(&mut self, value: &Value) {
         if self.error.is_some() || self.finished {
             return;
         }
+        let header = self.metadata.take().map(|m| build_metadata_event(&m));
         let separator = if self.first { "[\n" } else { ",\n" };
         self.first = false;
-        let result = self
-            .out
-            .write_all(separator.as_bytes())
-            .and_then(|()| serde_json::to_writer(&mut self.out, value).map_err(Into::into));
+        let mut result: std::io::Result<()> = Ok(());
+        if let Some(ref header) = header {
+            // Emit header first (with its own separator), then a comma, then
+            // the value. This keeps Perfetto's "[\n" prefix even when the
+            // metadata event lands before any process_name.
+            result = result
+                .and_then(|()| self.out.write_all(separator.as_bytes()))
+                .and_then(|()| {
+                    serde_json::to_writer(&mut self.out, header).map_err(Into::into)
+                })
+                .and_then(|()| self.out.write_all(b",\n"))
+                .and_then(|()| serde_json::to_writer(&mut self.out, value).map_err(Into::into));
+        } else {
+            result = self
+                .out
+                .write_all(separator.as_bytes())
+                .and_then(|()| serde_json::to_writer(&mut self.out, value).map_err(Into::into));
+        }
         if let Err(err) = result {
             self.error = Some(err);
         }
@@ -180,6 +231,8 @@ struct Fields {
     process: Option<String>,
     thread: Option<String>,
     kind: Option<String>,
+    /// Flow event id (Chrome `args.id`); set by `trace.flow_id`.
+    flow_id: Option<u64>,
     args: Map<String, Value>,
 }
 
@@ -203,6 +256,7 @@ impl Visit for Fields {
             "trace.pid" => self.pid = Some(value),
             "trace.tid" => self.tid = Some(value),
             "tick" => self.tick = Some(value),
+            "trace.flow_id" => self.flow_id = Some(value),
             other => {
                 self.args.insert(other.into(), value.into());
             }
@@ -306,15 +360,33 @@ where
             fields.tid.unwrap_or(scope_at.1),
         );
         let tick = fields.tick.unwrap_or(scope_tick);
-        let ph = if fields.kind.as_deref() == Some("counter") {
-            "C"
-        } else {
-            "i"
+        let ph = match fields.kind.as_deref() {
+            Some("counter") => "C",
+            Some("flow_start") => "s",
+            Some("flow_end") => "f",
+            _ => "i",
         };
         let name = fields.name.take().unwrap_or_default();
+        let cat = if ph == "s" || ph == "f" {
+            Some("pass")
+        } else {
+            None
+        };
+        if let Some(id) = fields.flow_id {
+            fields.args.insert("id".into(), id.into());
+        }
         let mut state = lock(&self.shared);
         state.ensure_names(at, fields.process.as_deref(), fields.thread.as_deref());
-        state.event(ph, &name, at, tick, fields.args);
+        // Flow events have no `name`/`cat` field at the top level by default,
+        // but Chrome's spec uses `name` to group them visually in Perfetto.
+        // We adopt `"pass"` as the canonical name so flows render grouped.
+        state.event(
+            ph,
+            cat.unwrap_or(&name),
+            at,
+            tick,
+            fields.args,
+        );
     }
 
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
@@ -329,7 +401,9 @@ where
 #[cfg(test)]
 mod tests {
     use crate::capture_trace as capture;
+    use crate::capture_trace_with;
     use crate::emit::{self, Track};
+    use crate::metadata::TraceMetadata;
     use serde_json::Value;
 
     const PLAYER: Track<'static> = Track {
@@ -525,5 +599,58 @@ mod tests {
             tracing::info_span!("other").in_scope(|| tracing::warn!("x"));
         });
         assert!(events.is_empty());
+    }
+
+    fn metadata_event(events: &[Value]) -> &Value {
+        events
+            .iter()
+            .find(|e| {
+                e["ph"] == "M"
+                    && e["name"] == "process_labels"
+                    && e["pid"] == 0
+                    && e["tid"] == 0
+            })
+            .expect("process_labels metadata event present")
+    }
+
+    #[test]
+    fn metadata_event_marks_microsecond_time_unit_for_perfetto() {
+        // RED: this fails because no metadata event is emitted today, so
+        // Perfetto reads our microsecond `ts` values as milliseconds and
+        // renders the timeline 1000x too slow.
+        let events = capture_trace_with(
+            || {
+                emit::counter(PLAYER, 0, "x", 1.0);
+            },
+            Some(TraceMetadata::new(42, 600, None)),
+        );
+        let m = metadata_event(&events);
+        assert_eq!(m["args"]["displayTimeUnit"], "us");
+        assert_eq!(m["args"]["seed"], 42);
+        assert_eq!(m["args"]["interval_ticks"], 600);
+    }
+
+    #[test]
+    fn metadata_event_carries_full_range_when_configured() {
+        let events = capture_trace_with(
+            || {
+                emit::counter(PLAYER, 0, "x", 1.0);
+            },
+            Some(TraceMetadata::new(7, 60, Some((100, 160)))),
+        );
+        let m = metadata_event(&events);
+        assert_eq!(m["args"]["full_range"], serde_json::json!([100, 160]));
+    }
+
+    #[test]
+    fn no_metadata_event_is_emitted_when_metadata_is_absent() {
+        // The default `ChromeTraceLayer::new` path must not write a metadata
+        // event: tests and library callers without metadata should get the
+        // same minimal output they got before this feature landed.
+        let events = capture(|| emit::counter(PLAYER, 0, "x", 1.0));
+        assert!(
+            events.iter().all(|e| e["name"] != "process_labels"),
+            "no process_labels event should be present without metadata"
+        );
     }
 }

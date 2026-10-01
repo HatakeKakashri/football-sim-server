@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 sim-math = { path = "../sim-math" }
 sim-components = { path = "../sim-components" }
+sim-telemetry = { path = "../sim-telemetry" }
 bevy_ecs.workspace = true
 tracing.workspace = true
 

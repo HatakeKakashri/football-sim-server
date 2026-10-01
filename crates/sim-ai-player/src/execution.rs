@@ -1,11 +1,19 @@
 //! Execution: turns the chosen `Intent` into actual velocity / ball motion.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use bevy_ecs::prelude::*;
 use sim_components::{
-    ActionIntent, Ball, Intent, PerceptionSnapshot, Player, Stamina, Skill, Velocity,
+    ActionIntent, Ball, Intent, MatchClock, PerceptionSnapshot, Player, Stamina, Skill, Velocity,
 };
 use sim_math::Vec2;
 use sim_physics::SimRng;
+use sim_telemetry::TelemetryConfig;
+
+/// Monotonic counter for `pass()` flow ids. Two passes share the same
+/// process and could otherwise collide on `(tick, from_pid)`; the atomic
+/// gives every pass a unique id regardless of order.
+static NEXT_PASS_FLOW_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Speed imparted to the ball when a possessing player shoots or kicks it.
 ///
@@ -159,6 +167,8 @@ pub fn player_action_execution_system(
 pub fn kick_execution_system(
     player_query: Query<(Entity, &Player, &PerceptionSnapshot, &Velocity)>,
     mut ball: ResMut<Ball>,
+    match_clock: Option<Res<MatchClock>>,
+    telemetry: Option<Res<TelemetryConfig>>,
 ) {
     let Some(possessor) = ball.possessor else {
         return;
@@ -196,6 +206,173 @@ pub fn kick_execution_system(
     if kick_dir.length() > 0.01 {
         ball.kick_velocity = Some(kick_dir * kick_speed);
         ball.possessor = None;
+        // Emit a `pass` flow event when telemetry is on and this was a
+        // pass. Shots / tackles don't carry identity of a "receiver", so
+        // we restrict to `PassTo`. `match_clock` is taken as `Option` so
+        // tests can omit it.
+        if let (true, Some(receiver_entity)) = (
+            telemetry.is_some() && matches!(intent, Intent::Action(ActionIntent::PassTo)),
+            perception.nearby_teammates.first().map(|t| t.entity),
+        ) {
+            let tick = match_clock.as_deref().map_or(0, |c| c.elapsed_ticks);
+            let flow_id = NEXT_PASS_FLOW_ID.fetch_add(1, Ordering::Relaxed);
+            sim_telemetry::emit::pass(
+                flow_id,
+                sim_telemetry::emit::player_pid(possessor.index()),
+                sim_telemetry::emit::TID_DECISION,
+                sim_telemetry::emit::player_pid(receiver_entity.index()),
+                sim_telemetry::emit::TID_DECISION,
+                tick,
+                true,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sim_components::{
+        Ball, BallMarker, MatchClock, NearbyEntity, PerceptionSnapshot, PitchBounds, Player, Position,
+        Velocity,
+    };
+    use sim_telemetry::{TelemetryConfig, capture_trace};
+    use smallvec::smallvec;
+
+    type EventVec = Vec<serde_json::Value>;
+
+    fn pos(x: f32, y: f32) -> Vec2 {
+        Vec2::new(x, y)
+    }
+
+    #[test]
+    fn kick_execution_emits_a_pass_flow_event_when_telemetry_is_on() {
+        // Two players on the same team, 15 m apart — within `nearby_teammates`
+        // range (20 m). The kicker holds the ball and has `PassTo` as its
+        // committed intent. We expect one `flow_start` on the kicker's
+        // process and one `flow_end` on the receiver's, sharing an id.
+        let mut world = World::new();
+
+        let kicker = world
+            .spawn((
+                Player {
+                    team_id: sim_components::TeamId(0),
+                    intent: Some(Intent::Action(ActionIntent::PassTo)),
+                },
+                Position(pos(50.0, 34.0)),
+                Velocity(pos(0.0, 0.0)),
+                PerceptionSnapshot {
+                    self_position: pos(50.0, 34.0),
+                    nearby_teammates: smallvec![NearbyEntity {
+                        entity: Entity::from_raw(42),
+                        distance: 15.0,
+                        relative_position: pos(15.0, 0.0),
+                    }],
+                    nearby_opponents: smallvec![],
+                    ball_position: pos(52.5, 34.0),
+                    ball_state: sim_components::BallState::Possessed,
+                    goal_position: pos(105.0, 34.0),
+                    pitch_bounds: PitchBounds {
+                        distance_to_left: 50.0,
+                        distance_to_right: 55.0,
+                        distance_to_top: 34.0,
+                        distance_to_bottom: 34.0,
+                    },
+                },
+            ))
+            .id();
+        // Spawn a teammate entity for completeness (the kicker only reads
+        // its perception snapshot, so this is just a placeholder).
+        world.spawn(BallMarker);
+
+        world.insert_resource(Ball {
+            state: sim_components::BallState::Possessed,
+            possessor: Some(kicker),
+            last_touched_by: None,
+            kick_velocity: None,
+            spin: 0.0,
+        });
+        world.insert_resource(MatchClock {
+            elapsed_ticks: 100,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
+        });
+        world.insert_resource(TelemetryConfig::new(60, None).expect("valid"));
+
+        let events: EventVec = capture_trace(|| {
+            let mut schedule = Schedule::default();
+            schedule.add_systems(kick_execution_system);
+            schedule.run(&mut world);
+        });
+
+        let starts: Vec<_> = events
+            .iter()
+            .filter(|e| e["ph"] == "s" && e["name"] == "pass")
+            .collect();
+        let ends: Vec<_> = events
+            .iter()
+            .filter(|e| e["ph"] == "f" && e["name"] == "pass")
+            .collect();
+        assert_eq!(starts.len(), 1, "one flow_start for the pass");
+        assert_eq!(ends.len(), 1, "one flow_end for the pass");
+        assert_eq!(starts[0]["args"]["id"], ends[0]["args"]["id"]);
+        assert_eq!(starts[0]["args"]["completed"], true);
+    }
+
+    #[test]
+    fn kick_execution_emits_no_flow_when_telemetry_is_off() {
+        // Same setup but with telemetry disabled: no flow events.
+        let mut world = World::new();
+
+        let kicker = world
+            .spawn((
+                Player {
+                    team_id: sim_components::TeamId(0),
+                    intent: Some(Intent::Action(ActionIntent::PassTo)),
+                },
+                Position(pos(50.0, 34.0)),
+                Velocity(pos(0.0, 0.0)),
+                PerceptionSnapshot {
+                    self_position: pos(50.0, 34.0),
+                    nearby_teammates: smallvec![NearbyEntity {
+                        entity: Entity::from_raw(42),
+                        distance: 15.0,
+                        relative_position: pos(15.0, 0.0),
+                    }],
+                    nearby_opponents: smallvec![],
+                    ball_position: pos(52.5, 34.0),
+                    ball_state: sim_components::BallState::Possessed,
+                    goal_position: pos(105.0, 34.0),
+                    pitch_bounds: PitchBounds {
+                        distance_to_left: 50.0,
+                        distance_to_right: 55.0,
+                        distance_to_top: 34.0,
+                        distance_to_bottom: 34.0,
+                    },
+                },
+            ))
+            .id();
+        world.spawn(BallMarker);
+
+        world.insert_resource(Ball {
+            state: sim_components::BallState::Possessed,
+            possessor: Some(kicker),
+            last_touched_by: None,
+            kick_velocity: None,
+            spin: 0.0,
+        });
+        // No MatchClock, no TelemetryConfig: telemetry fully off.
+
+        let events: EventVec = capture_trace(|| {
+            let mut schedule = Schedule::default();
+            schedule.add_systems(kick_execution_system);
+            schedule.run(&mut world);
+        });
+        assert!(
+            events.is_empty(),
+            "no telemetry → no trace events, got {events:?}"
+        );
     }
 }
 

@@ -7,8 +7,8 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallMarker, BallState, LastTouch, Match, Player, Position, RuleEvent, TeamId,
-    TeamIdComponent, Velocity,
+    Ball, BallMarker, BallState, LastTouch, Match, PendingBallTouches, Player, Position, RuleEvent,
+    TeamId, TeamIdComponent, Velocity,
 };
 use sim_math::Vec2;
 use sim_telemetry::TelemetryConfig;
@@ -157,7 +157,7 @@ pub fn goal_detection_system(
 /// goal it is the team that conceded the goal.
 #[allow(
     clippy::too_many_arguments,
-    reason = "Bevy system param set: 8 standard params is the project norm for restart-time systems (construct.rs:37 establishes the ceiling)"
+    reason = "Bevy system param set: 9 standard params is the project norm for restart-time systems (construct.rs:37 establishes the ceiling)"
 )]
 pub fn restart_system(
     mut commands: Commands,
@@ -167,6 +167,7 @@ pub fn restart_system(
     current_tick: Option<Res<CurrentTick>>,
     pending_restart: Option<Res<PendingRestart>>,
     mut ball: ResMut<Ball>,
+    mut pending_touches: ResMut<PendingBallTouches>,
     telemetry: Option<Res<TelemetryConfig>>,
 ) {
     // Handle KickoffRestart from goal (delayed by 60 ticks)
@@ -199,13 +200,14 @@ pub fn restart_system(
                 }
             });
             let taker = first_player_on_team(&player_query, conceded_team);
-            ball.last_touch = Some(sim_components::LastTouch {
+            // `first_player_on_team` returns `Entity::PLACEHOLDER`
+            // when the team has no players (sparse test worlds);
+            // record the touch with no player identity rather than
+            // a placeholder.
+            let player = (taker != Entity::PLACEHOLDER).then_some(taker);
+            pending_touches.0.push(sim_components::LastTouch {
                 team: conceded_team,
-                // `first_player_on_team` may return
-                // `Entity::PLACEHOLDER` in sparse test worlds; keep
-                // `Some` for now — M5/M7 convert to `None` when the
-                // buffer-push path lands.
-                player: Some(taker),
+                player,
                 kind: sim_components::TouchKind::Restart,
             });
             if telemetry.is_some() {
@@ -244,22 +246,36 @@ pub fn restart_system(
             // wiring gap that `out_of_bounds_system` asserts against
             // in debug builds. In that case the taker team is
             // unknown: the record falls back to `TeamId(0)` with
-            // `player: None` rather than inventing a taker.
-            let (taker_team, taker_player) =
-                last_touch.as_ref().map_or((TeamId(0), None), |last| {
+            // `player: None` rather than inventing a taker, and the
+            // desync is flagged via `tracing::error!` in release
+            // builds too.
+            let (taker_team, taker) = match last_touch.as_ref() {
+                Some(last) => {
                     // Opposite team: 0 ↔ 1.
                     let team = if last.team == TeamId(0) {
                         TeamId(1)
                     } else {
                         TeamId(0)
                     };
-                    // May be `Entity::PLACEHOLDER` in sparse test
-                    // worlds; keep `Some` — M5/M7 convert to `None`.
-                    (team, Some(first_player_on_team(&player_query, team)))
-                });
-            ball.last_touch = Some(sim_components::LastTouch {
+                    (team, first_player_on_team(&player_query, team))
+                }
+                None => {
+                    tracing::error!(
+                        tick = current_tick.as_deref().map_or(0, |t| t.0),
+                        "restart_system OOB arm: last_touch is None (touch \
+                         entity desync); defaulting to home"
+                    );
+                    (TeamId(0), Entity::PLACEHOLDER)
+                }
+            };
+            // `first_player_on_team` returns `Entity::PLACEHOLDER`
+            // when the team has no players (sparse test worlds);
+            // record the touch with no player identity rather than
+            // a placeholder.
+            let player = (taker != Entity::PLACEHOLDER).then_some(taker);
+            pending_touches.0.push(sim_components::LastTouch {
                 team: taker_team,
-                player: taker_player,
+                player,
                 kind: sim_components::TouchKind::Restart,
             });
             let kind = match oob_type {

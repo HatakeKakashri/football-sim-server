@@ -7,7 +7,8 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallMarker, BallState, LastTouch, Player, Position, Skill, TeamId, TouchKind,
+    Ball, BallMarker, BallState, LastTouch, PendingBallTouches, Player, Position, Skill, TeamId,
+    TouchKind,
 };
 
 use crate::constants::SKILL_TOLERANCE;
@@ -27,15 +28,18 @@ use crate::constants::SKILL_TOLERANCE;
 ///   and `ball.state = BallState::Possessed`.
 /// - When no player is within range: set `ball.possessor = None` and
 ///   `ball.state = BallState::Free`.
-/// - On possession change, register `ball.last_touch = Some(LastTouch
-///   { team, player, kind: Play })` so Law 11 (offside) sees the new
-///   possessor as the most recent "play" touch. Without this,
-///   offside would continue to be evaluated for the previous
-///   kicker's team (Law 11 says it resets on the next play).
+/// - On possession change, register a `LastTouch { team, player, kind:
+///   Play }` on `PendingBallTouches` (applied to `Ball.last_touch` by
+///   the consumer `apply_ball_touched_system` at the start of the
+///   Rules set) so Law 11 (offside) sees the new possessor as the most
+///   recent "play" touch. Without this, offside would continue to be
+///   evaluated for the previous kicker's team (Law 11 says it resets on
+///   the next play).
 pub fn possession_resolution_system(
     ball_query: Query<&Position, With<BallMarker>>,
     player_query: Query<(Entity, &Player, &Position, &Skill), With<Player>>,
     mut ball: ResMut<Ball>,
+    mut pending: ResMut<PendingBallTouches>,
 ) {
     let Ok(ball_pos) = ball_query.get_single() else {
         return;
@@ -77,13 +81,17 @@ pub fn possession_resolution_system(
         // this moment. The toucher's team (from `Player.team_id`,
         // carried through the selection above) is denormalised into
         // the record so it resolves even if the entity despawns.
-        ball.possessor = Some(entity);
-        ball.state = BallState::Possessed;
-        ball.last_touch = Some(LastTouch {
+        //
+        // Push to `PendingBallTouches`; the consumer
+        // `apply_ball_touched_system` applies it to `Ball.last_touch`
+        // at the start of the Rules set.
+        pending.0.push(LastTouch {
             team,
             player: Some(entity),
             kind: TouchKind::Play,
         });
+        ball.possessor = Some(entity);
+        ball.state = BallState::Possessed;
     } else {
         ball.possessor = None;
         ball.state = BallState::Free;

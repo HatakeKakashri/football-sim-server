@@ -36,7 +36,7 @@ use crate::constants::{GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH, PITCH_WIDTH};
 pub fn out_of_bounds_system(
     mut commands: Commands,
     ball_query: Query<(Entity, &Position, &Velocity), With<BallMarker>>,
-    _current_tick: Res<crate::CurrentTick>,
+    current_tick: Res<crate::CurrentTick>,
     mut ball: ResMut<Ball>,
 ) {
     // Tolerance for "at boundary" detection (physics clamps to boundary)
@@ -103,23 +103,25 @@ pub fn out_of_bounds_system(
     // it forward in the event payload so downstream restart
     // consumers can resolve the taker team.
     //
-    // Capture the full last-touch record into the event payload before
-    // clearing `last_touch`. The kickoff placement in `lifecycle` and
-    // the OOB restart placement in `restart_system` immediately
-    // re-set `last_touch` with `kind = Restart`, so the `None` window
-    // is short (one tick) and asserted-against in debug builds here.
+    // Capture the full last-touch record into the event payload.
+    // `Ball.last_touch` itself is preserved (M8): the record stays on
+    // the ball for replay data and is overwritten by the next writer
+    // (kick / possession acquisition / restart placement).
     let last_touch = ball.last_touch;
     debug_assert!(
         ball.last_touch.is_some(),
-        "out_of_bounds_system fired with no `last_touch` — the \
-         touch-registration wiring has a gap between kickoff \
-         placement and the first kick/restart"
+        "out_of_bounds_system fired with no `last_touch` — \
+         touch-registration wiring gap"
     );
-
-    // Clear the last-touch slot; restart_system re-registers it with
-    // `kind = Restart` when it places the ball. (M8 removes this
-    // clear so the record stays on `Ball` for replay data.)
-    ball.last_touch = None;
+    if ball.last_touch.is_none() {
+        tracing::error!(
+            tick = current_tick.0,
+            ball_pos = ?position.0,
+            "out_of_bounds_system fired with no `last_touch` (desync); \
+             skipping OOB event"
+        );
+        return;
+    }
 
     // Apply state changes
     ball.state = BallState::Dead;

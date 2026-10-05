@@ -1323,26 +1323,30 @@ git commit -m "test(touch): update LastTouch fixtures, insert resource, chain co
 **Files:**
 - Modify: `crates/sim-replay/src/lib.rs:256-310` (replay determinism tests)
 
-- [ ] **Step 1: Run a full match to capture the new hash**
+- [ ] **Step 1: Run a full match twice to verify determinism**
+
+The CLI's `tracing::info!("final_state_hash: ...")` line is silent because `main.rs` doesn't initialize a `tracing_subscriber`. Use JSONL output and compare every-tick `state_hash` instead.
 
 ```bash
 cargo build --release
-cargo run --release -p sim-server -- simulate --full-match --seed 12345 2>&1 | grep final_state_hash
+cargo run --release -p sim-server -- simulate --full-match --seed 12345 -o /tmp/run1.jsonl
+cargo run --release -p sim-server -- simulate --full-match --seed 12345 -o /tmp/run2.jsonl
+md5sum /tmp/run1.jsonl /tmp/run2.jsonl
 ```
 
-Expected: prints `final_state_hash: <u64>`. Copy the value.
+Expected: identical hashes. If not, determinism is broken — investigate before proceeding (likely an `Ordering` or `HashMap` issue introduced by M1-M10).
 
-- [ ] **Step 2: Run the same command again and verify byte-identical**
+- [ ] **Step 2: Capture the final tick's `state_hash` for the golden**
 
 ```bash
-cargo run --release -p sim-server -- simulate --full-match --seed 12345 2>&1 | grep final_state_hash
+tail -1 /tmp/run1.jsonl | python3 -c "import sys, json; print(json.loads(sys.stdin.readline())['state_hash'])"
 ```
 
-Expected: same hash. If not, determinism is broken — investigate before proceeding (likely an `Ordering` or `HashMap` issue introduced by M1-M10).
+Expected: prints one `u64`. Copy the value.
 
 - [ ] **Step 3: Update the replay determinism test's expected hash**
 
-In `crates/sim-replay/src/lib.rs`, find the `test_replay_determinism` test (around line 256). Replace the hardcoded expected value with the new hash from Step 1. Apply the same update to `test_divergence_detection` if it has a hardcoded hash.
+In `crates/sim-replay/src/lib.rs`, find the `test_replay_determinism` test (around line 256). Replace the hardcoded expected value with the new hash from Step 2. Apply the same update to `test_divergence_detection` if it has a hardcoded hash.
 
 - [ ] **Step 4: Verify**
 

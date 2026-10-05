@@ -57,8 +57,35 @@ pub fn goal_detection_system(
     // BUG FIX: Do NOT score if ball is already Dead
     if ball.state != BallState::Dead {
         let in_goal_y = ball_pos.0.y >= GOAL_Y_MIN && ball_pos.0.y <= GOAL_Y_MAX;
+        // A goal requires the ball to cross the goal line inside the
+        // goal mouth. Gate the pre-touch guard on that condition so a
+        // ball merely sitting in the goal-mouth y-band (e.g. the
+        // kickoff placement at the center spot, y = 34, where
+        // `last_touch` is legitimately `None` before the first
+        // lifecycle placement) does not trip it.
+        let crosses_goal_line = in_goal_y && (ball_pos.0.x <= 0.0 || ball_pos.0.x >= PITCH_LENGTH);
 
-        if in_goal_y {
+        if crosses_goal_line {
+            // Pre-touch guard (spec §E): a goal is only detected after
+            // a touch has been registered — kickoff placement always
+            // writes one before play begins, and OOB/goal preserve the
+            // record (M8). `None` here means a wiring gap; bail
+            // without scoring rather than emit a goal with no touch
+            // attribution (debug builds assert).
+            debug_assert!(
+                ball.last_touch.is_some(),
+                "goal_detection_system fired with no `last_touch` — \
+                 touch-registration wiring gap"
+            );
+            if ball.last_touch.is_none() {
+                tracing::error!(
+                    tick = current_tick.as_deref().map_or(0, |t| t.0),
+                    ball_pos = ?ball_pos.0,
+                    "goal_detection_system fired with no `last_touch` (desync); \
+                     skipping goal"
+                );
+                return;
+            }
             // Away goal: ball at x <= 0 (left goal)
             if ball_pos.0.x <= 0.0 {
                 match_res.score.1 += 1;
@@ -67,8 +94,8 @@ pub fn goal_detection_system(
                     ball_entity,
                     scorer_team: TeamId(1),
                     final_score,
-                    // Capture the full record before the second pass
-                    // clears `Ball.last_touch` (M8 stops clearing it).
+                    // Capture the full record into the event payload
+                    // (`Ball.last_touch` itself is preserved; M8).
                     last_touch: ball.last_touch,
                 });
                 tracing::info!(
@@ -86,16 +113,16 @@ pub fn goal_detection_system(
                 }
             }
             // Home goal: ball at x >= PITCH_LENGTH (right goal)
-            else if ball_pos.0.x >= PITCH_LENGTH {
+            else {
                 match_res.score.0 += 1;
                 let final_score = match_res.score;
                 goal_events.push(GoalEvent {
                     ball_entity,
                     scorer_team: TeamId(0),
                     final_score,
-                    // Capture the full record before the second pass
-                    // clears `Ball.last_touch` — same policy as the
-                    // away arm.
+                    // Capture the full record into the event payload
+                    // (`Ball.last_touch` itself is preserved; same
+                    // policy as the away arm).
                     last_touch: ball.last_touch,
                 });
                 tracing::info!(
@@ -118,11 +145,9 @@ pub fn goal_detection_system(
     // Second pass: apply state changes and emit events
     for event in goal_events {
         ball.state = BallState::Dead;
-        // Clear the last touch — the delayed kickoff will re-register
-        // it as `kind = Restart` when the ball is placed at the
-        // center spot. (M8 removes this clear so the record stays on
-        // `Ball` for replay data.)
-        ball.last_touch = None;
+        // `Ball.last_touch` is preserved (M8): the record stays on
+        // the ball for replay data and is overwritten by the next
+        // writer (kick / possession acquisition / restart placement).
         commands.entity(event.ball_entity).insert(RuleEvent::Goal {
             scorer_team: event.scorer_team,
             score: event.final_score,
@@ -150,11 +175,13 @@ pub fn goal_detection_system(
 /// Reads `RuleEvent` directly from entity to determine restart type.
 /// `PendingRestart` resource tracks the delayed kickoff restart timing.
 ///
-/// Registers the restart as a `TouchKind::Restart` touch on the ball
-/// (Law 9 / Law 10 restart placement; `offside_detection_system` ignores
-/// it). The `restart_taker` is resolved from the event payload — for
-/// OOB it is the team opposite of the last toucher, for kickoff-after-
-/// goal it is the team that conceded the goal.
+/// Registers the restart as a `TouchKind::Restart` touch (pushed to
+/// `PendingBallTouches`, applied to `Ball.last_touch` by the consumer
+/// at the start of the next Rules set; Law 9 / Law 10 restart
+/// placement, `offside_detection_system` ignores it). The
+/// `restart_taker` is resolved from the event payload — for OOB it is
+/// the team opposite of the last toucher, for kickoff-after-goal it is
+/// the team that conceded the goal.
 #[allow(
     clippy::too_many_arguments,
     reason = "Bevy system param set: 9 standard params is the project norm for restart-time systems (construct.rs:37 establishes the ceiling)"
@@ -249,8 +276,16 @@ pub fn restart_system(
             // `player: None` rather than inventing a taker, and the
             // desync is flagged via `tracing::error!` in release
             // builds too.
-            let (taker_team, taker) = match last_touch.as_ref() {
-                Some(last) => {
+            let (taker_team, taker) = last_touch.as_ref().map_or_else(
+                || {
+                    tracing::error!(
+                        tick = current_tick.as_deref().map_or(0, |t| t.0),
+                        "restart_system OOB arm: last_touch is None (touch \
+                         entity desync); defaulting to home"
+                    );
+                    (TeamId(0), Entity::PLACEHOLDER)
+                },
+                |last| {
                     // Opposite team: 0 ↔ 1.
                     let team = if last.team == TeamId(0) {
                         TeamId(1)
@@ -258,16 +293,8 @@ pub fn restart_system(
                         TeamId(0)
                     };
                     (team, first_player_on_team(&player_query, team))
-                }
-                None => {
-                    tracing::error!(
-                        tick = current_tick.as_deref().map_or(0, |t| t.0),
-                        "restart_system OOB arm: last_touch is None (touch \
-                         entity desync); defaulting to home"
-                    );
-                    (TeamId(0), Entity::PLACEHOLDER)
-                }
-            };
+                },
+            );
             // `first_player_on_team` returns `Entity::PLACEHOLDER`
             // when the team has no players (sparse test worlds);
             // record the touch with no player identity rather than

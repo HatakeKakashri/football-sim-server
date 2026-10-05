@@ -131,6 +131,11 @@ pub fn goal_detection_system(
             event: Some(RuleEvent::KickoffRestart),
             restart_tick: current_tick.as_deref().map_or(0, |t| t.0)
                 + crate::constants::KICKOFF_RESTART_TICKS,
+            // Law 8 / Law 10: the post-goal kickoff is taken by the
+            // team that *conceded* the goal. The conceded team is
+            // the opposite of `scorer_team`. Restart consumers read
+            // this field to pick the kickoff taker correctly.
+            scorer_team: Some(event.scorer_team),
         });
     }
 }
@@ -179,11 +184,20 @@ pub fn restart_system(
             // into the restart would inject a phantom impulse on
             // the next tick's Physics set.
             ball.kick_velocity = None;
-            // The post-goal kickoff goes to the team that conceded.
-            // Without a half-time swap landing, home always takes the
-            // kickoff (canonical default). A future swap ticket will
-            // thread the conceded-team info through `PendingRestart`.
-            let taker = first_player_on_team(&player_query, TeamId(0));
+            // Law 8 / Law 10: the kickoff is taken by the team that
+            // *conceded* the goal — the opposite of `scorer_team`.
+            // Goal detection writes `scorer_team` onto
+            // `PendingRestart`; if it's missing (defensive), fall
+            // back to home (the canonical default until half-time
+            // swap lands).
+            let conceded_team = pr.scorer_team.map_or(TeamId(0), |scorer| {
+                if scorer == TeamId(0) {
+                    TeamId(1)
+                } else {
+                    TeamId(0)
+                }
+            });
+            let taker = first_player_on_team(&player_query, conceded_team);
             ball.last_touch = Some(sim_components::LastTouch {
                 entity: taker,
                 kind: sim_components::TouchKind::Restart,

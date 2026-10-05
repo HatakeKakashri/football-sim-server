@@ -231,6 +231,9 @@ fn test_kickoff_restart_registers_restart_touch() {
     world.insert_resource(PendingRestart {
         event: Some(RuleEvent::KickoffRestart),
         restart_tick: 60,
+        // Home scored the goal → away conceded → kickoff taker
+        // must be away (team 1).
+        scorer_team: Some(sim_components::TeamId(0)),
     });
 
     // Ball entity after the goal — Dead state, position is
@@ -243,15 +246,16 @@ fn test_kickoff_restart_registers_restart_touch() {
         .insert(Position(Vec2::new(105.5, 34.0)));
     world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
-    // A home-team player — the kickoff-taker entity.
+    // An away-team player — the conceded-team kickoff taker
+    // (Law 10: team that conceded takes the kickoff).
     let kicker = world.spawn(()).id();
     world.entity_mut(kicker).insert(Player {
-        team_id: sim_components::TeamId(0),
+        team_id: sim_components::TeamId(1),
         intent: None,
     });
     world
         .entity_mut(kicker)
-        .insert(sim_components::TeamIdComponent(sim_components::TeamId(0)));
+        .insert(sim_components::TeamIdComponent(sim_components::TeamId(1)));
 
     let mut schedule = Schedule::default();
     schedule.add_systems(restart_system);
@@ -266,11 +270,55 @@ fn test_kickoff_restart_registers_restart_touch() {
             entity: kicker,
             kind: TouchKind::Restart,
         }),
-        "delayed kickoff restart must register the kickoff taker as a \
-         Restart touch"
+        "delayed kickoff restart must register the conceded-team \
+         kickoff taker (Law 10), not always the home team"
     );
     assert!(
         world.get_resource::<PendingRestart>().is_none(),
         "PendingRestart is cleared after consumption"
+    );
+}
+
+/// Verify that the goal scorer feeds into the post-goal kickoff:
+/// home scores → away concedes → kickoff taker must come from
+/// team 1.
+#[test]
+fn test_goal_scorer_threads_into_post_goal_kickoff_taker() {
+    let mut world = World::new();
+
+    world.insert_resource(sim_components::Match {
+        id: 1,
+        home_team: Entity::PLACEHOLDER,
+        away_team: Entity::PLACEHOLDER,
+        score: (0, 0),
+        state: sim_components::MatchState::InPlay,
+        seed: 12345,
+    });
+
+    // Ball in the home goal area — score for home.
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world.insert_resource(ball_fixture(Vec2::new(105.5, 34.0), BallState::Free));
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(Vec2::new(105.5, 34.0)));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+
+    // No toucher player required for the scorer-team assertion
+    // (ball-position drives scorer_team, not last_touch).
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(goal_detection_system);
+    world.insert_resource(CurrentTick(50));
+    schedule.run(&mut world);
+
+    // Now `PendingRestart` carries scorer_team = home (0).
+    let pending = world
+        .get_resource::<PendingRestart>()
+        .expect("PendingRestart must be set after a goal");
+    assert_eq!(
+        pending.scorer_team,
+        Some(sim_components::TeamId(0)),
+        "goal must thread scorer_team into PendingRestart"
     );
 }

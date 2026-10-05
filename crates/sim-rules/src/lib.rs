@@ -55,10 +55,19 @@ pub(crate) mod constants {
 pub struct CurrentTick(pub u64);
 
 /// Tracks pending restart state: (event, `tick_when_restart`).
+///
+/// `scorer_team` carries the team that scored the goal that triggered
+/// a `KickoffRestart` (Law 8 / Law 10: the kickoff is taken by the
+/// team that *conceded* the goal). `restart_system` resolves the
+/// conceded team as the opposite of `scorer_team`. Only set for
+/// `KickoffRestart` events; `None` for OOB-driven restarts (which
+/// derive the taker team from `RuleEvent::OutOfBounds.last_touch_team`
+/// instead).
 #[derive(Resource, Debug, Clone, Default)]
 pub struct PendingRestart {
     pub event: Option<RuleEvent>,
     pub restart_tick: u64,
+    pub scorer_team: Option<sim_components::TeamId>,
 }
 
 /// Attack polarity for a given team. Home (team 0) attacks toward +x

@@ -81,6 +81,7 @@ fn test_kickoff_restart_places_ball_at_center() {
     world.insert_resource(PendingRestart {
         event: Some(RuleEvent::KickoffRestart),
         restart_tick: 60, // Restart at tick 60
+        scorer_team: None, // Test does not exercise scorer → kickoff taker
     });
 
     let mut schedule = Schedule::default();

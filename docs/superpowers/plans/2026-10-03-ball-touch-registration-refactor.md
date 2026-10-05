@@ -14,7 +14,7 @@
 
 - Workspace `unsafe_code = "forbid"`. No `unsafe` blocks ever.
 - `cargo clippy --workspace --all-targets -- -D warnings` must remain clean at every commit.
-- `cargo test --workspace` must pass at every commit (baseline 72 passing).
+- `cargo test --workspace` must pass at every commit (baseline 179 passing, 1 ignored).
 - Bevy system params (`Query`, `Res`, …) taken **by value**, not reference (workspace allow on `needless_pass_by_value`).
 - No `unwrap` in new code — use `expect("invariant: …")` with a clear message.
 - Every `#[allow(...)]` / `#[expect(...)]` must carry `reason = "…"`.
@@ -298,7 +298,7 @@ Expected: BUILD SUCCESS.
 cargo test --workspace
 ```
 
-Expected: 72 passed (some tests may need their `LastTouch { entity: ..., kind: ... }` literal updated to the new shape — fix any failures by re-reading the test fixture).
+Expected: 179 passed (some tests may need their `LastTouch { entity: ..., kind: ... }` literal updated to the new shape — fix any failures by re-reading the test fixture).
 
 - [ ] **Step 7: Commit**
 
@@ -356,7 +356,7 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-Expected: BUILD SUCCESS, 72 passed.
+Expected: BUILD SUCCESS, 179 passed.
 
 - [ ] **Step 4: Commit**
 
@@ -451,7 +451,7 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-Expected: BUILD SUCCESS, 72 passed (with test updates applied).
+Expected: BUILD SUCCESS, 179 passed (with test updates applied).
 
 - [ ] **Step 7: Commit**
 
@@ -647,7 +647,7 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-Expected: BUILD SUCCESS, 72 passed.
+Expected: BUILD SUCCESS, 179 passed.
 
 - [ ] **Step 4: Commit**
 
@@ -1174,7 +1174,7 @@ git commit -m "feat(hash): state hash mixes last_deliberate_play"
 
 **Interfaces:**
 - Consumes: every M1-M10 change
-- Produces: 72 tests pass + replay golden hashes updated
+- Produces: 179 tests pass + replay golden hashes updated
 
 ### Task 11.1: Update every `Ball` constructor in test fixtures
 
@@ -1367,7 +1367,7 @@ git commit -m "test(replay): update golden hashes for last_deliberate_play mix"
 cargo test --workspace
 ```
 
-Expected: 72 + (new tests from M12) tests pass, no failures.
+Expected: 179 + (new tests from M12) tests pass, no failures.
 
 - [ ] **Step 2: Run clippy**
 
@@ -1614,7 +1614,7 @@ git commit -m "test(rules): offside flag/reset on teammate pass + opponent kick"
 cargo test --workspace
 ```
 
-Expected: 72 + 14 + 3 (goals) + 2 (referee) = 91 tests pass.
+Expected: 179 + 14 + 3 (goals) + 2 (referee) = 198 tests pass.
 
 - [ ] **Step 2: Run clippy**
 

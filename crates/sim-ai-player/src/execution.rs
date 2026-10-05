@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    ActionIntent, Ball, Intent, MatchClock, PerceptionSnapshot, Player, Skill, Stamina, Velocity,
+    ActionIntent, Ball, Intent, LastTouch, MatchClock, PendingBallTouches, PerceptionSnapshot,
+    Player, Skill, Stamina, TouchKind, Velocity,
 };
 use sim_math::Vec2;
 use sim_physics::SimRng;
@@ -167,6 +168,7 @@ pub fn player_action_execution_system(
 pub fn kick_execution_system(
     player_query: Query<(Entity, &Player, &PerceptionSnapshot, &Velocity)>,
     mut ball: ResMut<Ball>,
+    mut pending: ResMut<PendingBallTouches>,
     match_clock: Option<Res<MatchClock>>,
     telemetry: Option<Res<TelemetryConfig>>,
 ) {
@@ -206,14 +208,16 @@ pub fn kick_execution_system(
     if kick_dir.length() > 0.01 {
         ball.kick_velocity = Some(kick_dir * kick_speed);
         // Register the kick as an explicit `Play` touch (Law 11 input
-        // for offside judgement). The same entity is recorded as both
-        // the kicker (during this tick) and the last-toucher (after
-        // this tick), which keeps offside sampling coherent with the
-        // physical act of striking the ball.
-        ball.last_touch = Some(sim_components::LastTouch {
+        // for offside judgement). Push to `PendingBallTouches`; the
+        // consumer `apply_ball_touched_system` applies it to
+        // `Ball.last_touch` at the start of the Rules set. The same
+        // entity is recorded as both the kicker (during this tick) and
+        // the last-toucher (after this tick), which keeps offside
+        // sampling coherent with the physical act of striking the ball.
+        pending.0.push(LastTouch {
             team: possessor_player.team_id,
             player: Some(possessor),
-            kind: sim_components::TouchKind::Play,
+            kind: TouchKind::Play,
         });
         ball.possessor = None;
         // Emit a `pass` flow event when telemetry is on and this was a

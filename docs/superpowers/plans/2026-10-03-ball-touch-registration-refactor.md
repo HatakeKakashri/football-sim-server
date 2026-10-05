@@ -623,22 +623,9 @@ git commit -m "feat(touch): add apply_ball_touched_system consumer"
 
 - [ ] **Step 2: Add the consumer first in the set**
 
-In the `Rules` configuration block, add `apply_ball_touched_system` as the first system. Bevy ECS allows `.add_systems` chained with `.before(...)` or `.in_set(...)`. The exact form:
+In the `Rules` configuration block, add `apply_ball_touched_system` as the first system in the chain. The actual existing order (verified during M4) is `out_of_bounds_system → goal_detection_system → offside_detection_system → foul_detection_system → restart_system`; the consumer is prepended without reordering the others.
 
-```rust
-.add_systems(
-    SimulationSet::Rules,
-    (
-        apply_ball_touched_system,
-        offside_detection_system,
-        out_of_bounds_system,
-        goal_detection_system,
-        restart_system,
-    ).chain(),
-)
-```
-
-(The exact existing wiring may differ — match its style. The intent is that `apply_ball_touched_system` runs before all other Rules systems.)
+The existing wiring pattern uses `.chain().in_set(SimulationSet::Rules).after(SimulationSet::Possession)`. Match that style.
 
 - [ ] **Step 3: Verify**
 

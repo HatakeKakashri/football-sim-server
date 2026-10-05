@@ -131,7 +131,7 @@ pub enum RuleEvent {
 /// teammate of the potentially-offside attacker. Touches registered as
 /// `Restart` (kickoff, throw-in, goal-kick, corner placement) do **not**
 /// reset offside judgement — `offside_detection_system` ignores them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TouchKind {
     /// Ball placed by `restart_system` or `lifecycle_system` (kickoff,
     /// throw-in, goal-kick, corner).
@@ -143,12 +143,17 @@ pub enum TouchKind {
 
 /// Records who last touched the ball and how.
 ///
-/// `entity` is the player who touched the ball (or the team's kickoff
-/// taker for a `Restart` touch). `kind` distinguishes active play from
-/// restart placements so Law 11 (offside) can ignore restart touches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// `team` is denormalised so the record resolves even if the entity
+/// despawns. `player` is the player who touched the ball, or `None`
+/// when no specific player is credited (a kickoff placement today;
+/// future restarts may also use `None`). `kind` distinguishes active
+/// play from restart placements so Law 11 (offside) can ignore
+/// restart touches via `offside_detection_system`'s existing
+/// `kind == Play` filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LastTouch {
-    pub entity: Entity,
+    pub team: TeamId,
+    pub player: Option<Entity>,
     pub kind: TouchKind,
 }
 
@@ -321,6 +326,12 @@ pub struct Ball {
     /// `offside_detection_system` only consults touches with
     /// `kind == Play` (Law 11 ignores restarts).
     pub last_touch: Option<LastTouch>,
+    /// Reserved for Law 11's "deliberate play" wording. No system
+    /// writes to this field in this plan; it is added now so a
+    /// future deflection system does not need a Ball-shape change.
+    /// Always `None` until that work is done. The state hash mixes
+    /// it (M10); every Ball constructor must initialise it.
+    pub last_deliberate_play: Option<LastTouch>,
     /// Pending velocity from a kick, to be applied in the Physics set.
     /// This avoids static query conflicts between `kick_execution_system`
     /// (Execution set) and `ball_physics_system` (Physics set).

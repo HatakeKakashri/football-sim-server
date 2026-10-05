@@ -161,7 +161,15 @@ impl Simulation {
                     .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
             );
             if let Some(touch) = b.last_touch.as_ref() {
-                mix(&mut h, touch.entity.to_bits());
+                // `player` is `Some(entity)` in every real match
+                // (entities never despawn); the `u64::MAX` arm
+                // mirrors the `None` mix for `possessor` above.
+                mix(
+                    &mut h,
+                    touch
+                        .player
+                        .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
+                );
                 mix(&mut h, touch_kind_discriminant(touch.kind));
             } else {
                 mix(&mut h, u64::MAX);

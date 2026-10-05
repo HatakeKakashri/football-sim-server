@@ -9,7 +9,9 @@
 //! 7 players (the minimum required to start/continue a match).
 
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallMarker, Match, Player, Position, Team, TeamId, TeamIdComponent, TouchKind, Velocity};
+use sim_components::{
+    Ball, BallMarker, Match, Player, Position, Team, TeamId, TeamIdComponent, TouchKind, Velocity,
+};
 use sim_telemetry::TelemetryConfig;
 
 use crate::CurrentTick;
@@ -62,7 +64,12 @@ pub fn offside_detection_system(
     if last_touch.kind != TouchKind::Play {
         return;
     }
-    let last_toucher = last_touch.entity;
+    // A `Play` touch without a specific player is not produced by any
+    // current writer; without an entity there is nothing to resolve
+    // the toucher's team from, so skip offside judgement.
+    let Some(last_toucher) = last_touch.player else {
+        return;
+    };
 
     let Some(toucher_team_id) = player_query
         .get(last_toucher)
@@ -142,11 +149,15 @@ pub fn foul_detection_system(
 
     // Phase 1: Detect high-speed collisions between opponents
     // Two players from opposing teams within 1.0m with high relative velocity
-    let players: Vec<(Entity, sim_components::TeamId, sim_math::Vec2, sim_math::Vec2)> =
-        player_query
-            .iter()
-            .map(|(e, p, pos, vel)| (e, p.team_id, pos.0, vel.0))
-            .collect();
+    let players: Vec<(
+        Entity,
+        sim_components::TeamId,
+        sim_math::Vec2,
+        sim_math::Vec2,
+    )> = player_query
+        .iter()
+        .map(|(e, p, pos, vel)| (e, p.team_id, pos.0, vel.0))
+        .collect();
 
     for i in 0..players.len() {
         for j in (i + 1)..players.len() {
@@ -188,7 +199,6 @@ pub fn foul_detection_system(
             }
         }
     }
-
 }
 
 pub fn minimum_player_count_system(

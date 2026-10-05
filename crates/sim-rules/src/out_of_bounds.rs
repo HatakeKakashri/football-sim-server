@@ -7,13 +7,11 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallOutOfBoundsType, BallMarker, BallState, Position, RuleEvent, Velocity,
+    Ball, BallMarker, BallOutOfBoundsType, BallState, Position, RuleEvent, Velocity,
 };
 use sim_math::Vec2;
 
-use crate::constants::{
-    GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH, PITCH_WIDTH,
-};
+use crate::constants::{GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH, PITCH_WIDTH};
 
 /// Phase 3: Out-of-bounds detection system (Law 9).
 ///
@@ -112,12 +110,15 @@ pub fn out_of_bounds_system(
     // re-set `last_touch` with `kind = Restart`, so the `None` window
     // is short (one tick) and asserted-against in debug builds here.
     let last_touch_team = ball.last_touch.as_ref().and_then(|t| {
-        // Resolve the toucher's team. If the entity has gone stale
-        // (e.g. player removed), propagate `None` — the event
+        // Resolve the toucher's team from the recorded player entity.
+        // If the entity has gone stale (e.g. player removed) or no
+        // specific player was credited, propagate `None` — the event
         // payload's `Option<TeamId>` documents this case, and
         // consumers must handle it (a stale entity is a real
         // desync and should not be papered over with a default).
-        player_query.get(t.entity).ok().map(|(_, team)| team.0)
+        t.player
+            .and_then(|p| player_query.get(p).ok())
+            .map(|(_, team)| team.0)
     });
     debug_assert!(
         ball.last_touch.is_some(),

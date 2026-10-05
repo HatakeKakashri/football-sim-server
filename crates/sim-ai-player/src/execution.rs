@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    ActionIntent, Ball, Intent, MatchClock, PerceptionSnapshot, Player, Stamina, Skill, Velocity,
+    ActionIntent, Ball, Intent, MatchClock, PerceptionSnapshot, Player, Skill, Stamina, Velocity,
 };
 use sim_math::Vec2;
 use sim_physics::SimRng;
@@ -173,16 +173,16 @@ pub fn kick_execution_system(
     let Some(possessor) = ball.possessor else {
         return;
     };
-    let Some((_, _, perception, player_vel)) =
+    // Capture the possessor's `Player` (carries `team_id`) in the same
+    // pass that resolves perception/velocity — the team is denormalised
+    // into `LastTouch` at the write site below. The `else` early-return
+    // makes the team lookup at the write site provably infallible.
+    let Some((_, possessor_player, perception, player_vel)) =
         player_query.iter().find(|(e, _, _, _)| *e == possessor)
     else {
         return;
     };
-    let Some(intent) = player_query
-        .iter()
-        .find(|(e, _, _, _)| *e == possessor)
-        .and_then(|(_, p, _, _)| p.intent)
-    else {
+    let Some(intent) = possessor_player.intent else {
         return;
     };
 
@@ -211,7 +211,8 @@ pub fn kick_execution_system(
         // this tick), which keeps offside sampling coherent with the
         // physical act of striking the ball.
         ball.last_touch = Some(sim_components::LastTouch {
-            entity: possessor,
+            team: possessor_player.team_id,
+            player: Some(possessor),
             kind: sim_components::TouchKind::Play,
         });
         ball.possessor = None;
@@ -298,6 +299,7 @@ mod tests {
             state: sim_components::BallState::Possessed,
             possessor: Some(kicker),
             last_touch: None,
+            last_deliberate_play: None,
             kick_velocity: None,
             spin: 0.0,
         });
@@ -368,6 +370,7 @@ mod tests {
             state: sim_components::BallState::Possessed,
             possessor: Some(kicker),
             last_touch: None,
+            last_deliberate_play: None,
             kick_velocity: None,
             spin: 0.0,
         });
@@ -427,6 +430,7 @@ mod tests {
             possessor: Some(kicker),
             // Pre-condition: last_touch is None (ball just gained possession).
             last_touch: None,
+            last_deliberate_play: None,
             kick_velocity: None,
             spin: 0.0,
         });
@@ -439,7 +443,8 @@ mod tests {
         assert_eq!(
             ball.last_touch,
             Some(LastTouch {
-                entity: kicker,
+                team: sim_components::TeamId(0),
+                player: Some(kicker),
                 kind: TouchKind::Play,
             }),
             "kick must register the kicker as a Play touch"
@@ -450,4 +455,3 @@ mod tests {
         );
     }
 }
-

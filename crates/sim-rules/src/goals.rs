@@ -69,7 +69,12 @@ pub fn goal_detection_system(
                     scorer_team: TeamId(1),
                     final_score,
                     last_touch_team: ball.last_touch.as_ref().and_then(|t| {
-                        player_query.get(t.entity).ok().map(|(_, team)| team.0)
+                        // Resolve the toucher's team from the recorded
+                        // player entity. A `None` player (or a stale
+                        // entity) propagates `None`.
+                        t.player
+                            .and_then(|p| player_query.get(p).ok())
+                            .map(|(_, team)| team.0)
                     }),
                 });
                 tracing::info!(
@@ -95,7 +100,11 @@ pub fn goal_detection_system(
                     scorer_team: TeamId(0),
                     final_score,
                     last_touch_team: ball.last_touch.as_ref().and_then(|t| {
-                        player_query.get(t.entity).ok().map(|(_, team)| team.0)
+                        // Resolve the toucher's team from the recorded
+                        // player entity — same policy as the away arm.
+                        t.player
+                            .and_then(|p| player_query.get(p).ok())
+                            .map(|(_, team)| team.0)
                     }),
                 });
                 tracing::info!(
@@ -199,7 +208,12 @@ pub fn restart_system(
             });
             let taker = first_player_on_team(&player_query, conceded_team);
             ball.last_touch = Some(sim_components::LastTouch {
-                entity: taker,
+                team: conceded_team,
+                // `first_player_on_team` may return
+                // `Entity::PLACEHOLDER` in sparse test worlds; keep
+                // `Some` for now — M5/M7 convert to `None` when the
+                // buffer-push path lands.
+                player: Some(taker),
                 kind: sim_components::TouchKind::Restart,
             });
             if telemetry.is_some() {
@@ -236,20 +250,24 @@ pub fn restart_system(
             // `last_touch_team` may be `None` only when the toucher
             // entity was stale by the time `out_of_bounds_system`
             // resolved the team — a real desync, not a normal
-            // state. We propagate the `None` to the Restart touch
-            // entity too (via `Entity::PLACEHOLDER`) rather than
-            // silently defaulting to a team.
-            let taker_entity = last_touch_team.as_ref().map_or(Entity::PLACEHOLDER, |last| {
-                // Opposite team: 0 ↔ 1.
-                let taker_team = if *last == TeamId(0) {
-                    TeamId(1)
-                } else {
-                    TeamId(0)
-                };
-                first_player_on_team(&player_query, taker_team)
-            });
+            // state. In that case the taker team is unknown: the
+            // record falls back to `TeamId(0)` with `player: None`
+            // rather than inventing a taker.
+            let (taker_team, taker_player) =
+                last_touch_team.as_ref().map_or((TeamId(0), None), |last| {
+                    // Opposite team: 0 ↔ 1.
+                    let team = if *last == TeamId(0) {
+                        TeamId(1)
+                    } else {
+                        TeamId(0)
+                    };
+                    // May be `Entity::PLACEHOLDER` in sparse test
+                    // worlds; keep `Some` — M5/M7 convert to `None`.
+                    (team, Some(first_player_on_team(&player_query, team)))
+                });
             ball.last_touch = Some(sim_components::LastTouch {
-                entity: taker_entity,
+                team: taker_team,
+                player: taker_player,
                 kind: sim_components::TouchKind::Restart,
             });
             let kind = match oob_type {
@@ -284,9 +302,7 @@ fn first_player_on_team(
 ) -> Entity {
     let mut best: Option<Entity> = None;
     for (e, t) in player_query.iter() {
-        if t.0 == team_id
-            && best.is_none_or(|b| e.to_bits() < b.to_bits())
-        {
+        if t.0 == team_id && best.is_none_or(|b| e.to_bits() < b.to_bits()) {
             best = Some(e);
         }
     }

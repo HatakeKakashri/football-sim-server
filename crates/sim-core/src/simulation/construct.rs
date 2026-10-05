@@ -17,9 +17,9 @@ use sim_rules::{
     possession_resolution_system, restart_system,
 };
 
-use super::brain_default::default_utility_brain;
 use super::Simulation;
 use super::SimulationSet;
+use super::brain_default::default_utility_brain;
 
 /// Phase C ECS-shape polish (review §4.2): register every simulation system
 /// in one place, in the explicit per-tick order:
@@ -188,6 +188,7 @@ impl Simulation {
             state: sim_components::BallState::Free,
             possessor: None,
             last_touch: None,
+            last_deliberate_play: None,
             kick_velocity: None,
         });
         world.entity_mut(ball_entity).insert(BallMarker);

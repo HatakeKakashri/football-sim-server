@@ -7,8 +7,8 @@
 //! ball, update the clock, reset formation).
 
 use bevy_ecs::prelude::*;
-use sim_components::{Match, MatchClock, MatchState, Position, Velocity};
 use sim_components::time::{HALF_LENGTH_TICKS, HALFTIME_BREAK_TICKS};
+use sim_components::{Match, MatchClock, MatchState, Position, Velocity};
 use sim_math::Vec2;
 
 use super::formation::reset_formation_to_4_4_2;
@@ -37,7 +37,10 @@ pub fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2)
     if let Some(mut vel) = world.entity_mut(player_entity).get_mut::<Velocity>() {
         vel.0 = Vec2::zero();
     }
-    if let Some(mut p) = world.entity_mut(player_entity).get_mut::<sim_components::Player>() {
+    if let Some(mut p) = world
+        .entity_mut(player_entity)
+        .get_mut::<sim_components::Player>()
+    {
         p.intent = None;
     }
 }
@@ -94,7 +97,9 @@ fn pick_kickoff_taker(world: &World, team_id: sim_components::TeamId) -> bevy_ec
         };
     }
 
-    striker.or(last_player).unwrap_or(bevy_ecs::prelude::Entity::PLACEHOLDER)
+    striker
+        .or(last_player)
+        .unwrap_or(bevy_ecs::prelude::Entity::PLACEHOLDER)
 }
 
 /// Pure decision: given the current state + clock + sim-tick + half-time entry,
@@ -245,11 +250,16 @@ pub fn apply_transition(
             _ => sim_components::TeamId(0),
         };
         let taker_entity = pick_kickoff_taker(world, kickoff_taker_team);
-        world.resource_mut::<sim_components::Ball>().last_touch =
-            Some(sim_components::LastTouch {
-                entity: taker_entity,
-                kind: sim_components::TouchKind::Restart,
-            });
+        let is_placeholder = taker_entity == bevy_ecs::prelude::Entity::PLACEHOLDER;
+        world.resource_mut::<sim_components::Ball>().last_touch = Some(sim_components::LastTouch {
+            team: kickoff_taker_team,
+            player: if is_placeholder {
+                None
+            } else {
+                Some(taker_entity)
+            },
+            kind: sim_components::TouchKind::Restart,
+        });
     }
     if decision.apply_kickoff_impulse
         && let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>()

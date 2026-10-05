@@ -2,11 +2,13 @@
 //!
 //! `possession_resolution_system` determines which player (if any) has
 //! possession of the ball based on proximity and skill, and registers
-//! a `LastTouch { kind: Play }` whenever the possessor changes
-//! (interception / pass-receive).
+//! a `LastTouch { team, player, kind: Play }` whenever the possessor
+//! changes (interception / pass-receive).
 
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallMarker, BallState, LastTouch, Player, Position, Skill, TouchKind};
+use sim_components::{
+    Ball, BallMarker, BallState, LastTouch, Player, Position, Skill, TeamId, TouchKind,
+};
 
 use crate::constants::SKILL_TOLERANCE;
 
@@ -26,7 +28,7 @@ use crate::constants::SKILL_TOLERANCE;
 /// - When no player is within range: set `ball.possessor = None` and
 ///   `ball.state = BallState::Free`.
 /// - On possession change, register `ball.last_touch = Some(LastTouch
-///   { entity, kind: Play })` so Law 11 (offside) sees the new
+///   { team, player, kind: Play })` so Law 11 (offside) sees the new
 ///   possessor as the most recent "play" touch. Without this,
 ///   offside would continue to be evaluated for the previous
 ///   kicker's team (Law 11 says it resets on the next play).
@@ -47,33 +49,39 @@ pub fn possession_resolution_system(
         return;
     }
 
-    let mut closest_player: Option<(Entity, f32, f32)> = None;
+    // `(entity, team, distance, skill)` — the team rides along with
+    // the selection so the `LastTouch` record can be built without a
+    // second lookup.
+    let mut closest_player: Option<(Entity, TeamId, f32, f32)> = None;
 
-    for (player_entity, _player, player_pos, skill) in player_query.iter() {
+    for (player_entity, player, player_pos, skill) in player_query.iter() {
         let distance = ball_pos.0.distance(player_pos.0);
         if distance < 1.5 {
-            if let Some((_, best_dist, best_skill)) = closest_player {
+            if let Some((_, _, best_dist, best_skill)) = closest_player {
                 let skill_diff = skill.0 - best_skill;
                 if skill_diff > SKILL_TOLERANCE
                     || (skill_diff <= SKILL_TOLERANCE && distance < best_dist)
                 {
-                    closest_player = Some((player_entity, distance, skill.0));
+                    closest_player = Some((player_entity, player.team_id, distance, skill.0));
                 }
             } else {
-                closest_player = Some((player_entity, distance, skill.0));
+                closest_player = Some((player_entity, player.team_id, distance, skill.0));
             }
         }
     }
 
-    if let Some((entity, _, _)) = closest_player {
+    if let Some((entity, team, _, _)) = closest_player {
         // Register the new possessor as a Play touch: the previous
         // proximity-based `last_touched_by` would have lagged or
         // pointed at the wrong player. Law 11 resets offside at
-        // this moment.
+        // this moment. The toucher's team (from `Player.team_id`,
+        // carried through the selection above) is denormalised into
+        // the record so it resolves even if the entity despawns.
         ball.possessor = Some(entity);
         ball.state = BallState::Possessed;
         ball.last_touch = Some(LastTouch {
-            entity,
+            team,
+            player: Some(entity),
             kind: TouchKind::Play,
         });
     } else {

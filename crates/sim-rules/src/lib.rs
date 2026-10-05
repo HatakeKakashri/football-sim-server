@@ -21,12 +21,14 @@ pub(crate) mod referee;
 mod referee_tests;
 #[cfg(test)]
 mod tests;
+pub(crate) mod touch;
 
 pub use clock::{added_time_calculation_system, match_duration_enforcement_system};
 pub use goals::{goal_detection_system, restart_system};
 pub use out_of_bounds::out_of_bounds_system;
 pub use possession::possession_resolution_system;
 pub use referee::{foul_detection_system, minimum_player_count_system, offside_detection_system};
+pub use touch::apply_ball_touched_system;
 
 use bevy_ecs::prelude::*;
 use sim_components::{RuleEvent, TeamId, TeamIdComponent};

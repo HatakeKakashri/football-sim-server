@@ -12,9 +12,9 @@ use sim_physics::{
     apply_kick_velocity_system, ball_physics_system, pitch_control_system, player_movement_system,
 };
 use sim_rules::{
-    added_time_calculation_system, foul_detection_system, goal_detection_system,
-    minimum_player_count_system, offside_detection_system, out_of_bounds_system,
-    possession_resolution_system, restart_system,
+    added_time_calculation_system, apply_ball_touched_system, foul_detection_system,
+    goal_detection_system, minimum_player_count_system, offside_detection_system,
+    out_of_bounds_system, possession_resolution_system, restart_system,
 };
 
 use super::Simulation;
@@ -93,9 +93,12 @@ fn register_systems(schedule: &mut Schedule) {
             .after(SimulationSet::Physics),
     );
 
-    // Rules — out-of-bounds → goal → offside → foul → restart (spec §3).
+    // Rules — ball-touch consumer → out-of-bounds → goal → offside → foul → restart (spec §3).
+    // The consumer drains `PendingBallTouches` first so every downstream
+    // Rules system sees the latest touch in the same tick.
     schedule.add_systems(
         (
+            apply_ball_touched_system,
             out_of_bounds_system,
             goal_detection_system,
             offside_detection_system,
@@ -171,8 +174,8 @@ impl Simulation {
     )]
     pub fn create_match(world: &mut World, seed: u64) -> (Entity, Entity, Entity) {
         use sim_components::{
-            Ball, BallMarker, Match, MatchClock, MatchState, Player, Position, Team, TeamId,
-            Velocity,
+            Ball, BallMarker, Match, MatchClock, MatchState, PendingBallTouches, Player, Position,
+            Team, TeamId, Velocity,
         };
         use sim_math::Vec2;
 
@@ -191,6 +194,7 @@ impl Simulation {
             last_deliberate_play: None,
             kick_velocity: None,
         });
+        world.insert_resource(PendingBallTouches::default());
         world.entity_mut(ball_entity).insert(BallMarker);
         world
             .entity_mut(ball_entity)

@@ -156,6 +156,26 @@ pub struct LastTouch {
     pub kind: TouchKind,
 }
 
+/// Pending ball touches registered this tick.
+///
+/// Writers (kick, possession acquisition, restart placements) append
+/// to this buffer; the consumer `apply_ball_touched_system` drains it
+/// at the start of the Rules set and writes the final entry to
+/// `Ball.last_touch`.
+///
+/// Determinism: writes happen in fixed system-set order
+/// (Execution → Possession → Rules → `MatchAdmin`), and Bevy
+/// `ResMut` access serialises those writes. Last-touch-wins
+/// semantics are equivalent to a same-tick `EventReader` ordered by
+/// emission time.
+///
+/// This resource replaces a Bevy `Events<T>` channel by design
+/// (see the design spec §B and the OOB restart bug ticket at
+/// `.superpowers/sdd/oob-restart-bug.md`, which recommends
+/// Resource over events).
+#[derive(Resource, Debug, Default)]
+pub struct PendingBallTouches(pub Vec<LastTouch>);
+
 /// Top-level intent tag.
 ///
 /// An `Intent` is either a movement (which steers the player towards a

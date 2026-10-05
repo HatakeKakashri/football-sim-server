@@ -10,6 +10,7 @@ use sim_components::{
 use sim_math::Vec2;
 
 use crate::possession_resolution_system;
+use crate::touch::apply_ball_touched_system;
 
 #[test]
 fn test_possession_resolution() {
@@ -26,6 +27,7 @@ fn test_possession_resolution() {
         last_touch: None,
         last_deliberate_play: None,
     });
+    world.insert_resource(sim_components::PendingBallTouches::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(50.0, 34.0)));
@@ -51,7 +53,7 @@ fn test_possession_resolution() {
         .insert(TeamIdComponent(TeamId(0)));
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(possession_resolution_system);
+    schedule.add_systems((possession_resolution_system, apply_ball_touched_system).chain());
     schedule.run(&mut world);
 
     let ball = world.resource::<Ball>();
@@ -75,6 +77,7 @@ fn test_possession_resolved_to_real_entity() {
         last_touch: None,
         last_deliberate_play: None,
     });
+    world.insert_resource(sim_components::PendingBallTouches::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(50.0, 34.0)));
@@ -100,7 +103,7 @@ fn test_possession_resolved_to_real_entity() {
         .insert(TeamIdComponent(TeamId(0)));
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(possession_resolution_system);
+    schedule.add_systems((possession_resolution_system, apply_ball_touched_system).chain());
     schedule.run(&mut world);
 
     let ball = world.resource::<Ball>();
@@ -137,6 +140,7 @@ fn test_possession_cleared_when_ball_free() {
         last_touch: None,
         last_deliberate_play: None,
     });
+    world.insert_resource(sim_components::PendingBallTouches::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(50.0, 34.0)));
@@ -162,7 +166,7 @@ fn test_possession_cleared_when_ball_free() {
         .insert(TeamIdComponent(TeamId(0)));
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(possession_resolution_system);
+    schedule.add_systems((possession_resolution_system, apply_ball_touched_system).chain());
     schedule.run(&mut world);
 
     let ball = world.resource::<Ball>();
@@ -191,6 +195,7 @@ fn test_possession_change_registers_play_touch() {
         last_touch: None,
         last_deliberate_play: None,
     });
+    world.insert_resource(sim_components::PendingBallTouches::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(50.0, 34.0)));
@@ -214,7 +219,7 @@ fn test_possession_change_registers_play_touch() {
         .insert(TeamIdComponent(TeamId(0)));
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(possession_resolution_system);
+    schedule.add_systems((possession_resolution_system, apply_ball_touched_system).chain());
     schedule.run(&mut world);
 
     let ball = world.resource::<Ball>();
@@ -315,6 +320,7 @@ fn test_interception_registers_play_touch_on_new_possessor() {
         }),
         last_deliberate_play: None,
     });
+    world.insert_resource(sim_components::PendingBallTouches::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(70.0, 34.0)));
@@ -340,7 +346,7 @@ fn test_interception_registers_play_touch_on_new_possessor() {
         .insert(TeamIdComponent(TeamId(1)));
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(possession_resolution_system);
+    schedule.add_systems((possession_resolution_system, apply_ball_touched_system).chain());
     schedule.run(&mut world);
 
     let ball = world.resource::<Ball>();

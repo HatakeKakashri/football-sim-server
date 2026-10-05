@@ -25,6 +25,8 @@ impl Simulation {
             spin: ball_res.spin,
             state: ball_res.state,
             possessor: ball_res.possessor.map(bevy_ecs::entity::Entity::to_bits),
+            last_touch: ball_res.last_touch,
+            last_deliberate_play: ball_res.last_deliberate_play,
         };
         // Phase C §4.3: find the ball entity by `BallMarker` (the only
         // entity carrying Position + Velocity but no Player).

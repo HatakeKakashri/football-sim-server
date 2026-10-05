@@ -42,6 +42,61 @@ pub fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2)
     }
 }
 
+/// Pick the kickoff-taker entity for `team_id`:
+/// - prefer a player with `RoleComponent(Role::Striker)`,
+/// - fall back to the last player on the team by entity bits (which after
+///   `reset_formation_to_4_4_2` lands on a forward slot),
+/// - fall back to `Entity::PLACEHOLDER` if the team is empty.
+///
+/// This helper is deterministic and tolerates the current state where
+/// no player carries `Role::Striker` (every spawned player is
+/// `Role::CentralMidfielder`).
+fn pick_kickoff_taker(world: &World, team_id: sim_components::TeamId) -> bevy_ecs::prelude::Entity {
+    use sim_components::{Player, Role, RoleComponent, TeamIdComponent};
+
+    let mut striker: Option<bevy_ecs::prelude::Entity> = None;
+    let mut last_player: Option<bevy_ecs::prelude::Entity> = None;
+
+    // Collect candidates first to avoid holding a borrow across the
+    // mutable entity access below. Determinism: iterate entities in
+    // their spawn (creation) order — World::iter_entities is stable.
+    let candidates: Vec<(bevy_ecs::prelude::Entity, Role, u64)> = world
+        .iter_entities()
+        .filter_map(|e_ref| {
+            let e = e_ref.id();
+            let _p = world.entity(e).get::<Player>()?;
+            let t = world.entity(e).get::<TeamIdComponent>()?;
+            if t.0 != team_id {
+                return None;
+            }
+            let r = world
+                .entity(e)
+                .get::<RoleComponent>()
+                .map_or(Role::CentralMidfielder, |rc| rc.0);
+            Some((e, r, e.to_bits()))
+        })
+        .collect();
+
+    for (e, r, bits) in candidates {
+        if r == Role::Striker {
+            // Among strikers, pick the smallest entity id for
+            // determinism.
+            striker = match striker {
+                Some(s) if s.to_bits() <= bits => Some(s),
+                _ => Some(e),
+            };
+        }
+        // Track the largest entity id (last on the team by creation
+        // order) — this is the fallback kickoff taker.
+        last_player = match last_player {
+            Some(l) if l.to_bits() >= bits => Some(l),
+            _ => Some(e),
+        };
+    }
+
+    striker.or(last_player).unwrap_or(bevy_ecs::prelude::Entity::PLACEHOLDER)
+}
+
 /// Pure decision: given the current state + clock + sim-tick + half-time entry,
 /// compute the next state and the side-effect descriptors (clock mutation,
 /// ball placement, kickoff impulse). Does not mutate the world.
@@ -178,6 +233,23 @@ pub fn apply_transition(
         // Drop any pending kick velocity — placement at the center
         // spot must not be combined with an inbound kick impulse.
         world.resource_mut::<sim_components::Ball>().kick_velocity = None;
+        // Register the kickoff placement as a `Restart` touch on the
+        // team's striker (preferring a player with
+        // `RoleComponent(Role::Striker)`, falling back to the last
+        // player on the team). The match-state-to-team mapping is:
+        // first half → home (team 0), second half → away (team 1)
+        // per Law 8. Half-time swap of player positions is a
+        // separate ticket; we only flip the kickoff taker here.
+        let kickoff_taker_team = match world.get_resource::<MatchClock>() {
+            Some(clock) if clock.half >= 2 => sim_components::TeamId(1),
+            _ => sim_components::TeamId(0),
+        };
+        let taker_entity = pick_kickoff_taker(world, kickoff_taker_team);
+        world.resource_mut::<sim_components::Ball>().last_touch =
+            Some(sim_components::LastTouch {
+                entity: taker_entity,
+                kind: sim_components::TouchKind::Restart,
+            });
     }
     if decision.apply_kickoff_impulse
         && let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>()

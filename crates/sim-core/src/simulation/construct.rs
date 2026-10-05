@@ -181,13 +181,13 @@ impl Simulation {
         // component (so systems can find it via Query without an
         // `iter_entities` scan). `Ball` state lives in
         // `world.resource::<Ball>()` and is the single source of truth for
-        // spin/state/possessor/last_touched_by/kick_velocity.
+        // spin/state/possessor/last_touch/kick_velocity.
         let ball_entity = world.spawn(()).id();
         world.insert_resource(Ball {
             spin: 0.0,
             state: sim_components::BallState::Free,
             possessor: None,
-            last_touched_by: None,
+            last_touch: None,
             kick_velocity: None,
         });
         world.entity_mut(ball_entity).insert(BallMarker);

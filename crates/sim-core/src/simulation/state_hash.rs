@@ -3,7 +3,7 @@
 //! the variants' `Debug` representation.
 
 use bevy_ecs::prelude::Entity;
-use sim_components::{BallState, MatchClock, MatchState, Role, RoleComponent};
+use sim_components::{BallState, MatchClock, MatchState, Role, RoleComponent, TouchKind};
 
 use super::Simulation;
 
@@ -40,6 +40,14 @@ pub const fn role_discriminant(r: Role) -> u64 {
         R::AttackingMidfielder => 5,
         R::Winger => 6,
         R::Striker => 7,
+    }
+}
+
+pub const fn touch_kind_discriminant(k: TouchKind) -> u64 {
+    use sim_components::TouchKind as T;
+    match k {
+        T::Restart => 0,
+        T::Play => 1,
     }
 }
 
@@ -141,7 +149,7 @@ impl Simulation {
         }
 
         // Phase C §4.3: `Ball` is also a Resource — mix state/possessor/
-        // last_touched_by/spin from the resource so the hash reflects the
+        // last_touch/spin from the resource so the hash reflects the
         // dynamic ball state in addition to position/velocity (mixed per-
         // entity above).
         if let Some(b) = self.world.get_resource::<sim_components::Ball>() {
@@ -152,11 +160,13 @@ impl Simulation {
                 b.possessor
                     .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
             );
-            mix(
-                &mut h,
-                b.last_touched_by
-                    .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
-            );
+            if let Some(touch) = b.last_touch.as_ref() {
+                mix(&mut h, touch.entity.to_bits());
+                mix(&mut h, touch_kind_discriminant(touch.kind));
+            } else {
+                mix(&mut h, u64::MAX);
+                mix(&mut h, u64::MAX);
+            }
         }
 
         // Mix the original seed so same-seed simulations hash identically.

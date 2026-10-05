@@ -95,10 +95,23 @@ pub enum FoulType {
 /// Used for event streaming, replay recording, and CLI output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Component)]
 pub enum RuleEvent {
-    OutOfBounds(BallOutOfBoundsType),
+    OutOfBounds {
+        oob_type: BallOutOfBoundsType,
+        /// Team of the player who last touched the ball before it went out
+        /// (Law 9: throw-in/corner/goal-kick go to the opposite team).
+        /// `None` only when the ball went out without ever being touched
+        /// since the last restart — `out_of_bounds_system` asserts this
+        /// never happens in debug builds.
+        last_touch_team: Option<TeamId>,
+    },
     Goal {
         scorer_team: TeamId,
         score: (u8, u8),
+        /// Team of the player who last touched the ball before it crossed
+        /// the line. Scorer attribution uses ball position, not toucher
+        /// team; this field is captured for completeness and future use
+        /// (e.g. own-goal attribution if introduced).
+        last_touch_team: Option<TeamId>,
     },
     KickoffRestart,
     HalfTimeStart,
@@ -108,6 +121,35 @@ pub enum RuleEvent {
         foulee: u64,
         foul_type: FoulType,
     },
+}
+
+/// Categorises a touch of the ball: whether the player actively played it
+/// (kick / interception) or whether the ball was merely placed by a
+/// restart procedure.
+///
+/// Law 11 (offside) is judged at the moment the ball is "played" by a
+/// teammate of the potentially-offside attacker. Touches registered as
+/// `Restart` (kickoff, throw-in, goal-kick, corner placement) do **not**
+/// reset offside judgement — `offside_detection_system` ignores them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TouchKind {
+    /// Ball placed by `restart_system` or `lifecycle_system` (kickoff,
+    /// throw-in, goal-kick, corner).
+    Restart,
+    /// Player kicked the ball (`kick_execution_system`) or gained
+    /// possession by proximity (`possession_resolution_system`).
+    Play,
+}
+
+/// Records who last touched the ball and how.
+///
+/// `entity` is the player who touched the ball (or the team's kickoff
+/// taker for a `Restart` touch). `kind` distinguishes active play from
+/// restart placements so Law 11 (offside) can ignore restart touches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LastTouch {
+    pub entity: Entity,
+    pub kind: TouchKind,
 }
 
 /// Top-level intent tag.
@@ -258,7 +300,7 @@ impl MatchClock {
 /// entity id, and systems that need both the ball state and its
 /// position read `Res<Ball>` for state and `world.entity_mut(ball_entity)`
 /// for position. This avoids the dual-writer problem (`Ball` is now the
-/// only writer for state/possessor/last-touched-by/kick_velocity/spin,
+/// only writer for `state/possessor/last_touch/kick_velocity/spin`,
 /// while `Position`/`Velocity` are written exclusively by the physics
 /// systems on the entity).
 #[allow(
@@ -270,13 +312,15 @@ pub struct Ball {
     pub spin: f32,
     pub state: BallState,
     pub possessor: Option<Entity>,
-    /// The entity of the player nearest to the ball (within 1.0 m).
-    /// This is a **proximity predicate**, not a contact event — any player
-    /// within 1.0 m is considered to have "touched" the ball.  Used for
-    /// offside Law 11 enforcement: an offside offence is judged relative to
-    /// the position of the second-to-last defender at the instant this
-    /// player was the nearest to the ball.
-    pub last_touched_by: Option<Entity>,
+    /// Last registered touch of the ball — written explicitly by
+    /// `kick_execution_system` (kick), `possession_resolution_system`
+    /// (proximity interception), `restart_system` (throw-in / corner /
+    /// goal-kick placement), and `lifecycle_system` (kickoff placement).
+    /// Cleared by `out_of_bounds_system` and `goal_detection_system`
+    /// after copying the toucher team into the event payload.
+    /// `offside_detection_system` only consults touches with
+    /// `kind == Play` (Law 11 ignores restarts).
+    pub last_touch: Option<LastTouch>,
     /// Pending velocity from a kick, to be applied in the Physics set.
     /// This avoids static query conflicts between `kick_execution_system`
     /// (Execution set) and `ball_physics_system` (Physics set).
@@ -289,7 +333,7 @@ pub struct Ball {
 /// Phase C §4.3: there is exactly one entity carrying `BallMarker` per
 /// match; its `Position`/`Velocity` components are written by
 /// `ball_physics_system`, while `Ball` (the Resource) holds
-/// `state/possessor/last_touched_by/kick_velocity/spin`.
+/// `state/possessor/last_touch/kick_velocity/spin`.
 #[allow(
     clippy::too_long_first_doc_paragraph,
     reason = "Phase C history block; splitting it would scatter load-bearing context"

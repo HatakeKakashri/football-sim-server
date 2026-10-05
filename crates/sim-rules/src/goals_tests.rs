@@ -33,7 +33,7 @@ fn test_goal_scored_home_team() {
     });
 
     // Toucher player on team 1 (so the goal is credited to the
-    // scorer = home by ball position, with last_touch_team = 1
+    // scorer = home by ball position, with last_touch.team = 1
     // captured into the event payload).
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {
@@ -80,18 +80,25 @@ fn test_goal_scored_home_team() {
     let pending = world.get_resource::<PendingRestart>();
     assert!(pending.is_some());
 
-    // The Goal event should carry last_touch_team = team 1 (the
-    // away toucher), while scorer_team remains home (0) by ball
-    // position.
+    // The Goal event should carry last_touch = the away toucher's
+    // full record (team 1), while scorer_team remains home (0) by
+    // ball position.
     let event = world.entity(ball_entity).get::<RuleEvent>();
     if let Some(RuleEvent::Goal {
         scorer_team,
-        last_touch_team,
+        last_touch,
         ..
     }) = event
     {
         assert_eq!(*scorer_team, sim_components::TeamId(0));
-        assert_eq!(*last_touch_team, Some(sim_components::TeamId(1)));
+        assert_eq!(
+            *last_touch,
+            Some(LastTouch {
+                team: sim_components::TeamId(1),
+                player: Some(toucher),
+                kind: TouchKind::Play,
+            })
+        );
     } else {
         panic!("expected RuleEvent::Goal, got {event:?}");
     }
@@ -155,12 +162,19 @@ fn test_goal_scored_away_team() {
     let event = world.entity(ball_entity).get::<RuleEvent>();
     if let Some(RuleEvent::Goal {
         scorer_team,
-        last_touch_team,
+        last_touch,
         ..
     }) = event
     {
         assert_eq!(*scorer_team, sim_components::TeamId(1));
-        assert_eq!(*last_touch_team, Some(sim_components::TeamId(0)));
+        assert_eq!(
+            *last_touch,
+            Some(LastTouch {
+                team: sim_components::TeamId(0),
+                player: Some(toucher),
+                kind: TouchKind::Play,
+            })
+        );
     } else {
         panic!("expected RuleEvent::Goal, got {event:?}");
     }

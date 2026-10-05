@@ -97,21 +97,20 @@ pub enum FoulType {
 pub enum RuleEvent {
     OutOfBounds {
         oob_type: BallOutOfBoundsType,
-        /// Team of the player who last touched the ball before it went out
-        /// (Law 9: throw-in/corner/goal-kick go to the opposite team).
-        /// `None` only when the ball went out without ever being touched
-        /// since the last restart — `out_of_bounds_system` asserts this
-        /// never happens in debug builds.
-        last_touch_team: Option<TeamId>,
+        /// The full touch record at the moment the ball crossed the
+        /// boundary. `Ball.last_touch` is cleared in the same tick
+        /// (today's behaviour; M8 stops clearing it so the record is
+        /// preserved on `Ball` for replay data).
+        last_touch: Option<LastTouch>,
     },
     Goal {
         scorer_team: TeamId,
         score: (u8, u8),
-        /// Team of the player who last touched the ball before it crossed
-        /// the line. Scorer attribution uses ball position, not toucher
-        /// team; this field is captured for completeness and future use
-        /// (e.g. own-goal attribution if introduced).
-        last_touch_team: Option<TeamId>,
+        /// The full touch record at the moment the ball crossed the
+        /// line. Scorer attribution uses ball position, not the
+        /// toucher team; this field is captured for completeness and
+        /// future use (e.g. own-goal attribution if introduced).
+        last_touch: Option<LastTouch>,
     },
     KickoffRestart,
     HalfTimeStart,

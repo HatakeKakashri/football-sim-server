@@ -30,13 +30,12 @@ use crate::constants::{GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH, PITCH_WIDTH};
 ///
 /// Does NOT reset ball position — that belongs to `restart_system`.
 ///
-/// Records the last toucher's team in the emitted `RuleEvent::OutOfBounds`
+/// Records the full last-touch record in the emitted `RuleEvent::OutOfBounds`
 /// so the OOB restart-taker (awarded to the *opposite* team of the
 /// toucher per Law 9) can be resolved by downstream consumers.
 pub fn out_of_bounds_system(
     mut commands: Commands,
     ball_query: Query<(Entity, &Position, &Velocity), With<BallMarker>>,
-    player_query: Query<(Entity, &sim_components::TeamIdComponent), With<sim_components::Player>>,
     _current_tick: Res<crate::CurrentTick>,
     mut ball: ResMut<Ball>,
 ) {
@@ -100,26 +99,16 @@ pub fn out_of_bounds_system(
     // goal area). The kicker's team determines *who takes* the
     // restart (the opposite team of the last toucher), not *which
     // type* of restart is awarded. We therefore do not consult
-    // `last_touch_team` for the classification itself; we only carry
+    // `last_touch` for the classification itself; we only carry
     // it forward in the event payload so downstream restart
     // consumers can resolve the taker team.
     //
-    // Capture the last toucher's team into the event payload before
+    // Capture the full last-touch record into the event payload before
     // clearing `last_touch`. The kickoff placement in `lifecycle` and
     // the OOB restart placement in `restart_system` immediately
     // re-set `last_touch` with `kind = Restart`, so the `None` window
     // is short (one tick) and asserted-against in debug builds here.
-    let last_touch_team = ball.last_touch.as_ref().and_then(|t| {
-        // Resolve the toucher's team from the recorded player entity.
-        // If the entity has gone stale (e.g. player removed) or no
-        // specific player was credited, propagate `None` — the event
-        // payload's `Option<TeamId>` documents this case, and
-        // consumers must handle it (a stale entity is a real
-        // desync and should not be papered over with a default).
-        t.player
-            .and_then(|p| player_query.get(p).ok())
-            .map(|(_, team)| team.0)
-    });
+    let last_touch = ball.last_touch;
     debug_assert!(
         ball.last_touch.is_some(),
         "out_of_bounds_system fired with no `last_touch` — the \
@@ -128,14 +117,15 @@ pub fn out_of_bounds_system(
     );
 
     // Clear the last-touch slot; restart_system re-registers it with
-    // `kind = Restart` when it places the ball.
+    // `kind = Restart` when it places the ball. (M8 removes this
+    // clear so the record stays on `Ball` for replay data.)
     ball.last_touch = None;
 
     // Apply state changes
     ball.state = BallState::Dead;
     commands.entity(ball_entity).insert(RuleEvent::OutOfBounds {
         oob_type,
-        last_touch_team,
+        last_touch,
     });
 }
 

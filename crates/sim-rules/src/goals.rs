@@ -7,8 +7,8 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallMarker, BallState, Match, Player, Position, RuleEvent, TeamId, TeamIdComponent,
-    Velocity,
+    Ball, BallMarker, BallState, LastTouch, Match, Player, Position, RuleEvent, TeamId,
+    TeamIdComponent, Velocity,
 };
 use sim_math::Vec2;
 use sim_telemetry::TelemetryConfig;
@@ -23,7 +23,7 @@ struct GoalEvent {
     ball_entity: Entity,
     scorer_team: TeamId,
     final_score: (u8, u8),
-    last_touch_team: Option<TeamId>,
+    last_touch: Option<LastTouch>,
 }
 
 /// Phase 3: Goal detection system (Law 10).
@@ -35,20 +35,19 @@ struct GoalEvent {
 /// BUG FIX: Guards against repeat scoring by checking `BallState::Dead` first.
 ///
 /// Scorer attribution uses **ball position** (x ≤ 0 → away, x ≥
-/// `PITCH_LENGTH` → home). The last toucher's team is recorded in the
-/// event payload for completeness but does **not** drive scorer
+/// `PITCH_LENGTH` → home). The full last-touch record is captured in
+/// the event payload for completeness but does **not** drive scorer
 /// attribution.
 pub fn goal_detection_system(
     mut commands: Commands,
     ball_query: Query<(Entity, &Position), With<BallMarker>>,
-    player_query: Query<(Entity, &TeamIdComponent), With<Player>>,
     mut match_res: ResMut<Match>,
     mut ball: ResMut<Ball>,
     current_tick: Option<Res<CurrentTick>>,
     telemetry: Option<Res<TelemetryConfig>>,
 ) {
     // First pass: collect goal events (avoid borrow conflicts).
-    // Tuple: (ball_entity, scorer_team, final_score, last_touch_team).
+    // Tuple: (ball_entity, scorer_team, final_score, last_touch).
     let mut goal_events: Vec<GoalEvent> = Vec::new();
 
     let Ok((ball_entity, ball_pos)) = ball_query.get_single() else {
@@ -68,14 +67,9 @@ pub fn goal_detection_system(
                     ball_entity,
                     scorer_team: TeamId(1),
                     final_score,
-                    last_touch_team: ball.last_touch.as_ref().and_then(|t| {
-                        // Resolve the toucher's team from the recorded
-                        // player entity. A `None` player (or a stale
-                        // entity) propagates `None`.
-                        t.player
-                            .and_then(|p| player_query.get(p).ok())
-                            .map(|(_, team)| team.0)
-                    }),
+                    // Capture the full record before the second pass
+                    // clears `Ball.last_touch` (M8 stops clearing it).
+                    last_touch: ball.last_touch,
                 });
                 tracing::info!(
                     "GOAL scored by away team! Score: {}-{}",
@@ -99,13 +93,10 @@ pub fn goal_detection_system(
                     ball_entity,
                     scorer_team: TeamId(0),
                     final_score,
-                    last_touch_team: ball.last_touch.as_ref().and_then(|t| {
-                        // Resolve the toucher's team from the recorded
-                        // player entity — same policy as the away arm.
-                        t.player
-                            .and_then(|p| player_query.get(p).ok())
-                            .map(|(_, team)| team.0)
-                    }),
+                    // Capture the full record before the second pass
+                    // clears `Ball.last_touch` — same policy as the
+                    // away arm.
+                    last_touch: ball.last_touch,
                 });
                 tracing::info!(
                     "GOAL scored by home team! Score: {}-{}",
@@ -129,12 +120,13 @@ pub fn goal_detection_system(
         ball.state = BallState::Dead;
         // Clear the last touch — the delayed kickoff will re-register
         // it as `kind = Restart` when the ball is placed at the
-        // center spot.
+        // center spot. (M8 removes this clear so the record stays on
+        // `Ball` for replay data.)
         ball.last_touch = None;
         commands.entity(event.ball_entity).insert(RuleEvent::Goal {
             scorer_team: event.scorer_team,
             score: event.final_score,
-            last_touch_team: event.last_touch_team,
+            last_touch: event.last_touch,
         });
         commands.insert_resource(PendingRestart {
             event: Some(RuleEvent::KickoffRestart),
@@ -233,7 +225,7 @@ pub fn restart_system(
             && let Ok((_, rule_event)) = rule_event_query.get(ball_entity)
             && let RuleEvent::OutOfBounds {
                 oob_type,
-                last_touch_team,
+                last_touch,
             } = rule_event
         {
             // Determine restart position based on OOB type and ball position
@@ -247,16 +239,16 @@ pub fn restart_system(
             // last toucher. Find any player on that team to record
             // as the taker identity.
             //
-            // `last_touch_team` may be `None` only when the toucher
-            // entity was stale by the time `out_of_bounds_system`
-            // resolved the team — a real desync, not a normal
-            // state. In that case the taker team is unknown: the
-            // record falls back to `TeamId(0)` with `player: None`
-            // rather than inventing a taker.
+            // `last_touch` may be `None` only when the ball went out
+            // without ever being touched since the last restart — a
+            // wiring gap that `out_of_bounds_system` asserts against
+            // in debug builds. In that case the taker team is
+            // unknown: the record falls back to `TeamId(0)` with
+            // `player: None` rather than inventing a taker.
             let (taker_team, taker_player) =
-                last_touch_team.as_ref().map_or((TeamId(0), None), |last| {
+                last_touch.as_ref().map_or((TeamId(0), None), |last| {
                     // Opposite team: 0 ↔ 1.
-                    let team = if *last == TeamId(0) {
+                    let team = if last.team == TeamId(0) {
                         TeamId(1)
                     } else {
                         TeamId(0)

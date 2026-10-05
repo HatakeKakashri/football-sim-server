@@ -1,5 +1,5 @@
 //! Tests for `out_of_bounds_system` (Law 9): throw-in, corner, goal-kick,
-//! plus the touch-clear-on-OOB wiring (`last_touch_team` is captured in
+//! plus the touch-clear-on-OOB wiring (`last_touch` is captured in
 //! the event payload before `last_touch` is cleared).
 
 use bevy_ecs::prelude::*;
@@ -70,7 +70,7 @@ fn test_out_of_bounds_detection_throw_in() {
     assert!(rule_event.is_some(), "RuleEvent should be emitted");
     if let Some(RuleEvent::OutOfBounds {
         oob_type,
-        last_touch_team,
+        last_touch,
     }) = rule_event
     {
         assert!(
@@ -78,9 +78,13 @@ fn test_out_of_bounds_detection_throw_in() {
             "Ball at y=0 (touchline) should be ThrowIn"
         );
         assert_eq!(
-            *last_touch_team,
-            Some(TeamId(0)),
-            "OOB event payload must capture the last toucher's team"
+            *last_touch,
+            Some(LastTouch {
+                team: TeamId(0),
+                player: Some(toucher),
+                kind: TouchKind::Play,
+            }),
+            "OOB event payload must capture the full last-touch record"
         );
     } else {
         panic!("expected RuleEvent::OutOfBounds, got {rule_event:?}");

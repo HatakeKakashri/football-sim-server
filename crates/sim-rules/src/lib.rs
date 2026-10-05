@@ -22,6 +22,8 @@ mod referee_tests;
 #[cfg(test)]
 mod tests;
 pub(crate) mod touch;
+#[cfg(test)]
+mod touch_registration_tests;
 
 pub use clock::{added_time_calculation_system, match_duration_enforcement_system};
 pub use goals::{goal_detection_system, restart_system};

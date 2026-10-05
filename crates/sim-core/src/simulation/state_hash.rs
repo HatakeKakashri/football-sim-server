@@ -175,6 +175,24 @@ impl Simulation {
                 mix(&mut h, u64::MAX);
                 mix(&mut h, u64::MAX);
             }
+            // M10: `last_deliberate_play` is reserved for Law 11's
+            // deliberate-play wording. Always `None` in this plan;
+            // mixed here (same shape as `last_touch` above: player
+            // entity + kind discriminant, `team` deferred) so future
+            // deflections can write to it without changing the hash
+            // shape.
+            if let Some(touch) = b.last_deliberate_play.as_ref() {
+                mix(
+                    &mut h,
+                    touch
+                        .player
+                        .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
+                );
+                mix(&mut h, touch_kind_discriminant(touch.kind));
+            } else {
+                mix(&mut h, u64::MAX);
+                mix(&mut h, u64::MAX);
+            }
         }
 
         // Mix the original seed so same-seed simulations hash identically.

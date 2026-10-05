@@ -1,7 +1,8 @@
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_components::{
-    BallState, CardColor, ManagerCommand, Match, MatchClock, Player, Position, Role, TeamId,
+    BallState, CardColor, LastTouch, ManagerCommand, Match, MatchClock, Player, Position, Role,
+    TeamId,
 };
 use sim_core::Simulation;
 
@@ -155,6 +156,8 @@ pub struct BallSnapshot {
     pub spin: f32,
     pub state: BallState,
     pub possessor: Option<u64>,
+    pub last_touch: Option<LastTouch>,
+    pub last_deliberate_play: Option<LastTouch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -394,6 +397,8 @@ mod tests {
             spin: 0.5,
             state: BallState::Free,
             possessor: Some(42),
+            last_touch: None,
+            last_deliberate_play: None,
         };
 
         let encoded = bincode::serialize(&snapshot).unwrap();

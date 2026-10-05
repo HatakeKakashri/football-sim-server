@@ -24,6 +24,7 @@ fn test_possession_resolution() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+        last_deliberate_play: None,
     });
     world
         .entity_mut(ball_entity)
@@ -72,6 +73,7 @@ fn test_possession_resolved_to_real_entity() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+        last_deliberate_play: None,
     });
     world
         .entity_mut(ball_entity)
@@ -112,7 +114,8 @@ fn test_possession_resolved_to_real_entity() {
     assert_eq!(
         ball.last_touch,
         Some(sim_components::LastTouch {
-            entity: player_entity,
+            team: TeamId(0),
+            player: Some(player_entity),
             kind: sim_components::TouchKind::Play,
         })
     );
@@ -132,6 +135,7 @@ fn test_possession_cleared_when_ball_free() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+        last_deliberate_play: None,
     });
     world
         .entity_mut(ball_entity)
@@ -185,6 +189,7 @@ fn test_possession_change_registers_play_touch() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+        last_deliberate_play: None,
     });
     world
         .entity_mut(ball_entity)
@@ -216,7 +221,8 @@ fn test_possession_change_registers_play_touch() {
     assert_eq!(
         ball.last_touch,
         Some(sim_components::LastTouch {
-            entity: player_a,
+            team: TeamId(0),
+            player: Some(player_a),
             kind: sim_components::TouchKind::Play,
         }),
         "Player A (gains possession) should be recorded as last toucher with Play kind"
@@ -272,7 +278,8 @@ fn test_possession_change_registers_play_touch() {
     assert_eq!(
         ball.last_touch,
         Some(sim_components::LastTouch {
-            entity: player_b,
+            team: TeamId(0),
+            player: Some(player_b),
             kind: sim_components::TouchKind::Play,
         }),
         "After pass, last_touch should be player B with Play kind"
@@ -299,10 +306,14 @@ fn test_interception_registers_play_touch_on_new_possessor() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(sim_components::LastTouch {
-            entity: Entity::PLACEHOLDER, // placeholder for A; entity
-            // identity does not matter for the assertion
+            // Placeholder pre-seed for "A just kicked it": the test
+            // does not care about the kicker's identity or team —
+            // only that B's acquisition overwrites the record.
+            team: TeamId(0),
+            player: None,
             kind: sim_components::TouchKind::Play,
         }),
+        last_deliberate_play: None,
     });
     world
         .entity_mut(ball_entity)
@@ -337,7 +348,8 @@ fn test_interception_registers_play_touch_on_new_possessor() {
     assert_eq!(
         ball.last_touch,
         Some(sim_components::LastTouch {
-            entity: player_b,
+            team: TeamId(1),
+            player: Some(player_b),
             kind: sim_components::TouchKind::Play,
         }),
         "interception must register B as a Play touch, not leave the \

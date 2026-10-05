@@ -25,6 +25,7 @@ fn test_perception_records_real_entity_ids() {
         state: sim_components::BallState::Free,
         possessor: None,
         last_touch: None,
+        last_deliberate_play: None,
         kick_velocity: None,
     });
     // Phase F follow-up: MatchClock is a Resource (spec §3).

@@ -118,7 +118,9 @@ fn test_offside_ignores_restart_touch() {
     // Ball at (60, 34).
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
-    world.entity_mut(ball_entity).insert(Position(Vec2::new(60.0, 34.0)));
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(Vec2::new(60.0, 34.0)));
     world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
     // Taker entity — exists only so last_touch has a real reference.
@@ -138,9 +140,11 @@ fn test_offside_ignores_restart_touch() {
         state: sim_components::BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch {
-            entity: taker,
+            team: TeamId(0),
+            player: Some(taker),
             kind: TouchKind::Restart,
         }),
+        last_deliberate_play: None,
     };
     world.insert_resource(ball);
 
@@ -148,16 +152,16 @@ fn test_offside_ignores_restart_touch() {
     // second-last, which is roughly x=80 — `attacking_direction`
     // for team 0 attacks +x so `closer_than` is `x > ref`).
     let def1 = world.spawn(()).id();
-    world.entity_mut(def1).insert(Position(Vec2::new(85.0, 34.0)));
     world
         .entity_mut(def1)
-        .insert(TeamIdComponent(TeamId(1)));
+        .insert(Position(Vec2::new(85.0, 34.0)));
+    world.entity_mut(def1).insert(TeamIdComponent(TeamId(1)));
 
     let def2 = world.spawn(()).id();
-    world.entity_mut(def2).insert(Position(Vec2::new(80.0, 34.0)));
     world
         .entity_mut(def2)
-        .insert(TeamIdComponent(TeamId(1)));
+        .insert(Position(Vec2::new(80.0, 34.0)));
+    world.entity_mut(def2).insert(TeamIdComponent(TeamId(1)));
 
     // Attacker deep in the opponent's half (x=95), well beyond
     // ball (x=60) and the second-last defender (x=80). If

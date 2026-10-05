@@ -49,7 +49,8 @@ fn test_goal_scored_home_team() {
     world.entity_mut(ball_entity).insert(BallMarker);
     let mut b = ball_fixture(Vec2::new(105.5, 34.0), BallState::Free);
     b.last_touch = Some(LastTouch {
-        entity: toucher,
+        team: sim_components::TeamId(1),
+        player: Some(toucher),
         kind: TouchKind::Play,
     });
     world.insert_resource(b);
@@ -131,7 +132,8 @@ fn test_goal_scored_away_team() {
     world.entity_mut(ball_entity).insert(BallMarker);
     let mut b = ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free);
     b.last_touch = Some(LastTouch {
-        entity: toucher,
+        team: sim_components::TeamId(0),
+        player: Some(toucher),
         kind: TouchKind::Play,
     });
     world.insert_resource(b);
@@ -267,7 +269,8 @@ fn test_kickoff_restart_registers_restart_touch() {
     assert_eq!(
         ball.last_touch,
         Some(LastTouch {
-            entity: kicker,
+            team: sim_components::TeamId(1),
+            player: Some(kicker),
             kind: TouchKind::Restart,
         }),
         "delayed kickoff restart must register the conceded-team \

@@ -38,6 +38,7 @@ pub fn ball_fixture(_pos: Vec2, state: BallState) -> Ball {
         state,
         possessor: None,
         last_touch: None,
+        last_deliberate_play: None,
     }
 }
 
@@ -57,12 +58,14 @@ fn test_kickoff_restart_places_ball_at_center() {
         seed: 12345,
     });
     let match_entity = world.spawn(()).id();
-    world.entity_mut(match_entity).insert(sim_components::MatchClock {
-        elapsed_ticks: 30 * 60,
-        half: 1,
-        added_time_ticks: 0,
-        is_running: true,
-    });
+    world
+        .entity_mut(match_entity)
+        .insert(sim_components::MatchClock {
+            elapsed_ticks: 30 * 60,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
+        });
 
     // Create ball entity in Dead state (after a goal)
     let ball_entity = world.spawn(()).id();
@@ -80,7 +83,7 @@ fn test_kickoff_restart_places_ball_at_center() {
     // Set up pending restart for kickoff
     world.insert_resource(PendingRestart {
         event: Some(RuleEvent::KickoffRestart),
-        restart_tick: 60, // Restart at tick 60
+        restart_tick: 60,  // Restart at tick 60
         scorer_team: None, // Test does not exercise scorer → kickoff taker
     });
 
@@ -95,7 +98,13 @@ fn test_kickoff_restart_places_ball_at_center() {
     let pos = world.entity(ball_entity).get::<Position>().unwrap();
     let vel = world.entity(ball_entity).get::<Velocity>().unwrap();
     assert_eq!(ball.state, BallState::Free);
-    assert_eq!(pos.0, Vec2::new(crate::constants::CENTER_SPOT.0, crate::constants::CENTER_SPOT.1));
+    assert_eq!(
+        pos.0,
+        Vec2::new(
+            crate::constants::CENTER_SPOT.0,
+            crate::constants::CENTER_SPOT.1
+        )
+    );
     assert_eq!(vel.0, Vec2::zero());
     // Regression: a pending kick velocity staged earlier in the tick must
     // not survive the restart — otherwise the next Physics-set tick would

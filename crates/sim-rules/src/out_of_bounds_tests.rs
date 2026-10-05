@@ -12,7 +12,7 @@ use sim_math::Vec2;
 use crate::tests::ball_fixture;
 use crate::{CurrentTick, out_of_bounds_system};
 
-/// Build a Ball resource with `last_touch = Some(LastTouch{toucher, Play})`.
+/// Build a Ball resource with `last_touch = Some(LastTouch{team, toucher, Play})`.
 /// Use this in OOB tests so the debug-build `last_touch.is_some()` assertion
 /// in `out_of_bounds_system` doesn't fire — the wiring is correct
 /// (kickoff / kick / restart placement always sets it before OOB can fire),
@@ -21,12 +21,10 @@ use crate::{CurrentTick, out_of_bounds_system};
 fn ball_fixture_with_touch(toucher: bevy_ecs::prelude::Entity, team: TeamId) -> Ball {
     let mut b = ball_fixture(Vec2::zero(), BallState::Free);
     b.last_touch = Some(LastTouch {
-        entity: toucher,
+        team,
+        player: Some(toucher),
         kind: TouchKind::Play,
     });
-    // Stash the team on a side channel so the test can verify it.
-    // We don't use this; the assertion just verifies the wiring.
-    let _ = team;
     b
 }
 

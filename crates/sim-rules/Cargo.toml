@@ -10,5 +10,10 @@ sim-telemetry = { path = "../sim-telemetry" }
 bevy_ecs.workspace = true
 tracing.workspace = true
 
+[dev-dependencies]
+sim-ai-player = { path = "../sim-ai-player" }
+sim-core = { path = "../sim-core" }
+smallvec.workspace = true
+
 [lints]
 workspace = true

@@ -371,7 +371,7 @@ mod tests {
             spin: 0.0,
             state: sim_components::BallState::Free,
             possessor: None,
-            last_touched_by: None,
+            last_touch: None,
             kick_velocity: None,
         });
         world

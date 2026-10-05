@@ -1,7 +1,7 @@
 //! The `simulate` subcommand, extracted from `main.rs` (coding standards §7).
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::time::Instant;
 
 use sim_core::Simulation;
@@ -18,7 +18,7 @@ pub struct SimulateOptions {
     pub ticks: u64,
     /// Run until `FullTime`.
     pub full_match: bool,
-    /// Optional final-state JSON path.
+    /// Optional JSONL output path (one `MatchSnapshot` per line, per tick).
     pub output: Option<String>,
     /// Trace flags.
     pub trace: TraceOptions,
@@ -69,9 +69,21 @@ pub fn run_simulate(
     tracing::info!("Running simulation with seed {seed}...");
     let start = Instant::now();
 
+    // Set up JSONL writer if output path is provided.
+    let mut writer: Option<BufWriter<File>> = options
+        .output
+        .as_ref()
+        .map(|path| Ok::<_, Box<dyn std::error::Error>>(BufWriter::new(File::create(path)?)))
+        .transpose()?;
+
     if options.full_match {
         loop {
             sim.tick();
+            if let Some(w) = &mut writer {
+                let state = sim.get_state()?;
+                serde_json::to_writer(&mut *w, &state)?;
+                w.write_all(b"\n")?;
+            }
             let m_state = sim.world().resource::<sim_components::Match>().state;
             if m_state == sim_components::MatchState::FullTime {
                 tracing::info!("[Tick {:06}] FullTime reached", sim.current_tick());
@@ -86,6 +98,11 @@ pub fn run_simulate(
     } else {
         for _ in 0..options.ticks {
             sim.tick();
+            if let Some(w) = &mut writer {
+                let state = sim.get_state()?;
+                serde_json::to_writer(&mut *w, &state)?;
+                w.write_all(b"\n")?;
+            }
             if sim.world().resource::<sim_components::Match>().state
                 == sim_components::MatchState::FullTime
             {
@@ -113,12 +130,12 @@ pub fn run_simulate(
         ticks_per_sec
     );
 
-    if let Some(output_path) = &options.output {
-        let state = sim.get_state()?;
-        let json = serde_json::to_string_pretty(&state)?;
-        let mut file = File::create(output_path)?;
-        file.write_all(json.as_bytes())?;
-        tracing::info!("Final state written to {output_path}");
+    // Flush and close the JSONL file.
+    if let Some(mut w) = writer {
+        w.flush()?;
+        if let Some(path) = &options.output {
+            tracing::info!("JSONL output written to {path}");
+        }
     }
 
     // Phase 0 CLI contract: a deterministic run is reproducible iff

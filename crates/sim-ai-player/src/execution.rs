@@ -205,6 +205,15 @@ pub fn kick_execution_system(
     // don't touch `ball.kick_velocity` or clear `ball.possessor`.
     if kick_dir.length() > 0.01 {
         ball.kick_velocity = Some(kick_dir * kick_speed);
+        // Register the kick as an explicit `Play` touch (Law 11 input
+        // for offside judgement). The same entity is recorded as both
+        // the kicker (during this tick) and the last-toucher (after
+        // this tick), which keeps offside sampling coherent with the
+        // physical act of striking the ball.
+        ball.last_touch = Some(sim_components::LastTouch {
+            entity: possessor,
+            kind: sim_components::TouchKind::Play,
+        });
         ball.possessor = None;
         // Emit a `pass` flow event when telemetry is on and this was a
         // pass. Shots / tackles don't carry identity of a "receiver", so
@@ -233,8 +242,8 @@ pub fn kick_execution_system(
 mod tests {
     use super::*;
     use sim_components::{
-        Ball, BallMarker, MatchClock, NearbyEntity, PerceptionSnapshot, PitchBounds, Player, Position,
-        Velocity,
+        Ball, BallMarker, LastTouch, MatchClock, NearbyEntity, PerceptionSnapshot, PitchBounds,
+        Player, Position, TouchKind, Velocity,
     };
     use sim_telemetry::{TelemetryConfig, capture_trace};
     use smallvec::smallvec;
@@ -288,7 +297,7 @@ mod tests {
         world.insert_resource(Ball {
             state: sim_components::BallState::Possessed,
             possessor: Some(kicker),
-            last_touched_by: None,
+            last_touch: None,
             kick_velocity: None,
             spin: 0.0,
         });
@@ -358,7 +367,7 @@ mod tests {
         world.insert_resource(Ball {
             state: sim_components::BallState::Possessed,
             possessor: Some(kicker),
-            last_touched_by: None,
+            last_touch: None,
             kick_velocity: None,
             spin: 0.0,
         });
@@ -372,6 +381,72 @@ mod tests {
         assert!(
             events.is_empty(),
             "no telemetry → no trace events, got {events:?}"
+        );
+    }
+
+    /// `kick_execution_system` must register `Ball.last_touch = Some
+    /// (LastTouch{kicker, Play})` alongside clearing the possessor when
+    /// the kick is non-trivial (`kick_dir.length() > 0.01`).
+    #[test]
+    fn kick_execution_registers_play_touch() {
+        let mut world = World::new();
+
+        // Kicker at (50, 34), facing a teammate 15 m away.
+        let kicker = world
+            .spawn((
+                Player {
+                    team_id: sim_components::TeamId(0),
+                    intent: Some(Intent::Action(ActionIntent::PassTo)),
+                },
+                Position(pos(50.0, 34.0)),
+                Velocity(pos(0.0, 0.0)),
+                PerceptionSnapshot {
+                    self_position: pos(50.0, 34.0),
+                    nearby_teammates: smallvec![NearbyEntity {
+                        entity: Entity::from_raw(42),
+                        distance: 15.0,
+                        relative_position: pos(15.0, 0.0),
+                    }],
+                    nearby_opponents: smallvec![],
+                    ball_position: pos(52.5, 34.0),
+                    ball_state: sim_components::BallState::Possessed,
+                    goal_position: pos(105.0, 34.0),
+                    pitch_bounds: PitchBounds {
+                        distance_to_left: 50.0,
+                        distance_to_right: 55.0,
+                        distance_to_top: 34.0,
+                        distance_to_bottom: 34.0,
+                    },
+                },
+            ))
+            .id();
+        world.spawn(BallMarker);
+
+        world.insert_resource(Ball {
+            state: sim_components::BallState::Possessed,
+            possessor: Some(kicker),
+            // Pre-condition: last_touch is None (ball just gained possession).
+            last_touch: None,
+            kick_velocity: None,
+            spin: 0.0,
+        });
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(kick_execution_system);
+        schedule.run(&mut world);
+
+        let ball = world.resource::<Ball>();
+        assert_eq!(
+            ball.last_touch,
+            Some(LastTouch {
+                entity: kicker,
+                kind: TouchKind::Play,
+            }),
+            "kick must register the kicker as a Play touch"
+        );
+        assert_eq!(
+            ball.possessor, None,
+            "kick must clear the possessor so possession can be re-resolved"
         );
     }
 }

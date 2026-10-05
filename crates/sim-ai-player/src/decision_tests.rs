@@ -1,14 +1,16 @@
 //! Integration tests for the decision cadence systems. Compiled only
 //! under `cfg(test)`.
 
+use crate::tests::run_one_cadence_window;
 use crate::{
     Consideration, DecisionEvaluationCount, PlayerAction, UtilityBrain,
     consideration_scoring_system, player_decision_system,
 };
-use crate::tests::run_one_cadence_window;
 
 use bevy_ecs::prelude::*;
-use sim_components::{Player, Position, Role, RoleComponent, Skill, Stamina, TeamId, TeamIdComponent, Velocity};
+use sim_components::{
+    Player, Position, Role, RoleComponent, Skill, Stamina, TeamId, TeamIdComponent, Velocity,
+};
 use sim_math::Vec2;
 
 #[test]
@@ -375,9 +377,7 @@ fn test_decision_cadence_does_not_re_evaluate_every_tick() {
         .insert(TeamIdComponent(TeamId(0)));
     let brain = UtilityBrain {
         actions: vec![PlayerAction {
-            intent: sim_components::Intent::Movement(
-                sim_components::MovementIntent::HoldPosition,
-            ),
+            intent: sim_components::Intent::Movement(sim_components::MovementIntent::HoldPosition),
             considerations: vec![Consideration::FormationDiscipline {
                 weight: 1.0,
                 curve: TestResponseCurve::Linear { min: 0.0, max: 1.0 },

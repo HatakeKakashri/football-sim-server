@@ -55,7 +55,8 @@ pub fn run_simulate(
             // Stamp seed + interval + full range into the trace header so
             // Perfetto reads microseconds as microseconds and a developer
             // opening the file 6 months from now knows what they ran.
-            let metadata = TraceMetadata::new(seed, plan.config.interval_ticks(), plan.config.full_range());
+            let metadata =
+                TraceMetadata::new(seed, plan.config.interval_ticks(), plan.config.full_range());
             sim_telemetry::install_with_metadata(&plan.path, Some(metadata))
         })
         .transpose()

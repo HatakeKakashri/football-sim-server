@@ -304,7 +304,8 @@ impl Consideration {
                         .map(|t| t.distance)
                         .sum::<f32>()
                         / count_to_f32(ctx.perception.nearby_teammates.len());
-                    tactical_thresholds::DISTANCE_TO_TARGET_CAP_M - avg.min(tactical_thresholds::DISTANCE_TO_TARGET_CAP_M)
+                    tactical_thresholds::DISTANCE_TO_TARGET_CAP_M
+                        - avg.min(tactical_thresholds::DISTANCE_TO_TARGET_CAP_M)
                 }
             }
             Self::TeammateSpace { .. } => {
@@ -323,10 +324,11 @@ impl Consideration {
                     - space_m.min(tactical_thresholds::TEAMMATE_SPACE_CAP_M)
             }
             Self::DistanceToGoal { .. } => {
-                tactical_thresholds::DISTANCE_TO_GOAL_CAP_M - ctx
-                    .perception
-                    .self_position
-                    .distance(ctx.perception.goal_position)
+                tactical_thresholds::DISTANCE_TO_GOAL_CAP_M
+                    - ctx
+                        .perception
+                        .self_position
+                        .distance(ctx.perception.goal_position)
             }
             Self::GoalAngle { .. } => {
                 let to_ball = ctx.perception.ball_position - ctx.perception.self_position;
@@ -347,23 +349,27 @@ impl Consideration {
                     .count(),
             ),
             Self::DistanceToOpponent { .. } => {
-                tactical_thresholds::DEFENDER_PRESSURE_RADIUS_M - ctx
-                    .perception
-                    .nearby_opponents
-                    .iter()
-                    .map(|o| o.distance)
-                    .fold(f32::INFINITY, f32::min)
-                    .min(tactical_thresholds::DEFENDER_PRESSURE_RADIUS_M)
+                tactical_thresholds::DEFENDER_PRESSURE_RADIUS_M
+                    - ctx
+                        .perception
+                        .nearby_opponents
+                        .iter()
+                        .map(|o| o.distance)
+                        .fold(f32::INFINITY, f32::min)
+                        .min(tactical_thresholds::DEFENDER_PRESSURE_RADIUS_M)
             }
-            Self::SkillDiff { .. } => (ctx.skill - tactical_thresholds::SKILL_BASELINE).clamp(-1.0, 1.0),
+            Self::SkillDiff { .. } => {
+                (ctx.skill - tactical_thresholds::SKILL_BASELINE).clamp(-1.0, 1.0)
+            }
             Self::DistanceToMarked { .. } => {
-                tactical_thresholds::DISTANCE_TO_MARKED_CAP_M - ctx
-                    .perception
-                    .nearby_opponents
-                    .iter()
-                    .map(|o| o.distance)
-                    .fold(f32::INFINITY, f32::min)
-                    .min(tactical_thresholds::DISTANCE_TO_MARKED_CAP_M)
+                tactical_thresholds::DISTANCE_TO_MARKED_CAP_M
+                    - ctx
+                        .perception
+                        .nearby_opponents
+                        .iter()
+                        .map(|o| o.distance)
+                        .fold(f32::INFINITY, f32::min)
+                        .min(tactical_thresholds::DISTANCE_TO_MARKED_CAP_M)
             }
             Self::DefensivePosition { .. } => {
                 let own_goal_x = 0.0_f32;
@@ -376,13 +382,14 @@ impl Consideration {
                 }
             }
             Self::DistanceToPress { .. } => {
-                tactical_thresholds::DISTANCE_TO_PRESS_CAP_M - ctx
-                    .perception
-                    .nearby_opponents
-                    .iter()
-                    .map(|o| o.distance)
-                    .fold(f32::INFINITY, f32::min)
-                    .min(tactical_thresholds::DISTANCE_TO_PRESS_CAP_M)
+                tactical_thresholds::DISTANCE_TO_PRESS_CAP_M
+                    - ctx
+                        .perception
+                        .nearby_opponents
+                        .iter()
+                        .map(|o| o.distance)
+                        .fold(f32::INFINITY, f32::min)
+                        .min(tactical_thresholds::DISTANCE_TO_PRESS_CAP_M)
             }
             Self::SpaceAhead { .. } => {
                 let forward = ctx.perception.ball_position.x > ctx.perception.self_position.x;
@@ -404,7 +411,8 @@ impl Consideration {
                 } else {
                     tactical_thresholds::SPACE_AHEAD_CAP_M
                 };
-                tactical_thresholds::SPACE_AHEAD_CAP_M - d.min(tactical_thresholds::SPACE_AHEAD_CAP_M)
+                tactical_thresholds::SPACE_AHEAD_CAP_M
+                    - d.min(tactical_thresholds::SPACE_AHEAD_CAP_M)
             }
             Self::TeammateBall { .. } => {
                 let has = ctx.perception.nearby_teammates.iter().any(|t| {

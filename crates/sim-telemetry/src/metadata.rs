@@ -24,11 +24,7 @@ impl TraceMetadata {
     /// Construct a metadata record. `interval_ticks` must be `> 0`; the caller
     /// (`TelemetryConfig`) has already enforced that, so we trust it.
     #[must_use]
-    pub const fn new(
-        seed: u64,
-        interval_ticks: u64,
-        full_range: Option<(u64, u64)>,
-    ) -> Self {
+    pub const fn new(seed: u64, interval_ticks: u64, full_range: Option<(u64, u64)>) -> Self {
         Self {
             seed,
             interval_ticks,

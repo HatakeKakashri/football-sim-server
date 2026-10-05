@@ -78,23 +78,20 @@ impl Simulation {
         }
 
         // Get clock view from MatchClock resource (source of truth per spec §3)
-        let clock_view = self
-            .world
-            .get_resource::<MatchClock>()
-            .map_or(
-                crate::ClockView {
-                    elapsed_ticks: 0,
-                    half: 1,
-                    added_time_ticks: 0,
-                    is_running: false,
-                },
-                |clock| crate::ClockView {
-                    elapsed_ticks: clock.elapsed_ticks,
-                    half: clock.half,
-                    added_time_ticks: clock.added_time_ticks,
-                    is_running: clock.is_running,
-                },
-            );
+        let clock_view = self.world.get_resource::<MatchClock>().map_or(
+            crate::ClockView {
+                elapsed_ticks: 0,
+                half: 1,
+                added_time_ticks: 0,
+                is_running: false,
+            },
+            |clock| crate::ClockView {
+                elapsed_ticks: clock.elapsed_ticks,
+                half: clock.half,
+                added_time_ticks: clock.added_time_ticks,
+                is_running: clock.is_running,
+            },
+        );
 
         Ok(crate::MatchSnapshot {
             tick: self.tick,

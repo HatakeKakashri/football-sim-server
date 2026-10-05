@@ -52,10 +52,7 @@ pub fn run_filter(
     options: &FilterOptions,
     out: &mut dyn Write,
 ) -> io::Result<()> {
-    let filtered: Vec<&Value> = events
-        .iter()
-        .filter(|e| keep_event(e, options))
-        .collect();
+    let filtered: Vec<&Value> = events.iter().filter(|e| keep_event(e, options)).collect();
     // Write the filtered array compactly: `[` ... `]` with one event per line.
     // Perfetto doesn't care about whitespace inside the array.
     let mut buf = Vec::with_capacity(filtered.len() * 100);
@@ -81,13 +78,10 @@ pub fn run_filter(
 ///
 /// Returns an I/O error if `path` cannot be read, or a JSON parse error if
 /// the file is not a well-formed Chrome trace array.
-pub fn filter_file(
-    path: &Path,
-    options: &FilterOptions,
-) -> io::Result<Vec<Value>> {
+pub fn filter_file(path: &Path, options: &FilterOptions) -> io::Result<Vec<Value>> {
     let text = fs::read_to_string(path)?;
-    let events: Vec<Value> = serde_json::from_str(&text)
-        .map_err(|e| io::Error::other(format!("trace JSON: {e}")))?;
+    let events: Vec<Value> =
+        serde_json::from_str(&text).map_err(|e| io::Error::other(format!("trace JSON: {e}")))?;
     let kept: Vec<Value> = events
         .into_iter()
         .filter(|e| keep_event(&e.clone(), options))
@@ -124,9 +118,7 @@ fn keep_event(event: &Value, options: &FilterOptions) -> bool {
     }
     // Keep process / thread name metadata so the filtered file's events
     // can still resolve their `pid`/`tid` to a human-readable name.
-    if event["ph"] == "M"
-        && (event["name"] == "process_name" || event["name"] == "thread_name")
-    {
+    if event["ph"] == "M" && (event["name"] == "process_name" || event["name"] == "thread_name") {
         return true;
     }
 
@@ -158,7 +150,8 @@ fn keep_event(event: &Value, options: &FilterOptions) -> bool {
 
     // Process filter: match against either the metadata name or the pid.
     if let Some(proc_name) = &options.process {
-        let name_match = event.get("args")
+        let name_match = event
+            .get("args")
             .and_then(|a| a.get("name"))
             .and_then(Value::as_str)
             .is_some_and(|n| n == proc_name);
@@ -231,7 +224,10 @@ mod tests {
         let kept: Vec<_> = events.iter().filter(|e| keep_event(e, &opts)).collect();
         // Header + Home 7's process_name + both Home 7 counters.
         assert_eq!(kept.len(), 4);
-        assert!(kept.iter().any(|e| e["name"] == "process_name" && e["pid"] == 1007));
+        assert!(
+            kept.iter()
+                .any(|e| e["name"] == "process_name" && e["pid"] == 1007)
+        );
         assert!(!kept.iter().any(|e| e["pid"] == 1008));
         assert!(!kept.iter().any(|e| e["pid"] == 4));
     }
@@ -246,10 +242,18 @@ mod tests {
         let events = make_events();
         let kept: Vec<_> = events.iter().filter(|e| keep_event(e, &opts)).collect();
         // Header + process_name + the tick-60 counters are out, tick-120 is in.
-        assert!(kept.iter().all(|e| e["name"] == "process_labels"
-            || e["name"] == "process_name"
-            || e["ts"].as_u64().is_none_or(|ts| (61..=119).contains(&tick_of(ts)))));
-        assert!(!kept.iter().any(|e| e["name"] == "x" && e["ts"] == 60 * 1_000_000 / 60));
+        assert!(kept.iter().all(|e| {
+            e["name"] == "process_labels"
+                || e["name"] == "process_name"
+                || e["ts"]
+                    .as_u64()
+                    .is_none_or(|ts| (61..=119).contains(&tick_of(ts)))
+        }));
+        assert!(
+            !kept
+                .iter()
+                .any(|e| e["name"] == "x" && e["ts"] == 60 * 1_000_000 / 60)
+        );
     }
 
     #[test]

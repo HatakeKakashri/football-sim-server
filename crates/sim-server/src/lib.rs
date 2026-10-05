@@ -323,7 +323,9 @@ impl ServerSimulation {
 
     pub fn tick(&mut self) {
         // Apply queued commands at tick boundaries
-        let commands = self.command_queue.apply_at_tick(self.simulation.current_tick());
+        let commands = self
+            .command_queue
+            .apply_at_tick(self.simulation.current_tick());
         for command in commands {
             // Apply command (validation already done when queueing)
             self.apply_command_immediately(command);
@@ -348,10 +350,7 @@ impl ServerSimulation {
     /// Returns a [`CommandError::InvalidForState`] if the command is not
     /// legal in the current match state (e.g. formation/mentality/tactic
     /// changes during `PreMatch` / `HalfTime` / `FullTime`).
-    pub fn apply_command(
-        &mut self,
-        command: ManagerCommand,
-    ) -> Result<(), CommandError> {
+    pub fn apply_command(&mut self, command: ManagerCommand) -> Result<(), CommandError> {
         // Phase F §F5: validation lives in sim-core; sim-server delegates
         // so the rules are defined in exactly one place. The local wrapper
         // only handles command queueing for next-tick dispatch. The apply
@@ -504,10 +503,22 @@ mod tests {
     fn apply_command_targets_home_team_only() {
         let mut server = ServerSimulation::new(12345);
         // Move to InPlay so the command validates.
-        server.simulation.world_mut().resource_mut::<sim_components::Match>().state = sim_components::MatchState::InPlay;
+        server
+            .simulation
+            .world_mut()
+            .resource_mut::<sim_components::Match>()
+            .state = sim_components::MatchState::InPlay;
 
-        let home = server.simulation.world().resource::<sim_components::Match>().home_team;
-        let away = server.simulation.world().resource::<sim_components::Match>().away_team;
+        let home = server
+            .simulation
+            .world()
+            .resource::<sim_components::Match>()
+            .home_team;
+        let away = server
+            .simulation
+            .world()
+            .resource::<sim_components::Match>()
+            .away_team;
 
         // Enqueue directly at the current tick and tick once. This exercises
         // `tick()`'s drain-and-apply path (`apply_command_immediately` →
@@ -519,11 +530,31 @@ mod tests {
         );
         server.tick();
 
-        let home_formation = server.simulation.world().entity(home).get::<sim_components::Team>().unwrap().formation;
-        let away_formation = server.simulation.world().entity(away).get::<sim_components::Team>().unwrap().formation;
+        let home_formation = server
+            .simulation
+            .world()
+            .entity(home)
+            .get::<sim_components::Team>()
+            .unwrap()
+            .formation;
+        let away_formation = server
+            .simulation
+            .world()
+            .entity(away)
+            .get::<sim_components::Team>()
+            .unwrap()
+            .formation;
 
-        assert_eq!(home_formation, sim_components::Formation::FourThreeThree, "home team should have new formation");
-        assert_eq!(away_formation, sim_components::Formation::FourFourTwo, "away team should still have default formation");
+        assert_eq!(
+            home_formation,
+            sim_components::Formation::FourThreeThree,
+            "home team should have new formation"
+        );
+        assert_eq!(
+            away_formation,
+            sim_components::Formation::FourFourTwo,
+            "away team should still have default formation"
+        );
     }
 
     #[test]

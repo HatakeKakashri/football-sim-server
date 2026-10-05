@@ -69,12 +69,8 @@ impl Intent {
                 // opponent is visible, steer to the reflection of the player
                 // across the opponent (mirrors `player_pos +
                 // (player_pos - opp.relative_position)`).
-                closest_by_distance(&perception.nearby_opponents).map(|worst| {
-                    (
-                        player_pos + (player_pos - worst.relative_position),
-                        5.0,
-                    )
-                })
+                closest_by_distance(&perception.nearby_opponents)
+                    .map(|worst| (player_pos + (player_pos - worst.relative_position), 5.0))
             }
             Self::Movement(MovementIntent::TrackBack) => Some((Vec2::new(0.0, 34.0), 6.0)),
             Self::Action(ActionIntent::PassTo) => {
@@ -229,10 +225,7 @@ mod tests {
         let p = perception_with_opponents(player_pos, ball_pos, opp_rel);
         let intent = Intent::Movement(MovementIntent::SupportRun);
         // player_pos + (player_pos - opp_rel) = (10, 20) + (8, 20) = (18, 40)
-        assert_eq!(
-            intent.steer_target(&p),
-            Some((Vec2::new(18.0, 40.0), 5.0))
-        );
+        assert_eq!(intent.steer_target(&p), Some((Vec2::new(18.0, 40.0), 5.0)));
 
         // TrackBack: hardcoded midline (0.0, 34.0), speed = 6.0
         let p = empty_perception(player_pos, ball_pos);
@@ -248,18 +241,12 @@ mod tests {
         let tm_rel = Vec2::new(5.0, 0.0);
         let p = perception_with_teammate(player_pos, ball_pos, tm_rel);
         let intent = Intent::Action(ActionIntent::PassTo);
-        assert_eq!(
-            intent.steer_target(&p),
-            Some((player_pos + tm_rel, 8.0))
-        );
+        assert_eq!(intent.steer_target(&p), Some((player_pos + tm_rel, 8.0)));
 
         // ShootAtGoal: target = embedded point, speed = 10.0
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Action(ActionIntent::ShootAtGoal(Vec2::new(60.0, 34.0)));
-        assert_eq!(
-            intent.steer_target(&p),
-            Some((Vec2::new(60.0, 34.0), 10.0))
-        );
+        assert_eq!(intent.steer_target(&p), Some((Vec2::new(60.0, 34.0), 10.0)));
 
         // Tackle / Press with no opponent: target = player_pos, speed = 10.0
         let p = empty_perception(player_pos, ball_pos);
@@ -279,10 +266,7 @@ mod tests {
             ActionIntent::Press(entity(99)),
         ] {
             let intent = Intent::Action(variant);
-            assert_eq!(
-                intent.steer_target(&p),
-                Some((player_pos + opp_rel, 10.0))
-            );
+            assert_eq!(intent.steer_target(&p), Some((player_pos + opp_rel, 10.0)));
         }
 
         // MarkOpponent with no opponent: target = player_pos, speed = 4.0
@@ -294,10 +278,7 @@ mod tests {
         let opp_rel = Vec2::new(4.0, 0.0);
         let p = perception_with_opponents(player_pos, ball_pos, opp_rel);
         let intent = Intent::Action(ActionIntent::MarkOpponent(entity(99)));
-        assert_eq!(
-            intent.steer_target(&p),
-            Some((player_pos + opp_rel, 4.0))
-        );
+        assert_eq!(intent.steer_target(&p), Some((player_pos + opp_rel, 4.0)));
     }
 
     /// `kick` should return `Some(direction)` for the kick-bearing variants
@@ -325,10 +306,7 @@ mod tests {
         // ChaseBall: direction = player_vel.normalized()
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Movement(MovementIntent::ChaseBall);
-        assert_eq!(
-            intent.kick(&p, player_vel),
-            Some(player_vel.normalized())
-        );
+        assert_eq!(intent.kick(&p, player_vel), Some(player_vel.normalized()));
 
         // Action: no-kick variant
         let p = empty_perception(player_pos, ball_pos);
@@ -339,12 +317,18 @@ mod tests {
         let p = empty_perception(player_pos, ball_pos);
         let target = Vec2::new(60.0, 34.0);
         let intent = Intent::Action(ActionIntent::ShootAtGoal(target));
-        assert_eq!(intent.kick(&p, player_vel), Some((target - player_pos).normalized()));
+        assert_eq!(
+            intent.kick(&p, player_vel),
+            Some((target - player_pos).normalized())
+        );
 
         // PassTo with no teammate: direction = (ball - self).normalized()
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Action(ActionIntent::PassTo);
-        assert_eq!(intent.kick(&p, player_vel), Some((ball_pos - player_pos).normalized()));
+        assert_eq!(
+            intent.kick(&p, player_vel),
+            Some((ball_pos - player_pos).normalized())
+        );
 
         // PassTo with teammate: direction = (teammate - self).normalized()
         let tm_rel = Vec2::new(5.0, 0.0);

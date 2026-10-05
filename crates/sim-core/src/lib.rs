@@ -64,4 +64,3 @@ pub struct ClockView {
     pub added_time_ticks: u64,
     pub is_running: bool,
 }
-

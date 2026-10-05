@@ -6,7 +6,9 @@ use crate::{
 };
 
 use bevy_ecs::prelude::*;
-use sim_components::{Player, Position, Role, RoleComponent, Skill, Stamina, TeamId, TeamIdComponent, Velocity};
+use sim_components::{
+    Player, Position, Role, RoleComponent, Skill, Stamina, TeamId, TeamIdComponent, Velocity,
+};
 use sim_math::Vec2;
 
 /// Phase D regression: the cadence counter must not fire on ticks that

@@ -58,10 +58,9 @@ pub fn replay_with_ticks(
                 // function returned `Result<(), String>`; the split
                 // removes the error path here since replay's pre-F5 callers
                 // always discarded the result.
-                if let Err(e) = simulation.apply_validated_command(
-                    match_entity,
-                    timed_command.command.clone(),
-                ) {
+                if let Err(e) =
+                    simulation.apply_validated_command(match_entity, timed_command.command.clone())
+                {
                     tracing::warn!("command at tick {tick} failed to apply: {e:?}");
                 }
             }
@@ -343,10 +342,7 @@ mod tests {
             tick: 1000,
             state_hash: 123_456_789,
             ball_position: [52.5, 34.0],
-            player_positions: vec![
-                ([10.0, 20.0], TeamId(0)),
-                ([50.0, 30.0], TeamId(1)),
-            ],
+            player_positions: vec![([10.0, 20.0], TeamId(0)), ([50.0, 30.0], TeamId(1))],
             score: (2, 1),
             clock: MatchClock {
                 elapsed_ticks: 45 * 60 * 60,

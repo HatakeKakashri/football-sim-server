@@ -70,10 +70,7 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
         .filter_map(|e| e["ts"].as_u64())
         .map(|ts| (ts * 60 + 500_000) / 1_000_000)
         .collect();
-    let expected: BTreeSet<u64> = [0_u64, 60, 120]
-        .into_iter()
-        .chain(0..=129_u64)
-        .collect();
+    let expected: BTreeSet<u64> = [0_u64, 60, 120].into_iter().chain(0..=129_u64).collect();
     assert_eq!(ball_ticks, expected);
 
     // FR-007/008: real decisions with considerations and a marked winner.
@@ -141,7 +138,10 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
         .iter()
         .filter(|e| e["ph"] != "M" && e["ts"].is_null())
         .count();
-    assert_eq!(missing_ts, 0, "events without ts will be hidden in Perfetto");
+    assert_eq!(
+        missing_ts, 0,
+        "events without ts will be hidden in Perfetto"
+    );
 }
 
 #[test]

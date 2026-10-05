@@ -497,8 +497,7 @@ mod tests {
         assert_eq!(ends[0]["tid"], 2);
         // Both events share the flow `id` in args so Perfetto can match them.
         assert_eq!(
-            starts[0]["args"]["id"],
-            42_u64,
+            starts[0]["args"]["id"], 42_u64,
             "flow_start args: {}",
             starts[0]["args"]
         );

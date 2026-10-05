@@ -5,18 +5,18 @@
 //! types (`CurrentTick`, `PendingRestart`, `AttackingDirection`).
 
 pub(crate) mod clock;
-pub(crate) mod goals;
-pub(crate) mod out_of_bounds;
-pub(crate) mod possession;
-pub(crate) mod referee;
 #[cfg(test)]
 mod clock_tests;
+pub(crate) mod goals;
 #[cfg(test)]
 mod goals_tests;
+pub(crate) mod out_of_bounds;
 #[cfg(test)]
 mod out_of_bounds_tests;
+pub(crate) mod possession;
 #[cfg(test)]
 mod possession_tests;
+pub(crate) mod referee;
 #[cfg(test)]
 mod referee_tests;
 #[cfg(test)]
@@ -26,9 +26,7 @@ pub use clock::{added_time_calculation_system, match_duration_enforcement_system
 pub use goals::{goal_detection_system, restart_system};
 pub use out_of_bounds::out_of_bounds_system;
 pub use possession::possession_resolution_system;
-pub use referee::{
-    foul_detection_system, minimum_player_count_system, offside_detection_system,
-};
+pub use referee::{foul_detection_system, minimum_player_count_system, offside_detection_system};
 
 use bevy_ecs::prelude::*;
 use sim_components::{RuleEvent, TeamId, TeamIdComponent};
@@ -61,7 +59,7 @@ pub struct CurrentTick(pub u64);
 /// team that *conceded* the goal). `restart_system` resolves the
 /// conceded team as the opposite of `scorer_team`. Only set for
 /// `KickoffRestart` events; `None` for OOB-driven restarts (which
-/// derive the taker team from `RuleEvent::OutOfBounds.last_touch_team`
+/// derive the taker team from `RuleEvent::OutOfBounds.last_touch`
 /// instead).
 #[derive(Resource, Debug, Clone, Default)]
 pub struct PendingRestart {
@@ -113,7 +111,10 @@ pub(crate) const fn team_id_u8(team: &TeamIdComponent) -> u8 {
     team.0.0
 }
 
-pub const fn referee_advantage_system(ball_res: Res<sim_components::Ball>, match_res: Res<sim_components::Match>) {
+pub const fn referee_advantage_system(
+    ball_res: Res<sim_components::Ball>,
+    match_res: Res<sim_components::Match>,
+) {
     // Phase N: real advantage window logic
     let _ = (ball_res, match_res);
 }

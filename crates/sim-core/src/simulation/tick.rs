@@ -2,8 +2,8 @@
 
 use sim_components::MatchClock;
 
-use super::lifecycle_system;
 use super::Simulation;
+use super::lifecycle_system;
 
 impl Simulation {
     /// Advance the simulation by one fixed timestep (1/60 second).

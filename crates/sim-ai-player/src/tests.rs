@@ -33,7 +33,10 @@ fn weight_curve_exhaustive_for_all_variants() {
         curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
     };
     assert_eq!(v.weight(), 0.5);
-    assert!(matches!(v.curve(), ResponseCurve::Linear { min: 0.0, max: 1.0 }));
+    assert!(matches!(
+        v.curve(),
+        ResponseCurve::Linear { min: 0.0, max: 1.0 }
+    ));
     // The exhaustive list is verified at compile-time by the macro
     // itself; this test is the runtime smoke check.
 }
@@ -180,7 +183,10 @@ fn test_stagger_slot_distribution() {
 
     // Generate 22 distinct entity ids (matching a real roster) and
     // verify the slot distribution is roughly uniform.
-    #[allow(clippy::cast_possible_truncation, reason = "DECISION_CADENCE_TICKS is 6; always fits in usize")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "DECISION_CADENCE_TICKS is 6; always fits in usize"
+    )]
     let mut slot_counts = [0u32; DECISION_CADENCE_TICKS as usize];
     for i in 0..22u32 {
         let entity = bevy_ecs::prelude::Entity::from_raw(i);
@@ -200,6 +206,9 @@ fn test_stagger_slot_distribution() {
 
     // Verify all slots are represented (no empty slots with 22 players).
     for (slot, &count) in slot_counts.iter().enumerate() {
-        assert!(count > 0, "slot {slot} is empty; distribution is not uniform");
+        assert!(
+            count > 0,
+            "slot {slot} is empty; distribution is not uniform"
+        );
     }
 }

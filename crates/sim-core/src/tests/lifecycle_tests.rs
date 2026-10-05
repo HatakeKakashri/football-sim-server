@@ -7,8 +7,8 @@
     reason = "tests compare outputs of identical arithmetic against the inputs they were derived from"
 )]
 
-use crate::simulation::lifecycle::HalfTimeEntryTick;
 use crate::Simulation;
+use crate::simulation::lifecycle::HalfTimeEntryTick;
 use sim_components::time;
 use sim_components::{Match, MatchClock, MatchState};
 
@@ -109,7 +109,12 @@ fn test_full_match_reaches_full_time() {
     let me2 = sim2.match_entity();
     for _ in 0..170_000u64 {
         sim2.tick();
-        let c = sim2.world().entity(me2).get::<MatchClock>().cloned().unwrap();
+        let c = sim2
+            .world()
+            .entity(me2)
+            .get::<MatchClock>()
+            .cloned()
+            .unwrap();
         if c.half == 2 && c.elapsed_ticks < 60 {
             observed_low_elapsed_in_half_2 = true;
             break;

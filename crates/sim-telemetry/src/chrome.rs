@@ -164,9 +164,7 @@ impl<W: Write> State<W> {
             // metadata event lands before any process_name.
             result = result
                 .and_then(|()| self.out.write_all(separator.as_bytes()))
-                .and_then(|()| {
-                    serde_json::to_writer(&mut self.out, header).map_err(Into::into)
-                })
+                .and_then(|()| serde_json::to_writer(&mut self.out, header).map_err(Into::into))
                 .and_then(|()| self.out.write_all(b",\n"))
                 .and_then(|()| serde_json::to_writer(&mut self.out, value).map_err(Into::into));
         } else {
@@ -380,13 +378,7 @@ where
         // Flow events have no `name`/`cat` field at the top level by default,
         // but Chrome's spec uses `name` to group them visually in Perfetto.
         // We adopt `"pass"` as the canonical name so flows render grouped.
-        state.event(
-            ph,
-            cat.unwrap_or(&name),
-            at,
-            tick,
-            fields.args,
-        );
+        state.event(ph, cat.unwrap_or(&name), at, tick, fields.args);
     }
 
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
@@ -605,10 +597,7 @@ mod tests {
         events
             .iter()
             .find(|e| {
-                e["ph"] == "M"
-                    && e["name"] == "process_labels"
-                    && e["pid"] == 0
-                    && e["tid"] == 0
+                e["ph"] == "M" && e["name"] == "process_labels" && e["pid"] == 0 && e["tid"] == 0
             })
             .expect("process_labels metadata event present")
     }

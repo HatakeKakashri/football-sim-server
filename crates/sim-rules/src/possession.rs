@@ -1,11 +1,12 @@
 //! Possession resolution.
 //!
 //! `possession_resolution_system` determines which player (if any) has
-//! possession of the ball based on proximity and skill. It also tracks
-//! `Ball.last_touched_by` for offside judgement.
+//! possession of the ball based on proximity and skill, and registers
+//! a `LastTouch { kind: Play }` whenever the possessor changes
+//! (interception / pass-receive).
 
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallMarker, BallState, Player, Position, Skill};
+use sim_components::{Ball, BallMarker, BallState, LastTouch, Player, Position, Skill, TouchKind};
 
 use crate::constants::SKILL_TOLERANCE;
 
@@ -24,9 +25,11 @@ use crate::constants::SKILL_TOLERANCE;
 ///   and `ball.state = BallState::Possessed`.
 /// - When no player is within range: set `ball.possessor = None` and
 ///   `ball.state = BallState::Free`.
-/// - Track `last_touched_by`: any player within 1.0 m of the ball is
-///   considered to have touched it. Updated unconditionally (not gated
-///   on `BallState::Free`) so that the last toucher is always current.
+/// - On possession change, register `ball.last_touch = Some(LastTouch
+///   { entity, kind: Play })` so Law 11 (offside) sees the new
+///   possessor as the most recent "play" touch. Without this,
+///   offside would continue to be evaluated for the previous
+///   kicker's team (Law 11 says it resets on the next play).
 pub fn possession_resolution_system(
     ball_query: Query<&Position, With<BallMarker>>,
     player_query: Query<(Entity, &Player, &Position, &Skill), With<Player>>,
@@ -35,30 +38,6 @@ pub fn possession_resolution_system(
     let Ok(ball_pos) = ball_query.get_single() else {
         return;
     };
-
-    // --- Last-touch tracking (Law 11) ---
-    // Any player within 1.0 m of the ball is considered to have
-    // touched it. We update unconditionally so `last_touched_by`
-    // always reflects the most recent toucher.
-    let mut last_toucher: Option<(Entity, f32)> = None;
-    for (player_entity, _player, player_pos, _skill) in player_query.iter() {
-        let dist = ball_pos.0.distance(player_pos.0);
-        if dist <= 1.0 {
-            match last_toucher {
-                Some((_, best_dist)) => {
-                    if dist < best_dist {
-                        last_toucher = Some((player_entity, dist));
-                    }
-                }
-                None => {
-                    last_toucher = Some((player_entity, dist));
-                }
-            }
-        }
-    }
-    if let Some((toucher, _)) = last_toucher {
-        ball.last_touched_by = Some(toucher);
-    }
 
     // --- Possession resolution ---
     // Only resolve possession when the ball is currently free.
@@ -87,8 +66,16 @@ pub fn possession_resolution_system(
     }
 
     if let Some((entity, _, _)) = closest_player {
+        // Register the new possessor as a Play touch: the previous
+        // proximity-based `last_touched_by` would have lagged or
+        // pointed at the wrong player. Law 11 resets offside at
+        // this moment.
         ball.possessor = Some(entity);
         ball.state = BallState::Possessed;
+        ball.last_touch = Some(LastTouch {
+            entity,
+            kind: TouchKind::Play,
+        });
     } else {
         ball.possessor = None;
         ball.state = BallState::Free;

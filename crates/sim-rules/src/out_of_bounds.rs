@@ -6,7 +6,9 @@
 //! placement spot for the restart (consumed by `goals::restart_system`).
 
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallOutOfBoundsType, BallMarker, BallState, Position, RuleEvent, Velocity};
+use sim_components::{
+    Ball, BallOutOfBoundsType, BallMarker, BallState, Position, RuleEvent, Velocity,
+};
 use sim_math::Vec2;
 
 use crate::constants::{
@@ -29,9 +31,14 @@ use crate::constants::{
 /// it settled at the boundary → classifies restart type.
 ///
 /// Does NOT reset ball position — that belongs to `restart_system`.
+///
+/// Records the last toucher's team in the emitted `RuleEvent::OutOfBounds`
+/// so the OOB restart-taker (awarded to the *opposite* team of the
+/// toucher per Law 9) can be resolved by downstream consumers.
 pub fn out_of_bounds_system(
     mut commands: Commands,
     ball_query: Query<(Entity, &Position, &Velocity), With<BallMarker>>,
+    player_query: Query<(Entity, &sim_components::TeamIdComponent), With<sim_components::Player>>,
     _current_tick: Res<crate::CurrentTick>,
     mut ball: ResMut<Ball>,
 ) {
@@ -89,11 +96,46 @@ pub fn out_of_bounds_system(
         BallOutOfBoundsType::ThrowIn
     };
 
+    // Law 9 note on classification: throw-in / corner / goal-kick is
+    // **purely positional** — determined by where the ball crossed
+    // the boundary (goal-line vs touchline, inside vs outside the
+    // goal area). The kicker's team determines *who takes* the
+    // restart (the opposite team of the last toucher), not *which
+    // type* of restart is awarded. We therefore do not consult
+    // `last_touch_team` for the classification itself; we only carry
+    // it forward in the event payload so downstream restart
+    // consumers can resolve the taker team.
+    //
+    // Capture the last toucher's team into the event payload before
+    // clearing `last_touch`. The kickoff placement in `lifecycle` and
+    // the OOB restart placement in `restart_system` immediately
+    // re-set `last_touch` with `kind = Restart`, so the `None` window
+    // is short (one tick) and asserted-against in debug builds here.
+    let last_touch_team = ball.last_touch.as_ref().and_then(|t| {
+        // Resolve the toucher's team. If the entity has gone stale
+        // (e.g. player removed), propagate `None` — the event
+        // payload's `Option<TeamId>` documents this case, and
+        // consumers must handle it (a stale entity is a real
+        // desync and should not be papered over with a default).
+        player_query.get(t.entity).ok().map(|(_, team)| team.0)
+    });
+    debug_assert!(
+        ball.last_touch.is_some(),
+        "out_of_bounds_system fired with no `last_touch` — the \
+         touch-registration wiring has a gap between kickoff \
+         placement and the first kick/restart"
+    );
+
+    // Clear the last-touch slot; restart_system re-registers it with
+    // `kind = Restart` when it places the ball.
+    ball.last_touch = None;
+
     // Apply state changes
     ball.state = BallState::Dead;
-    commands
-        .entity(ball_entity)
-        .insert(RuleEvent::OutOfBounds(oob_type));
+    commands.entity(ball_entity).insert(RuleEvent::OutOfBounds {
+        oob_type,
+        last_touch_team,
+    });
 }
 
 /// Calculate restart position for out-of-bounds based on event type and ball position.

@@ -1,12 +1,15 @@
 //! Tests for `goal_detection_system` (Law 10): home goal, away goal,
-//! dead-ball guard (no double scoring).
+//! dead-ball guard (no double scoring), touch-clear-on-goal, and
+//! restart-kind registration by `restart_system`.
 
 use bevy_ecs::prelude::*;
-use sim_components::{BallMarker, BallState, MatchClock, Position, Velocity};
+use sim_components::{
+    BallMarker, BallState, LastTouch, MatchClock, Player, Position, RuleEvent, TouchKind, Velocity,
+};
 use sim_math::Vec2;
 
 use crate::tests::ball_fixture;
-use crate::{CurrentTick, goal_detection_system};
+use crate::{CurrentTick, PendingRestart, goal_detection_system, restart_system};
 
 #[test]
 fn test_goal_scored_home_team() {
@@ -29,10 +32,27 @@ fn test_goal_scored_home_team() {
         is_running: true,
     });
 
+    // Toucher player on team 1 (so the goal is credited to the
+    // scorer = home by ball position, with last_touch_team = 1
+    // captured into the event payload).
+    let toucher = world.spawn(()).id();
+    world.entity_mut(toucher).insert(Player {
+        team_id: sim_components::TeamId(1),
+        intent: None,
+    });
+    world
+        .entity_mut(toucher)
+        .insert(sim_components::TeamIdComponent(sim_components::TeamId(1)));
+
     // Create ball entity in home goal (x = 105.5, y = 34)
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
-    world.insert_resource(ball_fixture(Vec2::new(105.5, 34.0), BallState::Free));
+    let mut b = ball_fixture(Vec2::new(105.5, 34.0), BallState::Free);
+    b.last_touch = Some(LastTouch {
+        entity: toucher,
+        kind: TouchKind::Play,
+    });
+    world.insert_resource(b);
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(105.5, 34.0)));
@@ -50,10 +70,30 @@ fn test_goal_scored_home_team() {
 
     let ball = world.resource::<sim_components::Ball>();
     assert_eq!(ball.state, BallState::Dead);
+    assert!(
+        ball.last_touch.is_none(),
+        "goal must clear last_touch after capturing it"
+    );
 
     // Verify KickoffRestart was scheduled
-    let pending = world.get_resource::<crate::PendingRestart>();
+    let pending = world.get_resource::<PendingRestart>();
     assert!(pending.is_some());
+
+    // The Goal event should carry last_touch_team = team 1 (the
+    // away toucher), while scorer_team remains home (0) by ball
+    // position.
+    let event = world.entity(ball_entity).get::<RuleEvent>();
+    if let Some(RuleEvent::Goal {
+        scorer_team,
+        last_touch_team,
+        ..
+    }) = event
+    {
+        assert_eq!(*scorer_team, sim_components::TeamId(0));
+        assert_eq!(*last_touch_team, Some(sim_components::TeamId(1)));
+    } else {
+        panic!("expected RuleEvent::Goal, got {event:?}");
+    }
 }
 
 #[test]
@@ -76,10 +116,25 @@ fn test_goal_scored_away_team() {
         is_running: true,
     });
 
+    // Toucher player on team 0.
+    let toucher = world.spawn(()).id();
+    world.entity_mut(toucher).insert(Player {
+        team_id: sim_components::TeamId(0),
+        intent: None,
+    });
+    world
+        .entity_mut(toucher)
+        .insert(sim_components::TeamIdComponent(sim_components::TeamId(0)));
+
     // Create ball entity in away goal (x = -0.5, y = 34)
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
-    world.insert_resource(ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free));
+    let mut b = ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free);
+    b.last_touch = Some(LastTouch {
+        entity: toucher,
+        kind: TouchKind::Play,
+    });
+    world.insert_resource(b);
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(-0.5, 34.0)));
@@ -94,6 +149,19 @@ fn test_goal_scored_away_team() {
     let m = world.resource::<sim_components::Match>();
     assert_eq!(m.score.0, 0);
     assert_eq!(m.score.1, 1);
+
+    let event = world.entity(ball_entity).get::<RuleEvent>();
+    if let Some(RuleEvent::Goal {
+        scorer_team,
+        last_touch_team,
+        ..
+    }) = event
+    {
+        assert_eq!(*scorer_team, sim_components::TeamId(1));
+        assert_eq!(*last_touch_team, Some(sim_components::TeamId(0)));
+    } else {
+        panic!("expected RuleEvent::Goal, got {event:?}");
+    }
 }
 
 #[test]
@@ -135,4 +203,74 @@ fn test_no_double_goal_when_ball_dead() {
     let m = world.resource::<sim_components::Match>();
     assert_eq!(m.score.0, 0);
     assert_eq!(m.score.1, 0);
+}
+
+/// Delayed kickoff restart (after goal) registers the ball placement
+/// as a `TouchKind::Restart` touch.
+#[test]
+fn test_kickoff_restart_registers_restart_touch() {
+    let mut world = World::new();
+
+    world.insert_resource(sim_components::Match {
+        id: 1,
+        home_team: Entity::PLACEHOLDER,
+        away_team: Entity::PLACEHOLDER,
+        score: (1, 0),
+        state: sim_components::MatchState::InPlay,
+        seed: 12345,
+    });
+    let match_entity = world.spawn(()).id();
+    world.entity_mut(match_entity).insert(MatchClock {
+        elapsed_ticks: 30 * 60,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    });
+
+    // Set up pending kickoff restart.
+    world.insert_resource(PendingRestart {
+        event: Some(RuleEvent::KickoffRestart),
+        restart_tick: 60,
+    });
+
+    // Ball entity after the goal — Dead state, position is
+    // irrelevant because the system will move it.
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world.insert_resource(ball_fixture(Vec2::zero(), BallState::Dead));
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(Vec2::new(105.5, 34.0)));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+
+    // A home-team player — the kickoff-taker entity.
+    let kicker = world.spawn(()).id();
+    world.entity_mut(kicker).insert(Player {
+        team_id: sim_components::TeamId(0),
+        intent: None,
+    });
+    world
+        .entity_mut(kicker)
+        .insert(sim_components::TeamIdComponent(sim_components::TeamId(0)));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(restart_system);
+    world.insert_resource(CurrentTick(60));
+    schedule.run(&mut world);
+
+    let ball = world.resource::<sim_components::Ball>();
+    assert_eq!(ball.state, BallState::Free);
+    assert_eq!(
+        ball.last_touch,
+        Some(LastTouch {
+            entity: kicker,
+            kind: TouchKind::Restart,
+        }),
+        "delayed kickoff restart must register the kickoff taker as a \
+         Restart touch"
+    );
+    assert!(
+        world.get_resource::<PendingRestart>().is_none(),
+        "PendingRestart is cleared after consumption"
+    );
 }

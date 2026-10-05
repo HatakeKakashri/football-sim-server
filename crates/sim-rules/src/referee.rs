@@ -9,7 +9,7 @@
 //! 7 players (the minimum required to start/continue a match).
 
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallMarker, Match, Player, Position, Team, TeamId, TeamIdComponent, Velocity};
+use sim_components::{Ball, BallMarker, Match, Player, Position, Team, TeamId, TeamIdComponent, TouchKind, Velocity};
 use sim_telemetry::TelemetryConfig;
 
 use crate::CurrentTick;
@@ -23,7 +23,7 @@ use crate::CurrentTick;
 ///
 /// This system is a detection stub — it marks the offside position but does
 /// NOT yet penalise (that requires a foul/restart system). The check uses
-/// `Ball.last_touched_by` to determine the moment of the pass: offside is
+/// `Ball.last_touch` to determine the moment of the pass: offside is
 /// judged relative to the position of the second-last defender *at the
 /// instant the ball was touched* by a teammate of the potentially-offside
 /// player.
@@ -35,6 +35,10 @@ use crate::CurrentTick;
 /// regardless of how many players are offside in that window. This changes
 /// only how often a detected condition is printed — the detection logic
 /// itself (a known Phase-1-only stub per tasks.md) is untouched.
+///
+/// Touches registered as `TouchKind::Restart` (kickoff / throw-in / goal-kick
+/// / corner placement) are ignored: Law 11 does not penalise offside
+/// directly from a restart.
 pub fn offside_detection_system(
     ball_query: Query<&Position, With<BallMarker>>,
     player_query: Query<(Entity, &Position, &TeamIdComponent), Without<BallMarker>>,
@@ -50,9 +54,15 @@ pub fn offside_detection_system(
         return;
     };
 
-    let Some(last_toucher) = ball.last_touched_by else {
+    // Law 11: only an active play touch resets offside judgement.
+    // Restart placements (kickoff, throw-in, goal-kick, corner) do not.
+    let Some(last_touch) = ball.last_touch.as_ref() else {
         return;
     };
+    if last_touch.kind != TouchKind::Play {
+        return;
+    }
+    let last_toucher = last_touch.entity;
 
     let Some(toucher_team_id) = player_query
         .get(last_toucher)

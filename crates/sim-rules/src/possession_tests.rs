@@ -1,5 +1,5 @@
 //! Tests for `possession_resolution_system`: closest-player selection,
-//! possessor entity identity, possession clearing, and `last_touched_by`
+//! possessor entity identity, possession clearing, and `last_touch`
 //! pass-tracking.
 
 use bevy_ecs::prelude::*;
@@ -23,7 +23,7 @@ fn test_possession_resolution() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touched_by: None,
+        last_touch: None,
     });
     world
         .entity_mut(ball_entity)
@@ -71,7 +71,7 @@ fn test_possession_resolved_to_real_entity() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touched_by: None,
+        last_touch: None,
     });
     world
         .entity_mut(ball_entity)
@@ -108,8 +108,14 @@ fn test_possession_resolved_to_real_entity() {
         Some(player_entity),
         "Ball.possessor must be the real player entity, not PLACEHOLDER"
     );
-    // last_touched_by should also be set (player is within 1.0 m)
-    assert_eq!(ball.last_touched_by, Some(player_entity));
+    // last_touch should also be set on possession change (Play kind)
+    assert_eq!(
+        ball.last_touch,
+        Some(sim_components::LastTouch {
+            entity: player_entity,
+            kind: sim_components::TouchKind::Play,
+        })
+    );
 }
 
 /// Test that possession is cleared when no player is within 1.5 m.
@@ -125,7 +131,7 @@ fn test_possession_cleared_when_ball_free() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touched_by: None,
+        last_touch: None,
     });
     world
         .entity_mut(ball_entity)
@@ -163,10 +169,11 @@ fn test_possession_cleared_when_ball_free() {
     );
 }
 
-/// Test that `last_touched_by` is updated when a player touches the ball
-/// (simulates a pass scenario).
+/// Test that `last_touch` is updated when possession changes between
+/// players (interception / pass-receiving scenario). The new possessor
+/// becomes the `LastTouch` entity with `kind = Play`.
 #[test]
-fn test_offside_last_touch_tracked() {
+fn test_possession_change_registers_play_touch() {
     let mut world = World::new();
 
     let ball_entity = world.spawn(()).id();
@@ -177,7 +184,7 @@ fn test_offside_last_touch_tracked() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touched_by: None,
+        last_touch: None,
     });
     world
         .entity_mut(ball_entity)
@@ -207,9 +214,12 @@ fn test_offside_last_touch_tracked() {
 
     let ball = world.resource::<Ball>();
     assert_eq!(
-        ball.last_touched_by,
-        Some(player_a),
-        "Player A (closest to ball) should be recorded as last toucher"
+        ball.last_touch,
+        Some(sim_components::LastTouch {
+            entity: player_a,
+            kind: sim_components::TouchKind::Play,
+        }),
+        "Player A (gains possession) should be recorded as last toucher with Play kind"
     );
 
     // Now move the ball to player B (simulating a pass)
@@ -260,10 +270,77 @@ fn test_offside_last_touch_tracked() {
 
     let ball = world.resource::<Ball>();
     assert_eq!(
-        ball.last_touched_by,
-        Some(player_b),
-        "After pass, last_touched_by should be player B (new closest)"
+        ball.last_touch,
+        Some(sim_components::LastTouch {
+            entity: player_b,
+            kind: sim_components::TouchKind::Play,
+        }),
+        "After pass, last_touch should be player B with Play kind"
     );
     assert_eq!(ball.possessor, Some(player_b));
     assert_eq!(ball.state, BallState::Possessed);
+}
+
+/// Interception scenario: A (team 0) kicks the ball; B (team 1) is within
+/// proximity when the ball arrives and gains possession by
+/// `possession_resolution_system`. The `last_touch` must point at B with
+/// `kind = Play` so Law 11 (offside) resets to team 1 from this point.
+#[test]
+fn test_interception_registers_play_touch_on_new_possessor() {
+    let mut world = World::new();
+
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world.insert_resource(Ball {
+        kick_velocity: None,
+        spin: 0.0,
+        // Simulate "A just kicked it" — last_touch on A from
+        // kick_execution_system.
+        state: BallState::Free,
+        possessor: None,
+        last_touch: Some(sim_components::LastTouch {
+            entity: Entity::PLACEHOLDER, // placeholder for A; entity
+            // identity does not matter for the assertion
+            kind: sim_components::TouchKind::Play,
+        }),
+    });
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(Vec2::new(70.0, 34.0)));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+
+    // Player B (team 1) within 1.5 m of the ball.
+    let player_b = world.spawn(()).id();
+    world.entity_mut(player_b).insert(Player {
+        team_id: TeamId(1),
+        intent: None,
+    });
+    world
+        .entity_mut(player_b)
+        .insert(Position(Vec2::new(70.4, 34.0)));
+    world.entity_mut(player_b).insert(Velocity(Vec2::zero()));
+    world.entity_mut(player_b).insert(Skill(0.8));
+    world.entity_mut(player_b).insert(Stamina(0.9));
+    world
+        .entity_mut(player_b)
+        .insert(RoleComponent(sim_components::Role::CenterBack));
+    world
+        .entity_mut(player_b)
+        .insert(TeamIdComponent(TeamId(1)));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(possession_resolution_system);
+    schedule.run(&mut world);
+
+    let ball = world.resource::<Ball>();
+    assert_eq!(ball.possessor, Some(player_b));
+    assert_eq!(
+        ball.last_touch,
+        Some(sim_components::LastTouch {
+            entity: player_b,
+            kind: sim_components::TouchKind::Play,
+        }),
+        "interception must register B as a Play touch, not leave the \
+         last_touch on the previous kicker"
+    );
 }

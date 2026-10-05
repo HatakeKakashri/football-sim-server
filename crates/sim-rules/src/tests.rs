@@ -24,7 +24,7 @@ use sim_math::Vec2;
 use crate::{CurrentTick, PendingRestart, restart_system};
 
 /// Produces a test `Ball` resource with the given `state`.
-/// All other fields are zeroed; `possessor` and `last_touched_by` are `None`.
+/// All other fields are zeroed; `possessor` and `last_touch` are `None`.
 ///
 /// Note: the legacy `pos: Vec2` parameter is intentionally retained (as
 /// `_pos`) for backwards compatibility with the existing test call
@@ -37,7 +37,7 @@ pub fn ball_fixture(_pos: Vec2, state: BallState) -> Ball {
         spin: 0.0,
         state,
         possessor: None,
-        last_touched_by: None,
+        last_touch: None,
     }
 }
 

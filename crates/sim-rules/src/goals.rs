@@ -7,7 +7,8 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallMarker, BallState, Match, Position, RuleEvent, Velocity,
+    Ball, BallMarker, BallState, Match, Player, Position, RuleEvent, TeamId, TeamIdComponent,
+    Velocity,
 };
 use sim_math::Vec2;
 use sim_telemetry::TelemetryConfig;
@@ -16,6 +17,15 @@ use crate::constants::{CENTER_SPOT, GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH};
 use crate::out_of_bounds::calculate_oob_restart_position;
 use crate::{CurrentTick, PendingRestart};
 
+/// Buffered goal event data collected in `goal_detection_system`'s first
+/// pass (avoiding a borrow on `Match` / `Ball` while iterating queries).
+struct GoalEvent {
+    ball_entity: Entity,
+    scorer_team: TeamId,
+    final_score: (u8, u8),
+    last_touch_team: Option<TeamId>,
+}
+
 /// Phase 3: Goal detection system (Law 10).
 ///
 /// Detects when ball fully crosses goal line within goal area,
@@ -23,16 +33,23 @@ use crate::{CurrentTick, PendingRestart};
 /// schedules `KickoffRestart` after 60 ticks.
 ///
 /// BUG FIX: Guards against repeat scoring by checking `BallState::Dead` first.
+///
+/// Scorer attribution uses **ball position** (x ≤ 0 → away, x ≥
+/// `PITCH_LENGTH` → home). The last toucher's team is recorded in the
+/// event payload for completeness but does **not** drive scorer
+/// attribution.
 pub fn goal_detection_system(
     mut commands: Commands,
     ball_query: Query<(Entity, &Position), With<BallMarker>>,
+    player_query: Query<(Entity, &TeamIdComponent), With<Player>>,
     mut match_res: ResMut<Match>,
     mut ball: ResMut<Ball>,
     current_tick: Option<Res<CurrentTick>>,
     telemetry: Option<Res<TelemetryConfig>>,
 ) {
-    // First pass: collect goal events (avoid borrow conflicts)
-    let mut goal_events: Vec<(Entity, sim_components::TeamId, (u8, u8))> = Vec::new();
+    // First pass: collect goal events (avoid borrow conflicts).
+    // Tuple: (ball_entity, scorer_team, final_score, last_touch_team).
+    let mut goal_events: Vec<GoalEvent> = Vec::new();
 
     let Ok((ball_entity, ball_pos)) = ball_query.get_single() else {
         return;
@@ -47,7 +64,14 @@ pub fn goal_detection_system(
             if ball_pos.0.x <= 0.0 {
                 match_res.score.1 += 1;
                 let final_score = match_res.score;
-                goal_events.push((ball_entity, sim_components::TeamId(1), final_score));
+                goal_events.push(GoalEvent {
+                    ball_entity,
+                    scorer_team: TeamId(1),
+                    final_score,
+                    last_touch_team: ball.last_touch.as_ref().and_then(|t| {
+                        player_query.get(t.entity).ok().map(|(_, team)| team.0)
+                    }),
+                });
                 tracing::info!(
                     "GOAL scored by away team! Score: {}-{}",
                     final_score.0,
@@ -66,7 +90,14 @@ pub fn goal_detection_system(
             else if ball_pos.0.x >= PITCH_LENGTH {
                 match_res.score.0 += 1;
                 let final_score = match_res.score;
-                goal_events.push((ball_entity, sim_components::TeamId(0), final_score));
+                goal_events.push(GoalEvent {
+                    ball_entity,
+                    scorer_team: TeamId(0),
+                    final_score,
+                    last_touch_team: ball.last_touch.as_ref().and_then(|t| {
+                        player_query.get(t.entity).ok().map(|(_, team)| team.0)
+                    }),
+                });
                 tracing::info!(
                     "GOAL scored by home team! Score: {}-{}",
                     final_score.0,
@@ -85,11 +116,16 @@ pub fn goal_detection_system(
     }
 
     // Second pass: apply state changes and emit events
-    for (ball_entity, scorer_team, final_score) in goal_events {
+    for event in goal_events {
         ball.state = BallState::Dead;
-        commands.entity(ball_entity).insert(RuleEvent::Goal {
-            scorer_team,
-            score: final_score,
+        // Clear the last touch — the delayed kickoff will re-register
+        // it as `kind = Restart` when the ball is placed at the
+        // center spot.
+        ball.last_touch = None;
+        commands.entity(event.ball_entity).insert(RuleEvent::Goal {
+            scorer_team: event.scorer_team,
+            score: event.final_score,
+            last_touch_team: event.last_touch_team,
         });
         commands.insert_resource(PendingRestart {
             event: Some(RuleEvent::KickoffRestart),
@@ -107,10 +143,21 @@ pub fn goal_detection_system(
 ///
 /// Reads `RuleEvent` directly from entity to determine restart type.
 /// `PendingRestart` resource tracks the delayed kickoff restart timing.
+///
+/// Registers the restart as a `TouchKind::Restart` touch on the ball
+/// (Law 9 / Law 10 restart placement; `offside_detection_system` ignores
+/// it). The `restart_taker` is resolved from the event payload — for
+/// OOB it is the team opposite of the last toucher, for kickoff-after-
+/// goal it is the team that conceded the goal.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system param set: 8 standard params is the project norm for restart-time systems (construct.rs:37 establishes the ceiling)"
+)]
 pub fn restart_system(
     mut commands: Commands,
     mut ball_query: Query<(Entity, &mut Position, &mut Velocity), With<BallMarker>>,
     rule_event_query: Query<(Entity, &RuleEvent)>,
+    player_query: Query<(Entity, &TeamIdComponent), With<Player>>,
     current_tick: Option<Res<CurrentTick>>,
     pending_restart: Option<Res<PendingRestart>>,
     mut ball: ResMut<Ball>,
@@ -132,6 +179,15 @@ pub fn restart_system(
             // into the restart would inject a phantom impulse on
             // the next tick's Physics set.
             ball.kick_velocity = None;
+            // The post-goal kickoff goes to the team that conceded.
+            // Without a half-time swap landing, home always takes the
+            // kickoff (canonical default). A future swap ticket will
+            // thread the conceded-team info through `PendingRestart`.
+            let taker = first_player_on_team(&player_query, TeamId(0));
+            ball.last_touch = Some(sim_components::LastTouch {
+                entity: taker,
+                kind: sim_components::TouchKind::Restart,
+            });
             if telemetry.is_some() {
                 sim_telemetry::emit::kickoff(current_tick.as_deref().map_or(0, |t| t.0));
             }
@@ -147,7 +203,10 @@ pub fn restart_system(
         // Only process Dead balls
         if ball.state == BallState::Dead
             && let Ok((_, rule_event)) = rule_event_query.get(ball_entity)
-            && let RuleEvent::OutOfBounds(oob_type) = rule_event
+            && let RuleEvent::OutOfBounds {
+                oob_type,
+                last_touch_team,
+            } = rule_event
         {
             // Determine restart position based on OOB type and ball position
             let restart_pos = calculate_oob_restart_position(pos.0, *oob_type);
@@ -156,6 +215,29 @@ pub fn restart_system(
             ball.state = BallState::Free;
             // Drop any pending kick velocity — see goal-restart arm above.
             ball.kick_velocity = None;
+            // Law 9: the restart taker is the team opposite of the
+            // last toucher. Find any player on that team to record
+            // as the taker identity.
+            //
+            // `last_touch_team` may be `None` only when the toucher
+            // entity was stale by the time `out_of_bounds_system`
+            // resolved the team — a real desync, not a normal
+            // state. We propagate the `None` to the Restart touch
+            // entity too (via `Entity::PLACEHOLDER`) rather than
+            // silently defaulting to a team.
+            let taker_entity = last_touch_team.as_ref().map_or(Entity::PLACEHOLDER, |last| {
+                // Opposite team: 0 ↔ 1.
+                let taker_team = if *last == TeamId(0) {
+                    TeamId(1)
+                } else {
+                    TeamId(0)
+                };
+                first_player_on_team(&player_query, taker_team)
+            });
+            ball.last_touch = Some(sim_components::LastTouch {
+                entity: taker_entity,
+                kind: sim_components::TouchKind::Restart,
+            });
             let kind = match oob_type {
                 sim_components::BallOutOfBoundsType::ThrowIn => "throw_in",
                 sim_components::BallOutOfBoundsType::GoalKick => "goal_kick",
@@ -177,4 +259,22 @@ pub fn restart_system(
     for entity in processed_entities {
         commands.entity(entity).remove::<RuleEvent>();
     }
+}
+
+/// Find the first player (by entity id order) on `team_id`.
+/// Returns `Entity::PLACEHOLDER` if the team has no players in the
+/// query (e.g. a test world with no `TeamIdComponent` matches).
+fn first_player_on_team(
+    player_query: &Query<(Entity, &TeamIdComponent), With<Player>>,
+    team_id: TeamId,
+) -> Entity {
+    let mut best: Option<Entity> = None;
+    for (e, t) in player_query.iter() {
+        if t.0 == team_id
+            && best.is_none_or(|b| e.to_bits() < b.to_bits())
+        {
+            best = Some(e);
+        }
+    }
+    best.unwrap_or(Entity::PLACEHOLDER)
 }

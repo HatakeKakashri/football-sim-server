@@ -54,7 +54,7 @@ pub(crate) mod constants {
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct CurrentTick(pub u64);
 
-/// Tracks pending restart state: (event, `tick_when_restart`)
+/// Tracks pending restart state: (event, `tick_when_restart`).
 #[derive(Resource, Debug, Clone, Default)]
 pub struct PendingRestart {
     pub event: Option<RuleEvent>,

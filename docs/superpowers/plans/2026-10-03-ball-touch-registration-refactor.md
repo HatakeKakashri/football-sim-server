@@ -1163,36 +1163,24 @@ git commit -m "feat(hash): state hash mixes last_deliberate_play"
 - Consumes: every M1-M10 change
 - Produces: 179 tests pass + replay golden hashes updated
 
-### Task 11.1: Update every `Ball` constructor in test fixtures
+### Task 11.1: Verify all `Ball` fixtures have `last_deliberate_play: None`
 
-**Files:** every file listed in M1.4 Step 2
+**Files:** every file listed in M1.4 Step 2 (already updated by M1.4 commit)
 
-- [ ] **Step 1: For each test file, add `last_deliberate_play: None,`**
+This task is a no-op verification — M1.4 already added `last_deliberate_play: None,` to every Ball constructor.
 
-After `last_touch: ...,` in every `Ball { ... }` literal, add the new field.
-
-For tests that already used the old `LastTouch { entity: ..., kind: ... }` shape, the field literal was updated in M1.3. Verify that:
+- [ ] **Step 1: Verify the grep checks pass**
 
 ```bash
 grep -rn "LastTouch { entity:" crates/   # expect zero matches
 grep -rn "last_deliberate_play" crates/  # expect matches in every Ball constructor
 ```
 
-- [ ] **Step 2: Verify**
+If any match is absent, add the field to that Ball literal (same shape as M1.4).
 
-```bash
-cargo test --workspace
-```
+- [ ] **Step 2: No commit needed**
 
-Expected: BUILD SUCCESS, all tests pass.
-
-- [ ] **Step 3: Commit**
-
-```bash
-cargo fmt --all
-git add crates/sim-*/src/*_tests.rs crates/sim-*/src/tests.rs
-git commit -m "test(touch): add last_deliberate_play to all Ball fixtures"
-```
+If Step 1 passes, no commit is needed (M1.4 already landed). If a fix-up is needed, commit as `test(touch): add last_deliberate_play to remaining Ball fixtures`.
 
 ### Task 11.2: Update `possession_tests.rs` schedule chains
 
@@ -1205,7 +1193,15 @@ git commit -m "test(touch): add last_deliberate_play to all Ball fixtures"
 grep -n "possession_resolution_system" crates/sim-rules/src/possession_tests.rs
 ```
 
-- [ ] **Step 2: For each test, chain `apply_ball_touched_system`**
+- [ ] **Step 2: For each test, insert `PendingBallTouches::default()` as a Resource**
+
+The writers take **mandatory** `ResMut<PendingBallTouches>`. A schedule chain alone is not enough — the resource must exist or the writers panic with "Resource requested … does not exist". In each test's `World::new()` setup, after `world.insert_resource(Ball { ... })`, add:
+
+```rust
+world.insert_resource(sim_components::PendingBallTouches::default());
+```
+
+- [ ] **Step 3: For each test, chain `apply_ball_touched_system`**
 
 The test's local `Schedule` currently has:
 
@@ -1223,7 +1219,7 @@ schedule.add_systems(
 
 Add `use crate::touch::apply_ball_touched_system;` (or the appropriate module path) to the imports.
 
-- [ ] **Step 3: Verify**
+- [ ] **Step 4: Verify**
 
 ```bash
 cargo test -p sim-rules possession
@@ -1231,12 +1227,12 @@ cargo test -p sim-rules possession
 
 Expected: 5 tests pass.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cargo fmt --all
 git add crates/sim-rules/src/possession_tests.rs
-git commit -m "test(rules): chain apply_ball_touched_system in possession tests"
+git commit -m "test(rules): insert PendingBallTouches + chain consumer in possession tests"
 ```
 
 ### Task 11.3: Update `goals_tests.rs` and `out_of_bounds_tests.rs`
@@ -1245,19 +1241,31 @@ git commit -m "test(rules): chain apply_ball_touched_system in possession tests"
 - Modify: `crates/sim-rules/src/goals_tests.rs`
 - Modify: `crates/sim-rules/src/out_of_bounds_tests.rs`
 
-- [ ] **Step 1: For each test that runs `restart_system` or `out_of_bounds_system`, chain the consumer**
+- [ ] **Step 1: For each test that runs `restart_system` or `out_of_bounds_system`, insert `PendingBallTouches::default()` as a Resource**
+
+Same mandatory-Resource pattern as M11.2 Step 2. Tests that run these systems must have the resource, or the writers panic. Insert `world.insert_resource(sim_components::PendingBallTouches::default())` next to each `Ball` resource insert. Tests using `ball_fixture_with_touch()` (which only inserts `Ball`) also need this insertion.
+
+- [ ] **Step 2: For each test that runs `restart_system` or `out_of_bounds_system`, chain the consumer**
 
 Same pattern as M11.2: `.add_systems((<writer>, apply_ball_touched_system).chain())`.
 
-- [ ] **Step 2: Update `RuleEvent` payload assertions**
+- [ ] **Step 3: Update `RuleEvent` payload assertions**
 
 `last_touch_team` → `last_touch` (matching the new payload type from M2). For tests asserting on the payload's `Some(TeamId(0))`, change to `Some(LastTouch { team: TeamId(0), player: ..., kind: ... })`.
 
-- [ ] **Step 3: Delete the OOB post-clear assertion**
+- [ ] **Step 4: Delete the OOB post-clear assertion**
 
 In `crates/sim-rules/src/out_of_bounds_tests.rs:67-69`, delete the `assert!(ball.last_touch.is_none())` assertion (M8 stops clearing).
 
-- [ ] **Step 4: Verify**
+- [ ] **Step 5: Delete the Goal post-clear assertion (if present)**
+
+Same for `crates/sim-rules/src/goals_tests.rs:73-76` (per M8.2's expectation that goal tests asserting on `last_touch.is_none()` post-goal will need updating).
+
+- [ ] **Step 6: Seed `last_touch` in `test_goal_scorer_threads_into_post_goal_kickoff_taker`**
+
+This test's `ball_fixture` seeds `last_touch: None`, which now triggers the pre-touch guard at M8.2. Add a seeded touch (any `LastTouch` with the same team as the kicker suffices). Per the implementer's M5-M8 report.
+
+- [ ] **Step 7: Verify**
 
 ```bash
 cargo test -p sim-rules goal out_of_bounds
@@ -1265,12 +1273,12 @@ cargo test -p sim-rules goal out_of_bounds
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cargo fmt --all
 git add crates/sim-rules/src/goals_tests.rs crates/sim-rules/src/out_of_bounds_tests.rs
-git commit -m "test(rules): chain consumer + new RuleEvent payload assertions"
+git commit -m "test(rules): insert resource, chain consumer, update payload + clear assertions"
 ```
 
 ### Task 11.4: Update `referee_tests.rs` and `execution.rs` tests
@@ -1283,11 +1291,17 @@ git commit -m "test(rules): chain consumer + new RuleEvent payload assertions"
 
 Change `LastTouch { entity, kind: TouchKind::Restart }` to `LastTouch { team, player: Some(entity), kind: TouchKind::Restart }`.
 
-- [ ] **Step 2: Update `kick_execution_registers_play_touch`**
+- [ ] **Step 2: Insert `PendingBallTouches::default()` in test worlds**
+
+Every test that runs `kick_execution_system`, `possession_resolution_system`, `out_of_bounds_system`, `goal_detection_system`, or `restart_system` needs the resource. Insert `world.insert_resource(sim_components::PendingBallTouches::default())` next to each `Ball` resource insert in:
+- `crates/sim-ai-player/src/execution.rs` test module (3 tests)
+- `crates/sim-rules/src/referee_tests.rs` (any tests that run writers)
+
+- [ ] **Step 3: Update `kick_execution_registers_play_touch`**
 
 In `crates/sim-ai-player/src/execution.rs:387-451`, schedule `apply_ball_touched_system` after `kick_execution_system` and assert on the resulting `Ball.last_touch`. Add `use sim_rules::touch::apply_ball_touched_system;` if needed (cross-crate import — verify the crate boundary; the test may need to live in `sim-ai-player`'s test code with a `sim-rules` dev-dependency, which may not exist — if so, **move the test to `sim-rules/src/touch_registration_tests.rs`** per M12 instead).
 
-- [ ] **Step 3: Verify**
+- [ ] **Step 4: Verify**
 
 ```bash
 cargo test -p sim-rules referee
@@ -1296,12 +1310,12 @@ cargo test -p sim-ai-player kick
 
 Expected: all tests pass.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cargo fmt --all
 git add crates/sim-rules/src/referee_tests.rs crates/sim-ai-player/src/execution.rs
-git commit -m "test(touch): update LastTouch fixtures and chain consumer in tests"
+git commit -m "test(touch): update LastTouch fixtures, insert resource, chain consumer"
 ```
 
 ### Task 11.5: Capture new replay golden hashes

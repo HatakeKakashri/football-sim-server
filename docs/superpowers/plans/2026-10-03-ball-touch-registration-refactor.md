@@ -14,7 +14,7 @@
 
 - Workspace `unsafe_code = "forbid"`. No `unsafe` blocks ever.
 - `cargo clippy --workspace --all-targets -- -D warnings` must remain clean at every commit.
-- `cargo test --workspace` must pass at every commit (baseline 179 passing, 1 ignored).
+- `cargo test --workspace` must pass at every commit (baseline 179 passing, 2 ignored).
 - Bevy system params (`Query`, `Res`, …) taken **by value**, not reference (workspace allow on `needless_pass_by_value`).
 - No `unwrap` in new code — use `expect("invariant: …")` with a clear message.
 - Every `#[allow(...)]` / `#[expect(...)]` must carry `reason = "…"`.

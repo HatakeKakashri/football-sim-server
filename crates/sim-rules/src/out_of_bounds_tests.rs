@@ -1,6 +1,6 @@
 //! Tests for `out_of_bounds_system` (Law 9): throw-in, corner, goal-kick,
-//! plus the touch-clear-on-OOB wiring (`last_touch` is captured in
-//! the event payload before `last_touch` is cleared).
+//! plus the touch-preserved-on-OOB wiring (`last_touch` is captured in
+//! the event payload and preserved on the ball (M8)).
 
 use bevy_ecs::prelude::*;
 use sim_components::{
@@ -10,7 +10,7 @@ use sim_components::{
 use sim_math::Vec2;
 
 use crate::tests::ball_fixture;
-use crate::{CurrentTick, out_of_bounds_system};
+use crate::{CurrentTick, out_of_bounds_system, touch::apply_ball_touched_system};
 
 /// Build a Ball resource with `last_touch = Some(LastTouch{team, toucher, Play})`.
 /// Use this in OOB tests so the debug-build `last_touch.is_some()` assertion
@@ -45,6 +45,7 @@ fn test_out_of_bounds_detection_throw_in() {
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
     world.insert_resource(ball_fixture_with_touch(toucher, TeamId(0)));
+    world.insert_resource(sim_components::PendingBallTouches::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(20.0, 0.0)));
@@ -53,7 +54,7 @@ fn test_out_of_bounds_detection_throw_in() {
         .insert(Velocity(Vec2::new(0.0, 0.0)));
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(out_of_bounds_system);
+    schedule.add_systems((out_of_bounds_system, apply_ball_touched_system).chain());
 
     // Run with current_tick = 0
     world.insert_resource(CurrentTick(0));
@@ -61,10 +62,6 @@ fn test_out_of_bounds_detection_throw_in() {
 
     let ball = world.resource::<sim_components::Ball>();
     assert_eq!(ball.state, BallState::Dead);
-    assert!(
-        ball.last_touch.is_none(),
-        "OOB must clear last_touch after capturing it"
-    );
 
     let rule_event = world.entity(ball_entity).get::<RuleEvent>();
     assert!(rule_event.is_some(), "RuleEvent should be emitted");
@@ -107,13 +104,14 @@ fn test_out_of_bounds_detection_corner() {
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
     world.insert_resource(ball_fixture_with_touch(toucher, TeamId(0)));
+    world.insert_resource(sim_components::PendingBallTouches::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(0.1, 0.1)));
     world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(out_of_bounds_system);
+    schedule.add_systems((out_of_bounds_system, apply_ball_touched_system).chain());
 
     world.insert_resource(CurrentTick(0));
     schedule.run(&mut world);
@@ -148,13 +146,14 @@ fn test_out_of_bounds_goal_kick() {
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
     world.insert_resource(ball_fixture_with_touch(toucher, TeamId(0)));
+    world.insert_resource(sim_components::PendingBallTouches::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(-0.5, 34.0)));
     world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(out_of_bounds_system);
+    schedule.add_systems((out_of_bounds_system, apply_ball_touched_system).chain());
 
     world.insert_resource(CurrentTick(0));
     schedule.run(&mut world);

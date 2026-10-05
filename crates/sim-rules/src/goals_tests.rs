@@ -1,15 +1,20 @@
 //! Tests for `goal_detection_system` (Law 10): home goal, away goal,
-//! dead-ball guard (no double scoring), touch-clear-on-goal, and
-//! restart-kind registration by `restart_system`.
+//! dead-ball guard (no double scoring), touch preservation on goal
+//! (M8: the record stays on the ball), and restart-kind registration
+//! by `restart_system`.
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    BallMarker, BallState, LastTouch, MatchClock, Player, Position, RuleEvent, TouchKind, Velocity,
+    Ball, BallMarker, BallState, LastTouch, MatchClock, PendingBallTouches, Player, Position,
+    RuleEvent, TeamId, TeamIdComponent, TouchKind, Velocity,
 };
 use sim_math::Vec2;
 
 use crate::tests::ball_fixture;
-use crate::{CurrentTick, PendingRestart, goal_detection_system, restart_system};
+use crate::{
+    CurrentTick, PendingRestart, goal_detection_system, out_of_bounds_system, restart_system,
+    touch::apply_ball_touched_system,
+};
 
 #[test]
 fn test_goal_scored_home_team() {
@@ -71,10 +76,6 @@ fn test_goal_scored_home_team() {
 
     let ball = world.resource::<sim_components::Ball>();
     assert_eq!(ball.state, BallState::Dead);
-    assert!(
-        ball.last_touch.is_none(),
-        "goal must clear last_touch after capturing it"
-    );
 
     // Verify KickoffRestart was scheduled
     let pending = world.get_resource::<PendingRestart>();
@@ -257,6 +258,7 @@ fn test_kickoff_restart_registers_restart_touch() {
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
     world.insert_resource(ball_fixture(Vec2::zero(), BallState::Dead));
+    world.insert_resource(sim_components::PendingBallTouches::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(105.5, 34.0)));
@@ -274,7 +276,7 @@ fn test_kickoff_restart_registers_restart_touch() {
         .insert(sim_components::TeamIdComponent(sim_components::TeamId(1)));
 
     let mut schedule = Schedule::default();
-    schedule.add_systems(restart_system);
+    schedule.add_systems((restart_system, apply_ball_touched_system).chain());
     world.insert_resource(CurrentTick(60));
     schedule.run(&mut world);
 
@@ -315,7 +317,17 @@ fn test_goal_scorer_threads_into_post_goal_kickoff_taker() {
     // Ball in the home goal area — score for home.
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
-    world.insert_resource(ball_fixture(Vec2::new(105.5, 34.0), BallState::Free));
+    let mut b = ball_fixture(Vec2::new(105.5, 34.0), BallState::Free);
+    // Seed a touch so the pre-touch guard (spec §E) is satisfied:
+    // goal detection only fires after a registered touch. The scorer
+    // threads off ball position, so the seeded record's identity is
+    // not under test here.
+    b.last_touch = Some(LastTouch {
+        team: sim_components::TeamId(0),
+        player: None,
+        kind: TouchKind::Play,
+    });
+    world.insert_resource(b);
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(105.5, 34.0)));
@@ -337,5 +349,262 @@ fn test_goal_scorer_threads_into_post_goal_kickoff_taker() {
         pending.scorer_team,
         Some(sim_components::TeamId(0)),
         "goal must thread scorer_team into PendingRestart"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// End-to-end restart scenarios (M12.2)
+// -----------------------------------------------------------------------------
+
+/// Missed shot that crosses the goal line within the goal area → a
+/// goal-kick is awarded to the defending team. The ball is placed at
+/// the penalty spot of the goal it crossed (Law 9 / Law 16). Setup:
+/// ball settles at (104.9, 34.0) inside the home goal area, low
+/// velocity. Schedule `out_of_bounds_system` + `restart_system`.
+#[test]
+fn test_missed_shot_gives_goal_kick() {
+    let mut world = World::new();
+
+    let toucher = world.spawn(()).id();
+    world.entity_mut(toucher).insert(Player {
+        team_id: TeamId(0),
+        intent: None,
+    });
+    world.entity_mut(toucher).insert(TeamIdComponent(TeamId(0)));
+
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(Vec2::new(104.9, 34.0)));
+    world
+        .entity_mut(ball_entity)
+        .insert(Velocity(Vec2::new(0.1, 0.0)));
+    world.insert_resource(Ball {
+        kick_velocity: None,
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: Some(LastTouch {
+            team: TeamId(0),
+            player: Some(toucher),
+            kind: TouchKind::Play,
+        }),
+        last_deliberate_play: None,
+    });
+    world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(CurrentTick(50));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(
+        (
+            apply_ball_touched_system,
+            out_of_bounds_system,
+            restart_system,
+        )
+            .chain(),
+    );
+    schedule.run(&mut world);
+
+    // Position confirms OOB fired (GoalKick spot is at x=94, y=34 for the
+    // home goal). `restart_system` consumes the `RuleEvent` after
+    // processing it — we verify the OOB classification by position
+    // placement here; the event payload was emitted, then cleared.
+    let pos = world.entity(ball_entity).get::<Position>().unwrap();
+    assert_eq!(
+        pos.0,
+        Vec2::new(94.0, 34.0),
+        "goal-kick spot for home goal (Law 9)"
+    );
+    assert!(
+        world.entity(ball_entity).get::<RuleEvent>().is_none(),
+        "RuleEvent must be cleared by restart_system after consumption"
+    );
+
+    // Ball placed at the home penalty spot.
+    let pos = world.entity(ball_entity).get::<Position>().unwrap();
+    assert_eq!(pos.0, Vec2::new(94.0, 34.0));
+}
+
+/// Shot deflected out over the goal line **outside** the goal area →
+/// a corner is awarded. Ball settles at (104.9, 10.0), low velocity.
+#[test]
+fn test_deflected_shot_gives_corner() {
+    let mut world = World::new();
+
+    let toucher = world.spawn(()).id();
+    world.entity_mut(toucher).insert(Player {
+        team_id: TeamId(0),
+        intent: None,
+    });
+    world.entity_mut(toucher).insert(TeamIdComponent(TeamId(0)));
+
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(Vec2::new(104.9, 10.0)));
+    world
+        .entity_mut(ball_entity)
+        .insert(Velocity(Vec2::new(0.1, 0.0)));
+    world.insert_resource(Ball {
+        kick_velocity: None,
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: Some(LastTouch {
+            team: TeamId(0),
+            player: Some(toucher),
+            kind: TouchKind::Play,
+        }),
+        last_deliberate_play: None,
+    });
+    world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(CurrentTick(60));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(
+        (
+            apply_ball_touched_system,
+            out_of_bounds_system,
+            restart_system,
+        )
+            .chain(),
+    );
+    schedule.run(&mut world);
+
+    // Position confirms OOB fired (corner spot at x=104, y=1 for the
+    // bottom-right corner). Event is consumed by restart_system.
+    let pos = world.entity(ball_entity).get::<Position>().unwrap();
+    assert_eq!(
+        pos.0,
+        Vec2::new(104.0, 1.0),
+        "corner spot for bottom-right (Law 9)"
+    );
+    assert!(
+        world.entity(ball_entity).get::<RuleEvent>().is_none(),
+        "RuleEvent must be cleared by restart_system after consumption"
+    );
+
+    // Ball placed at the corner arc on the bottom-right (y=10 is in
+    // the bottom half of the pitch).
+    let pos = world.entity(ball_entity).get::<Position>().unwrap();
+    assert_eq!(pos.0, Vec2::new(104.0, 1.0));
+}
+
+/// Ball crosses the touchline with the last toucher on team 0. The
+/// `RuleEvent::OutOfBounds` payload records the toucher's team (0);
+/// after restart, the throw-in is awarded to team 1 (Law 9) and the
+/// new Restart touch is queued in `PendingBallTouches`.
+#[test]
+fn test_throw_in_to_opposite_team() {
+    let mut world = World::new();
+
+    let toucher = world.spawn(()).id();
+    world.entity_mut(toucher).insert(Player {
+        team_id: TeamId(0),
+        intent: None,
+    });
+    world.entity_mut(toucher).insert(TeamIdComponent(TeamId(0)));
+
+    // Team 1 must have at least one player on the roster so
+    // `first_player_on_team` resolves to a real entity rather than
+    // `Entity::PLACEHOLDER` (which would yield `player: None` in the
+    // Restart touch).
+    let taker = world.spawn(()).id();
+    world.entity_mut(taker).insert(Player {
+        team_id: TeamId(1),
+        intent: None,
+    });
+    world.entity_mut(taker).insert(TeamIdComponent(TeamId(1)));
+
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(Vec2::new(40.0, 0.0))); // touchline
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+    world.insert_resource(Ball {
+        kick_velocity: None,
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: Some(LastTouch {
+            team: TeamId(0),
+            player: Some(toucher),
+            kind: TouchKind::Play,
+        }),
+        last_deliberate_play: None,
+    });
+    world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(CurrentTick(70));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(
+        (
+            apply_ball_touched_system,
+            out_of_bounds_system,
+            restart_system,
+        )
+            .chain(),
+    );
+    schedule.run(&mut world);
+
+    // OOB event payload must carry the original toucher. We verify
+    // this on a fresh schedule that excludes `restart_system` (which
+    // removes the RuleEvent from the entity after consuming it).
+    let mut world2 = World::new();
+    world2.insert_resource(Ball {
+        kick_velocity: None,
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: Some(LastTouch {
+            team: TeamId(0),
+            player: Some(toucher),
+            kind: TouchKind::Play,
+        }),
+        last_deliberate_play: None,
+    });
+    world2.insert_resource(PendingBallTouches::default());
+    let ball2 = world2.spawn(()).id();
+    world2.entity_mut(ball2).insert(BallMarker);
+    world2
+        .entity_mut(ball2)
+        .insert(Position(Vec2::new(40.0, 0.0)));
+    world2.entity_mut(ball2).insert(Velocity(Vec2::zero()));
+    world2.insert_resource(CurrentTick(70));
+
+    let mut schedule2 = Schedule::default();
+    schedule2.add_systems((apply_ball_touched_system, out_of_bounds_system).chain());
+    schedule2.run(&mut world2);
+
+    let event = world2.entity(ball2).get::<RuleEvent>();
+    if let Some(RuleEvent::OutOfBounds { last_touch, .. }) = event {
+        assert_eq!(
+            *last_touch,
+            Some(LastTouch {
+                team: TeamId(0),
+                player: Some(toucher),
+                kind: TouchKind::Play,
+            }),
+            "OutOfBounds payload must preserve the original toucher"
+        );
+    } else {
+        panic!("expected RuleEvent::OutOfBounds, got {event:?}");
+    }
+
+    // Restart push attributes the throw-in to team 1 (Law 9: opposite of
+    // last toucher). The push lands in the buffer this tick; the next
+    // tick's consumer drains it.
+    let pending = world.resource::<PendingBallTouches>();
+    assert_eq!(
+        pending.0,
+        vec![LastTouch {
+            team: TeamId(1),
+            player: Some(taker),
+            kind: TouchKind::Restart,
+        }],
+        "throw-in is awarded to the team opposite of the last toucher"
     );
 }

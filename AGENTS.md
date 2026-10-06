@@ -216,6 +216,20 @@ This rule ensures repository integrity and prevents accidental or malicious chan
 *Effective: [Current Date]*
 *Version: 1.0*
 
+## Agent skills
+
+### Issue tracker
+
+Issues live as local markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` at repo root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Build & test
 
 - Workspace: 11-crate Rust (`crates/sim-math`, `sim-components`, `sim-physics`, `sim-ai-core`, `sim-ai-player`, `sim-ai-manager`, `sim-rules`, `sim-core`, `sim-replay`, `sim-telemetry`, `sim-server`). Single binary: `target/{debug,release}/football-sim`.

@@ -649,6 +649,7 @@ name = "sim-rules"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "serde_json",
  "sim-ai-player",
  "sim-components",
  "sim-core",

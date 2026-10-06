@@ -1,5 +1,49 @@
 # AGENTS.md — football-sim-server
 
+## Primary rule — model authorization
+
+**NEVER use an unsanctioned model without explicit human permission.**
+
+When dispatching a subagent (via the `subagent` tool or any multi-agent
+machinery invoked by a skill), the agent must either:
+
+1. Use the session's default model (omit `model` from the dispatch and let
+   it inherit), OR
+2. Use a model from the **explicit sanctioned list** below, OR
+3. **Ask first** — name the model, its per-MTok cost, and why the
+   sanctioned list is insufficient. Do not dispatch until the human partner
+   replies yes.
+
+This applies even when a skill's instructions say "use the most capable
+available model" or similar. Skills are advisory; the human partner's
+authorization is binding. If the SDD skill's `Model Selection` section
+would call for a model outside the sanctioned list, surface the
+conflict to the human partner before dispatching.
+
+### Sanctioned models (default allowlist)
+
+These models are pre-approved for any subagent dispatch in this workspace.
+Pick by task complexity (cheapest sufficient tier first):
+
+- **Cheap / mechanical**: `opencode-go/mimo-v2.5`, `opencode-go/mimo-v2.5-pro`
+- **Mid-tier / standard**: `opencode-go/minimax-m3` (session default)
+- **Review / judgment-heavy**: `opencode-go/minimax-m3` (or escalate to `mimo-v2.6-pro` only if a fix round is stuck)
+
+### Forbidden-by-default
+
+The following are **NOT** sanctioned. Do not dispatch without explicit
+per-dispatch permission from the human partner:
+
+- Any model priced above $1.00 per million output tokens. As of 2026-10-03 this excludes: `qwen3.8-max`, `grok-4.7`, `gpt-6-luna` (high tier), `kimi-k3`, `hy4-preview`, `mimo-v2.6-pro`, `glm-5.3` (top end), and any model the catalog marks as a "max" / "ultra" / "xhigh" variant.
+- Any model whose name contains "ultra", "max", or "xhigh" variant unless specifically pre-approved for that dispatch.
+- Any model not in the `opencode-go` provider list.
+
+If a skill or task seems to require one of these, **stop and ask**.
+The "Codex" path documented in
+`/home/shubham/.config/opencode/skills/using-superpowers/references/codex-tools.md`
+suggests adding a machine-level backstop via `~/.codex/config.toml` to
+route any unsanctioned spawn to a mid-tier model — consider doing so.
+
 ## Build & test
 
 - Workspace: 11-crate Rust (`crates/sim-math`, `sim-components`, `sim-physics`, `sim-ai-core`, `sim-ai-player`, `sim-ai-manager`, `sim-rules`, `sim-core`, `sim-replay`, `sim-telemetry`, `sim-server`). Single binary: `target/{debug,release}/football-sim`.

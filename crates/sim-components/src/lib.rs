@@ -2,8 +2,13 @@ use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_math::Vec2;
 
+pub mod ball_touch;
 pub mod intent_dispatch;
 pub mod time;
+
+pub use ball_touch::{
+    BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, RuleEvent, TouchKind,
+};
 
 #[derive(Component, Debug, Clone)]
 pub struct PerceptionSnapshot {
@@ -68,113 +73,6 @@ pub enum MatchState {
     HalfTime,
     FullTime,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum BallState {
-    Free,
-    Possessed,
-    InFlight,
-    Dead,
-}
-
-/// Phase 3: Out-of-bounds restart types (Law 9)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum BallOutOfBoundsType {
-    ThrowIn,
-    GoalKick,
-    Corner,
-}
-
-/// Phase 3: Foul types (Law 12)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum FoulType {
-    DangerousPlay,
-}
-
-/// Phase 3: Rule events emitted by the rules engine.
-/// Used for event streaming, replay recording, and CLI output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Component)]
-pub enum RuleEvent {
-    OutOfBounds {
-        oob_type: BallOutOfBoundsType,
-        /// The full touch record at the moment the ball crossed the
-        /// boundary. `Ball.last_touch` is cleared in the same tick
-        /// (today's behaviour; M8 stops clearing it so the record is
-        /// preserved on `Ball` for replay data).
-        last_touch: Option<LastTouch>,
-    },
-    Goal {
-        scorer_team: TeamId,
-        score: (u8, u8),
-        /// The full touch record at the moment the ball crossed the
-        /// line. Scorer attribution uses ball position, not the
-        /// toucher team; this field is captured for completeness and
-        /// future use (e.g. own-goal attribution if introduced).
-        last_touch: Option<LastTouch>,
-    },
-    KickoffRestart,
-    HalfTimeStart,
-    FullTimeStart,
-    Foul {
-        fouler: u64,
-        foulee: u64,
-        foul_type: FoulType,
-    },
-}
-
-/// Categorises a touch of the ball: whether the player actively played it
-/// (kick / interception) or whether the ball was merely placed by a
-/// restart procedure.
-///
-/// Law 11 (offside) is judged at the moment the ball is "played" by a
-/// teammate of the potentially-offside attacker. Touches registered as
-/// `Restart` (kickoff, throw-in, goal-kick, corner placement) do **not**
-/// reset offside judgement — `offside_detection_system` ignores them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum TouchKind {
-    /// Ball placed by `restart_system` or `lifecycle_system` (kickoff,
-    /// throw-in, goal-kick, corner).
-    Restart,
-    /// Player kicked the ball (`kick_execution_system`) or gained
-    /// possession by proximity (`possession_resolution_system`).
-    Play,
-}
-
-/// Records who last touched the ball and how.
-///
-/// `team` is denormalised so the record resolves even if the entity
-/// despawns. `player` is the player who touched the ball, or `None`
-/// when no specific player is credited (a kickoff placement today;
-/// future restarts may also use `None`). `kind` distinguishes active
-/// play from restart placements so Law 11 (offside) can ignore
-/// restart touches via `offside_detection_system`'s existing
-/// `kind == Play` filter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct LastTouch {
-    pub team: TeamId,
-    pub player: Option<Entity>,
-    pub kind: TouchKind,
-}
-
-/// Pending ball touches registered this tick.
-///
-/// Writers (kick, possession acquisition, restart placements) append
-/// to this buffer; the consumer `apply_ball_touched_system` drains it
-/// at the start of the Rules set and writes the final entry to
-/// `Ball.last_touch`.
-///
-/// Determinism: writes happen in fixed system-set order
-/// (Execution → Possession → Rules → `MatchAdmin`), and Bevy
-/// `ResMut` access serialises those writes. Last-touch-wins
-/// semantics are equivalent to a same-tick `EventReader` ordered by
-/// emission time.
-///
-/// This resource replaces a Bevy `Events<T>` channel by design
-/// (see the design spec §B and the OOB restart bug ticket at
-/// `.superpowers/sdd/oob-restart-bug.md`, which recommends
-/// Resource over events).
-#[derive(Resource, Debug, Default)]
-pub struct PendingBallTouches(pub Vec<LastTouch>);
 
 /// Top-level intent tag.
 ///
@@ -336,12 +234,16 @@ pub struct Ball {
     pub spin: f32,
     pub state: BallState,
     pub possessor: Option<Entity>,
-    /// Last registered touch of the ball — written explicitly by
+    /// Last registered touch of the ball — pushed to the buffer by
     /// `kick_execution_system` (kick), `possession_resolution_system`
     /// (proximity interception), `restart_system` (throw-in / corner /
-    /// goal-kick placement), and `lifecycle_system` (kickoff placement).
-    /// Cleared by `out_of_bounds_system` and `goal_detection_system`
-    /// after copying the toucher team into the event payload.
+    /// goal-kick placement). The consumer `apply_ball_touched_system`
+    /// drains the buffer at the start of the Rules set and writes the
+    /// final entry here. `lifecycle_system` writes a `Restart` touch
+    /// directly at kickoff placement (`MatchAdmin` is the last system
+    /// set, so a buffer push would not be visible to this tick's
+    /// readers). M8 stopped the OOB/Goal clears; the record persists
+    /// across those events for replay data.
     /// `offside_detection_system` only consults touches with
     /// `kind == Play` (Law 11 ignores restarts).
     pub last_touch: Option<LastTouch>,

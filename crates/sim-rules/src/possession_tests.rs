@@ -31,6 +31,7 @@ fn test_possession_resolution() {
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(50.0, 34.0)));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
     let player_entity = world.spawn(()).id();
     world.entity_mut(player_entity).insert(Player {
@@ -81,6 +82,7 @@ fn test_possession_resolved_to_real_entity() {
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(50.0, 34.0)));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
     let player_entity = world.spawn(()).id();
     world.entity_mut(player_entity).insert(Player {
@@ -199,6 +201,7 @@ fn test_possession_change_registers_play_touch() {
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(50.0, 34.0)));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
     let player_a = world.spawn(()).id();
     world.entity_mut(player_a).insert(Player {

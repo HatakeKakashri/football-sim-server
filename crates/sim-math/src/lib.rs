@@ -65,6 +65,114 @@ impl Vec2 {
     }
 }
 
+/// Result of a swept proximity test between two moving points over a unit
+/// time interval.
+///
+/// The swept test checks whether two objects moving at constant velocity
+/// come within `radius` meters of each other at any point during the tick.
+/// This is critical for acquisition: a player moving at 5 m/tick (5 m/s at
+/// 60 ticks/s) can traverse 5 m in a single tick, so a static end-of-tick
+/// radius check at 1.5 m would miss the player entirely.
+///
+/// # Mathematical basis
+///
+/// For two points A and B moving at velocities `v_a` and `v_b` over
+/// `t ∈ [0, 1]`:
+/// - `A(t) = a_start + t * v_a`
+/// - `B(t) = b_start + t * v_b`
+///
+/// The squared distance is `|A(t) - B(t)|² = a*t² + 2*b*t + c` where:
+/// - `a = |v_a - v_b|²`  (relative speed squared)
+/// - `b = (a_start - b_start) · (v_a - v_b)`  (initial separation · relative velocity)
+/// - `c = |a_start - b_start|²`  (initial separation squared)
+///
+/// The minimum occurs at `t* = -b/a` (when `a > 0`). If `t* ∈ [0, 1]`,
+/// the minimum distance is `sqrt(c - b²/a)`; otherwise the minimum is at
+/// an endpoint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SweptProximity {
+    /// The minimum distance between the two paths over the interval.
+    pub min_distance: f32,
+    /// `true` if the paths come within `radius` at any point.
+    pub acquired: bool,
+}
+
+/// Compute the minimum distance between two moving points over a unit time
+/// interval `[0, 1]` (one simulation tick), and report whether acquisition
+/// (within `radius`) occurred.
+///
+/// This is a **swept collision** test: it considers the entire path each
+/// object travels during the tick, not just the start or end positions.
+///
+/// # Parameters
+///
+/// - `a_start`: position of object A (e.g., player) at tick start.
+/// - `a_vel`: velocity of object A (displacement per tick).
+/// - `b_start`: position of object B (e.g., ball) at tick start.
+/// - `b_vel`: velocity of object B (displacement per tick).
+/// - `radius`: acquisition radius in metres.
+///
+/// # Returns
+///
+/// `SweptProximity { min_distance, acquired }` where `acquired` is
+/// `min_distance <= radius`.
+#[must_use]
+pub fn swept_proximity(
+    a_start: Vec2,
+    a_vel: Vec2,
+    b_start: Vec2,
+    b_vel: Vec2,
+    radius: f32,
+) -> SweptProximity {
+    let rel_vel = a_vel - b_vel;
+    let rel_start = a_start - b_start;
+
+    // Coefficients of |rel_start + t * rel_vel|² = a*t² + 2*b*t + c
+    let a = rel_vel.length_squared();
+    let b = rel_start.dot(rel_vel);
+    let c = rel_start.length_squared();
+
+    let min_distance;
+
+    if a < f32::EPSILON {
+        // Relative motion is negligible — fall back to static distance.
+        // Both objects are moving together or are stationary relative to
+        // each other, so the distance is essentially constant.
+        min_distance = rel_start.length();
+    } else {
+        // Find t* = -b/a, the unconstrained minimum of the quadratic.
+        let t_star = -b / a;
+
+        let (dist_at_0, dist_at_1) = {
+            let at_0 = rel_start.length();
+            let at_1 = (rel_start + rel_vel).length();
+            (at_0, at_1)
+        };
+
+        // If t* is outside [0, 1], the minimum is at an endpoint.
+        // Otherwise, the minimum is at t* (interior).
+        if (0.0..=1.0).contains(&t_star) {
+            // Interior minimum: formula is min_dist² = c - b²/a.
+            // This is the minimum squared distance at t = t*.
+            let min_dist_sq = c - (b * b) / a;
+            min_distance = if min_dist_sq > 0.0 {
+                min_dist_sq.sqrt()
+            } else {
+                // Numerical edge case: paths intersect, distance is 0.
+                0.0
+            };
+        } else {
+            // Minimum is at whichever endpoint is closer.
+            min_distance = dist_at_0.min(dist_at_1);
+        }
+    }
+
+    SweptProximity {
+        min_distance,
+        acquired: min_distance <= radius,
+    }
+}
+
 impl Add for Vec2 {
     type Output = Self;
 
@@ -237,5 +345,174 @@ mod tests {
         assert_eq!(2.0 * v1, Vec2::new(2.0, 4.0));
         assert_eq!(v1.dot(v2), 11.0);
         assert_eq!(v1.length_squared(), 5.0);
+    }
+
+    #[test]
+    fn test_swept_proximity_static_no_acquire() {
+        // Player at (0,0), ball at (5,0), both stationary.
+        // Distance is 5m > 1.5m acquisition radius.
+        let result = swept_proximity(
+            Vec2::new(0.0, 0.0),
+            Vec2::zero(),
+            Vec2::new(5.0, 0.0),
+            Vec2::zero(),
+            1.5,
+        );
+        assert_eq!(result.min_distance, 5.0);
+        assert!(!result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_static_acquire() {
+        // Player at (0,0), ball at (1.0, 0), both stationary.
+        // Distance is 1.0m < 1.5m acquisition radius.
+        let result = swept_proximity(
+            Vec2::new(0.0, 0.0),
+            Vec2::zero(),
+            Vec2::new(1.0, 0.0),
+            Vec2::zero(),
+            1.5,
+        );
+        assert_eq!(result.min_distance, 1.0);
+        assert!(result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_player_crosses_ball() {
+        // Player moves from (0,0) to (5,0) — crosses the ball at (2.5, 0).
+        // Ball stays at (2.5, 0). Minimum distance is 0 at t=0.5.
+        let result = swept_proximity(
+            Vec2::new(0.0, 0.0),  // player start
+            Vec2::new(5.0, 0.0),  // player velocity: 5m/tick
+            Vec2::new(2.5, 0.0),  // ball start
+            Vec2::zero(),          // ball stationary
+            1.5,
+        );
+        assert!((result.min_distance - 0.0).abs() < 1e-6);
+        assert!(result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_player_misses_ball() {
+        // Player moves from (0,0) to (5,0), ball stays at (0, 5).
+        // Minimum distance is 5m (player passes 5m away).
+        let result = swept_proximity(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(5.0, 0.0),
+            Vec2::new(0.0, 5.0),
+            Vec2::zero(),
+            1.5,
+        );
+        assert_eq!(result.min_distance, 5.0);
+        assert!(!result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_both_moving_towards() {
+        // Player at (0,0) moving right at 3m/tick, ball at (5,0) moving left at 2m/tick.
+        // They approach each other. Meeting point: t=1, position (1,0).
+        // Minimum distance is 0 (they meet).
+        let result = swept_proximity(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(3.0, 0.0),
+            Vec2::new(5.0, 0.0),
+            Vec2::new(-2.0, 0.0),
+            1.5,
+        );
+        assert!((result.min_distance - 0.0).abs() < 1e-6);
+        assert!(result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_ball_moving_past_stationary_player() {
+        // Ball moving from (0,0) to (5,0), player stationary at (2.5, 0).
+        // Ball passes directly through player at t=0.5.
+        let result = swept_proximity(
+            Vec2::new(2.5, 0.0),
+            Vec2::zero(),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(5.0, 0.0),
+            1.5,
+        );
+        assert!((result.min_distance - 0.0).abs() < 1e-6);
+        assert!(result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_endpoint_acquire() {
+        // Player starts at (1.4, 0) moving to (1.6, 0), ball at (0, 0) stationary.
+        // Player's path comes within 1.4m at t=0, which is < 1.5m.
+        let result = swept_proximity(
+            Vec2::new(1.4, 0.0),
+            Vec2::new(0.2, 0.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::zero(),
+            1.5,
+        );
+        assert!((result.min_distance - 1.4).abs() < 1e-5);
+        assert!(result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_past_endpoint_acquire() {
+        // Player starts at (0, 0) moving to (3.0, 0), ball at (0, 1.4) stationary.
+        // Minimum distance is 1.4 at t=0 (player passes 1.4m from ball).
+        let result = swept_proximity(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(3.0, 0.0),
+            Vec2::new(0.0, 1.4),
+            Vec2::zero(),
+            1.5,
+        );
+        assert!((result.min_distance - 1.4).abs() < 1e-6);
+        assert!(result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_past_endpoint_no_acquire() {
+        // Player starts at (0, 0) moving to (3.0, 0), ball at (0, 2.0) stationary.
+        // Minimum distance is 2.0 at t=0, which is > 1.5m.
+        let result = swept_proximity(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(3.0, 0.0),
+            Vec2::new(0.0, 2.0),
+            Vec2::zero(),
+            1.5,
+        );
+        assert!((result.min_distance - 2.0).abs() < 1e-6);
+        assert!(!result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_diagonal_motion() {
+        // Player moves diagonally from (0,0) to (3,4) (length 5m at angle).
+        // Ball at (2.5, 2.0). Closest approach at t=0.62:
+        // player at (1.86, 2.48), distance = sqrt(0.64 + 0.2304) = sqrt(0.8704) ≈ 0.933m
+        let result = swept_proximity(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(3.0, 4.0),
+            Vec2::new(2.5, 2.0),
+            Vec2::zero(),
+            1.5,
+        );
+        assert!((result.min_distance - 0.8).abs() < 1e-4);
+        assert!(result.acquired);
+    }
+
+    #[test]
+    fn test_swept_proximity_inner_endpoint() {
+        // Player moves from (0,0) to (5,0), ball moves from (3,0) to (4,0).
+        // Relative motion: player starts 3m behind and closes 1m gap.
+        // They overlap at t=0.6: player at 3.0, ball at 3.6.
+        // Min distance should be 0 (they cross paths).
+        let result = swept_proximity(
+            Vec2::new(0.0, 0.0),
+            Vec2::new(5.0, 0.0),
+            Vec2::new(3.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            1.5,
+        );
+        assert!(result.min_distance < 1e-5);
+        assert!(result.acquired);
     }
 }

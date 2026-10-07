@@ -69,6 +69,30 @@ pub const MAX_BALL_SPEED: f32 = 30.0 / 60.0;
 /// lossy), which is intentional: empirically tuned as a per-tick decay.
 pub const BALL_DAMPING: f32 = 0.99;
 
+/// Maximum player acceleration, in m/s².
+///
+/// Bounds the per-tick change in player velocity so a stationary player
+/// cannot jump from 0 to full cruise speed in a single tick. Combined with
+/// the 60 Hz tick rate, the per-tick velocity change cap is
+/// `PLAYER_MAX_ACCEL_PER_TICK = 1.5 / 60 ≈ 0.025 m/tick`. The Reynolds
+/// "arrival" slow-down in `sim-ai-player::execution::steer_desired_velocity`
+/// uses `PLAYER_ARRIVAL_DECEL` (separate constant) to cap speed near the
+/// target.
+pub const PLAYER_MAX_ACCEL: f32 = 1.5;
+
+/// Per-tick form of `PLAYER_MAX_ACCEL` (m/tick = m/s² × s/tick).
+///
+/// Used directly by `sim-ai-player::execution::player_acceleration_system`.
+pub const PLAYER_MAX_ACCEL_PER_TICK: f32 = PLAYER_MAX_ACCEL / 60.0;
+
+/// Player arrival deceleration, in m/s².
+///
+/// Used in `steer_desired_velocity` to cap cruise speed inside the
+/// arrival radius so a player approaching a target decelerates into it
+/// rather than overshooting and oscillating next tick. Reynolds' formula:
+/// `arrival_cap_speed = sqrt(2 * decel * distance)`.
+pub const PLAYER_ARRIVAL_DECEL: f32 = 4.0;
+
 /// Phase 2: pitch control grid constants (16 columns × 12 rows).
 ///
 /// The grid covers the full pitch. Each cell stores the probability that the

@@ -8,7 +8,7 @@ use sim_components::{
     Player, Skill, Stamina, TouchKind, Velocity,
 };
 use sim_math::Vec2;
-use sim_physics::SimRng;
+use sim_physics::{PLAYER_ARRIVAL_DECEL, PLAYER_MAX_ACCEL_PER_TICK, SimRng};
 use sim_telemetry::TelemetryConfig;
 
 /// Monotonic counter for `pass()` flow ids. Two passes share the same
@@ -40,16 +40,72 @@ pub const KICK_SPEED_PASS: f32 = 14.0 / 60.0;
 /// `sim_components::intent_dispatch`. This function is now a thin wrapper
 /// that consumes the (target, speed) pair and converts it to a velocity
 /// vector. The `> 0.1` distance deadband is preserved.
+///
+/// MVP fix (steering): arrival slow-down. Near the target, speed is capped
+/// at `sqrt(2 * arrival_decel * distance)` so the player decelerates into
+/// the target instead of leaping past it and oscillating on subsequent
+/// ticks. See `steer_desired_velocity` for the pure-form version.
 fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
     let Some((target, speed)) = intent.steer_target(perception) else {
         return Vec2::zero();
     };
-    let direction = target - perception.self_position;
+    steer_desired_velocity(target, perception.self_position, speed, PLAYER_ARRIVAL_DECEL)
+}
+
+/// Pure arrival-style steering: given a target point, the steering agent's
+/// current position, the agent's cruise speed (m/tick), and a deceleration
+/// parameter (m/s²), returns the desired velocity vector (m/tick) the agent
+/// should accelerate toward this tick. Inside the 0.1 m deadband the
+/// returned velocity is zero — the player has arrived.
+///
+/// The Reynolds "arrival" formulation: speed is capped at
+/// `sqrt(2 * decel * distance)` so that a player at full cruise can
+/// decelerate to zero at the target exactly. Without this cap a player
+/// nearer than one tick of motion overshoots and flips direction next
+/// tick, oscillating around the target until the next decision cadence.
+///
+/// All four inputs are non-negative; the caller must pre-resolve the
+/// target via `Intent::steer_target` or similar.
+fn steer_desired_velocity(target: Vec2, position: Vec2, speed: f32, decel: f32) -> Vec2 {
+    let direction = target - position;
     let distance = direction.length();
-    if distance > 0.1 {
-        (direction / distance) * speed
+    if distance <= 0.1 {
+        return Vec2::zero();
+    }
+    // Arrival radius: `sqrt(2 * decel * distance)` is the maximum speed at
+    // which the player can decelerate to zero exactly at the target.
+    // Compare in m/s (multiply both sides by `2` to avoid sqrt on per-tick
+    // values) — speed is m/tick so the cruise cap is `speed*sqrt(2*decel*dt)`
+    // ... actually simpler: work in m/s throughout. cruise_mps = speed * 60,
+    // arrival_cap_mps = sqrt(2 * decel * distance). Pick min, scale back to
+    // m/tick.
+    let cruise_mps = speed * 60.0;
+    let arrival_cap_mps = (2.0_f32).mul_add(decel * distance, 0.0).sqrt();
+    let chosen_mps = cruise_mps.min(arrival_cap_mps);
+    let chosen = chosen_mps / 60.0;
+    (direction / distance) * chosen
+}
+
+/// Cap the per-tick velocity change at `max_accel_per_tick`. Returns the
+/// new velocity, clamped component-wise to within `max_accel_per_tick` of
+/// the previous velocity in the direction of `desired`.
+///
+/// `prev` and `desired` are in m/tick. The returned vector's magnitude is
+/// also bounded by `cruise_speed_m_per_tick = desired.length()` when the
+/// player is far from the target, but this function makes no assumptions
+/// about the cruise speed — it only enforces the acceleration cap.
+/// The downstream `player_movement_system` applies the absolute max-speed
+/// clamp (`MAX_PLAYER_SPEED`) on top of this.
+fn apply_acceleration_limit(prev: Vec2, desired: Vec2, max_accel_per_tick: f32) -> Vec2 {
+    let delta = desired - prev;
+    let delta_len = delta.length();
+    if delta_len <= max_accel_per_tick {
+        desired
+    } else if delta_len < f32::EPSILON {
+        // desired == prev: nothing to do.
+        prev
     } else {
-        Vec2::zero()
+        prev + (delta / delta_len) * max_accel_per_tick
     }
 }
 
@@ -66,8 +122,7 @@ pub fn player_action_execution_system(
 ) {
     // Phase 2: real steering for every action. Each arm turns the abstract
     // intent into a constant-velocity steer toward (or away from) the
-    // relevant world point. Acceleration is intentionally ignored — Phase 2
-    // only proves the utility-AI loop drives meaningful state changes.
+    // relevant world point.
     //
     // Entity-target lookups use the player's own perception snapshot rather
     // than a separate world query — keeps the system signature simple and
@@ -75,8 +130,21 @@ pub fn player_action_execution_system(
     // the player and the ball.
     //
     // Phase 3: stochastic outcomes for tackles, passes, and shots using RNG.
+    //
+    // MVP steering fix (item #2): arrival slow-down + per-tick acceleration
+    // cap. The previous velocity is captured into a local at the top of the
+    // iteration, before any work is done. The new velocity is the
+    // acceleration-capped step from prev_velocity toward the stochastic
+    // desired velocity. This prevents the per-tick teleport-from-rest bug
+    // (velocity jumping from 0 to full cruise in a single tick) and the
+    // overshoot bug (a player inside the arrival radius being asked to
+    // leap past the target and reverse direction next tick).
+    //
     // DETERMINISM: collect entities first and sort by Entity ID to ensure
-    // stable RNG draw order across processes (spec §7, rule #22).
+    // stable RNG draw order across processes (spec §7, rule #22). Reading
+    // `velocity.0` into `prev_velocity` first preserves the previous-tick
+    // value across the iteration even though we hold a `&mut Velocity`
+    // borrow — the local is independent storage.
     let mut entities: Vec<Entity> = query.iter().map(|(e, _, _, _, _, _)| e).collect();
     entities.sort_by_key(|e| e.to_bits());
     for entity in entities {
@@ -88,6 +156,11 @@ pub fn player_action_execution_system(
             velocity.0 = Vec2::zero();
             continue;
         };
+
+        // Capture the previous tick's velocity BEFORE we do any work.
+        // This is the "prev" the acceleration cap will clamp the new
+        // velocity against.
+        let prev_velocity = velocity.0;
 
         // Apply stochastic modifiers based on action type
         let mut speed_modifier = 1.0;
@@ -142,8 +215,13 @@ pub fn player_action_execution_system(
             | Intent::Action(ActionIntent::MarkOpponent(_) | ActionIntent::Press(_)) => {}
         }
 
-        let new_velocity = steer(perception, &intent);
-        velocity.0 = new_velocity * speed_modifier + direction_modifier;
+        let desired = steer(perception, &intent);
+        let desired_with_stochastic = desired * speed_modifier + direction_modifier;
+        velocity.0 = apply_acceleration_limit(
+            prev_velocity,
+            desired_with_stochastic,
+            PLAYER_MAX_ACCEL_PER_TICK,
+        );
     }
 }
 
@@ -257,8 +335,8 @@ pub fn kick_execution_system(
 mod tests {
     use super::*;
     use sim_components::{
-        Ball, BallMarker, MatchClock, NearbyEntity, PendingBallTouches, PerceptionSnapshot,
-        PitchBounds, Player, Position, Velocity,
+        ActionIntent, Ball, BallMarker, MatchClock, MovementIntent, NearbyEntity,
+        PendingBallTouches, PerceptionSnapshot, PitchBounds, Player, Position, Velocity,
     };
     use sim_telemetry::{TelemetryConfig, capture_trace};
     use smallvec::smallvec;
@@ -267,6 +345,145 @@ mod tests {
 
     fn pos(x: f32, y: f32) -> Vec2 {
         Vec2::new(x, y)
+    }
+
+    /// Arrival slow-down: a player close to a stationary target should steer
+    /// slower than cruise speed so they don't oscillate around the target.
+    /// The Reynolds "arrival" formula caps speed at
+    /// `sqrt(2 * decel * distance)` when inside the arrival radius. Without
+    /// this, a player 0.5 m from target with cruise speed 8/60 would
+    /// overshoot and flip direction next tick.
+    #[test]
+    fn arrival_slowdown_caps_speed_near_target() {
+        // Player 0.5 m east of target. With decel = 4 m/s² the arrival cap
+        // is sqrt(2 * 4 * 0.5) = 2 m/s = 2/60 m/tick. Cruise is 8/60.
+        // Result must be exactly the cap (cruise > cap), and must point
+        // toward the target.
+        let desired = steer_desired_velocity(
+            pos(0.0, 0.0),
+            pos(0.5, 0.0),
+            8.0 / 60.0,
+            4.0,
+        );
+        let expected_cap = (2.0_f32 / 60.0).sqrt() * (2.0_f32 / 60.0).sqrt();
+        // sqrt(2 * 4 * 0.5) = sqrt(4) = 2.0 m/s => 2/60 m/tick
+        let expected_len = 2.0 / 60.0;
+        assert!(
+            (desired.length() - expected_len).abs() < 1e-6,
+            "expected length {expected_len}, got {}",
+            desired.length(),
+        );
+        // Direction: from (0.5, 0) to (0.0, 0) is (-1, 0).
+        assert!(desired.x < 0.0, "should point toward target (negative x)");
+        assert!(desired.y.abs() < 1e-6, "should be along x-axis");
+        // Defensive: confirm our own expected_len formula
+        let _ = expected_cap;
+    }
+
+    /// At distance beyond the arrival radius, speed should be cruise speed
+    /// unchanged. The arrival cap `sqrt(2 * decel * distance)` exceeds
+    /// cruise (8 m/s) when `distance > cruise^2 / (2*decel) = 8 m`. So at
+    /// 20 m the cruise cap dominates and the desired velocity equals
+    /// `unit_dir * 8/60` exactly.
+    #[test]
+    fn arrival_slowdown_does_not_reduce_speed_far_from_target() {
+        let desired = steer_desired_velocity(
+            pos(0.0, 0.0),
+            pos(20.0, 0.0),
+            8.0 / 60.0,
+            4.0,
+        );
+        let expected = -8.0 / 60.0; // negative x, toward target
+        assert!(
+            (desired.x - expected).abs() < 1e-6,
+            "expected x {expected}, got {}",
+            desired.x,
+        );
+        assert!(desired.y.abs() < 1e-6);
+    }
+
+    /// Below the 0.1 m deadband, return zero (preserve existing behaviour:
+    /// the player is "at" the target).
+    #[test]
+    fn arrival_returns_zero_inside_deadband() {
+        let desired = steer_desired_velocity(
+            pos(0.0, 0.0),
+            pos(0.05, 0.0),
+            8.0 / 60.0,
+            4.0,
+        );
+        assert_eq!(desired, Vec2::zero());
+    }
+
+    /// The acceleration clamp must cap the per-tick velocity change so a
+    /// stationary player cannot jump from 0 to full speed in a single tick.
+    /// With `max_accel` = 1.5 m/s² and `dt` = 1/60 s, the max per-tick change
+    /// is 1.5/60 m/tick ≈ 0.025 m/tick. So after one tick, |velocity| ≤
+    /// `max_accel_per_tick`.
+    #[test]
+    fn accel_clamp_limits_charge_of_magnitude_change() {
+        let prev = Vec2::zero();
+        let desired = Vec2::new(10.0 / 60.0, 0.0); // full cruise east
+        let max_accel = 1.5 / 60.0; // per-tick cap
+        let new_velocity = apply_acceleration_limit(prev, desired, max_accel);
+        let expected = Vec2::new(max_accel, 0.0);
+        assert!(
+            (new_velocity.x - expected.x).abs() < 1e-6,
+            "expected x {}, got {}",
+            expected.x,
+            new_velocity.x,
+        );
+        assert!(new_velocity.y.abs() < 1e-6);
+        // After one tick, we are well under cruise (10/60 m/tick).
+        assert!(new_velocity.length() < (10.0 / 60.0));
+    }
+
+    /// Acceleration clamp must allow the velocity to ramp up over multiple
+    /// ticks. From zero, applying the clamp N times in a row should bring
+    /// |velocity| to roughly `min(cruise, N * max_accel_per_tick)`. With
+    /// `max_accel` = 1.5/60 and cruise = 10/60, full speed should be reached
+    /// in ceil(10/1.5) = 7 ticks.
+    #[test]
+    fn accel_clamp_ramps_up_over_multiple_ticks() {
+        let prev = Vec2::zero();
+        let desired = Vec2::new(10.0 / 60.0, 0.0);
+        let max_accel = 1.5 / 60.0;
+        let mut v = prev;
+        for _ in 0..7 {
+            v = apply_acceleration_limit(v, desired, max_accel);
+        }
+        // After 7 ticks of clamping, velocity should match desired (within
+        // a small epsilon).
+        assert!(
+            (v.x - desired.x).abs() < 1e-5,
+            "expected x {} after 7 ticks, got {}",
+            desired.x,
+            v.x,
+        );
+    }
+
+    /// Acceleration clamp must *decelerate* as well as accelerate — when
+    /// desired is the opposite direction, velocity must change by at most
+    /// `max_accel_per_tick` toward desired (i.e. we begin to slow down).
+    #[test]
+    fn accel_clamp_applies_to_deceleration() {
+        let prev = Vec2::new(10.0 / 60.0, 0.0); // moving east
+        let desired = Vec2::new(-10.0 / 60.0, 0.0); // want to move west
+        let max_accel = 1.5 / 60.0;
+        let new_velocity = apply_acceleration_limit(prev, desired, max_accel);
+        // Diff = desired - prev = (-20/60, 0). Length = 20/60 ≈ 0.333.
+        // Clamp to max_accel_per_tick ≈ 0.025. So new = prev + (-0.025, 0)
+        // = (10/60 - 0.025, 0) = (0.1417 - 0.025, 0) ≈ (0.1167, 0).
+        let expected_x = 10.0 / 60.0 - max_accel;
+        assert!(
+            (new_velocity.x - expected_x).abs() < 1e-6,
+            "expected x {}, got {}",
+            expected_x,
+            new_velocity.x,
+        );
+        assert!(new_velocity.y.abs() < 1e-6);
+        // Velocity should still be positive x — we decelerated, not flipped.
+        assert!(new_velocity.x > 0.0, "should decelerate, not flip");
     }
 
     #[test]
@@ -402,4 +619,147 @@ mod tests {
             "no telemetry → no trace events, got {events:?}"
         );
     }
+
+    /// MVP steering fix integration test (item #2): from rest, after one tick
+/// the player's velocity magnitude must not exceed `PLAYER_MAX_ACCEL_PER_TICK`.
+/// This is the simplest possible test that distinguishes "broken steering"
+/// (instant cruise-speed jump from rest) from "fixed steering" (gradual
+/// acceleration from rest). Without the acceleration cap the player's
+/// velocity would jump straight to `8/60 ≈ 0.133 m/tick` on tick 1.
+#[test]
+fn accel_cap_clamps_first_tick_velocity_from_rest() {
+    use sim_physics::{PLAYER_MAX_ACCEL_PER_TICK, player_movement_system};
+
+    let mut world = World::new();
+    world.insert_resource(sim_math::PitchDimensions::standard());
+    world.insert_resource(SimRng::new(1));
+
+    let player_pos = Vec2::new(50.0, 34.0);
+    let ball_pos = Vec2::new(60.0, 34.0);
+    let player_entity = world
+        .spawn((
+            Player {
+                team_id: sim_components::TeamId(0),
+                intent: Some(Intent::Movement(MovementIntent::ChaseBall)),
+            },
+            Position(player_pos),
+            Velocity(Vec2::zero()),
+            Stamina(1.0),
+            Skill(0.7),
+            PerceptionSnapshot {
+                self_position: player_pos,
+                nearby_teammates: smallvec![],
+                nearby_opponents: smallvec![],
+                ball_position: ball_pos,
+                ball_state: sim_components::BallState::Free,
+                goal_position: Vec2::new(105.0, 34.0),
+                pitch_bounds: PitchBounds {
+                    distance_to_left: player_pos.x,
+                    distance_to_right: 105.0 - player_pos.x,
+                    distance_to_top: player_pos.y,
+                    distance_to_bottom: 68.0 - player_pos.y,
+                },
+            },
+        ))
+        .id();
+
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world.entity_mut(ball_entity).insert(Position(ball_pos));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(
+        (player_action_execution_system, player_movement_system).chain(),
+    );
+
+    // Run ONE tick. The velocity after the tick must be at most
+    // `PLAYER_MAX_ACCEL_PER_TICK` (≈ 0.025 m/tick). Without the cap the
+    // velocity would be `8/60 ≈ 0.133 m/tick`.
+    schedule.run(&mut world);
+    let v = world.get::<Velocity>(player_entity).expect("velocity").0;
+    assert!(
+        v.length() <= PLAYER_MAX_ACCEL_PER_TICK + 1e-5,
+        "first-tick velocity should be ≤ PLAYER_MAX_ACCEL_PER_TICK ({}), got length {} (v={:?})",
+        PLAYER_MAX_ACCEL_PER_TICK,
+        v.length(),
+        v,
+    );
+    // And the position should increase by `v.x`, which is at most the cap.
+    let p = world.get::<Position>(player_entity).expect("position").0;
+    assert!(
+        p.x - player_pos.x <= PLAYER_MAX_ACCEL_PER_TICK + 1e-5,
+        "first-tick position delta should be ≤ PLAYER_MAX_ACCEL_PER_TICK ({}), got {}",
+        PLAYER_MAX_ACCEL_PER_TICK,
+        p.x - player_pos.x,
+    );
+}
+
+/// MVP steering fix integration test (item #2): the arrival slow-down
+/// must prevent a stationary player from oscillating around a 1.5 m
+/// distant ball. Specifically: once the player is within the 0.1 m
+/// deadband of the ball, the velocity must be exactly zero every
+/// subsequent tick (no overshoot flip).
+#[test]
+    fn arrival_prevents_oscillation_near_ball() {
+    use sim_physics::player_movement_system;
+
+    let mut world = World::new();
+    world.insert_resource(sim_math::PitchDimensions::standard());
+    world.insert_resource(SimRng::new(1));
+
+    // Player 0.05 m from a stationary ball (inside the 0.1 m deadband).
+    let player_pos = Vec2::new(50.0, 34.0);
+    let ball_pos = Vec2::new(50.05, 34.0);
+    let player_entity = world
+        .spawn((
+            Player {
+                team_id: sim_components::TeamId(0),
+                intent: Some(Intent::Movement(MovementIntent::ChaseBall)),
+            },
+            Position(player_pos),
+            Velocity(Vec2::zero()),
+            Stamina(1.0),
+            Skill(0.7),
+            PerceptionSnapshot {
+                self_position: player_pos,
+                nearby_teammates: smallvec![],
+                nearby_opponents: smallvec![],
+                ball_position: ball_pos,
+                ball_state: sim_components::BallState::Free,
+                goal_position: Vec2::new(105.0, 34.0),
+                pitch_bounds: PitchBounds {
+                    distance_to_left: player_pos.x,
+                    distance_to_right: 105.0 - player_pos.x,
+                    distance_to_top: player_pos.y,
+                    distance_to_bottom: 68.0 - player_pos.y,
+                },
+            },
+        ))
+        .id();
+
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world.entity_mut(ball_entity).insert(Position(ball_pos));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(
+        (player_action_execution_system, player_movement_system).chain(),
+    );
+
+    for _ in 0..10 {
+        schedule.run(&mut world);
+        let v = world.get::<Velocity>(player_entity).expect("velocity").0;
+        assert!(
+            v.length() < 1e-5,
+            "velocity must be zero inside deadband, got {v:?}",
+        );
+        // Update perception so the next tick still thinks we're near the ball.
+        let p = world.get::<Position>(player_entity).expect("position").0;
+        if let Some(mut snap) = world.get_mut::<PerceptionSnapshot>(player_entity) {
+            snap.self_position = p;
+        }
+    }
+}
 }

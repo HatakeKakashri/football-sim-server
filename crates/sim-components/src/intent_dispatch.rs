@@ -55,13 +55,17 @@ impl Intent {
                 .map(|t| t.relative_position + player_pos)
         };
 
+        // Speeds are in metres per tick (m/tick), rescaled from the
+        // original m/s values by dividing by TICKS_PER_SECOND (60).
+        // MAX_PLAYER_SPEED = 10/60 ≈ 0.1417 m/tick; most steering intents
+        // use a fraction of that maximum.
         match self {
-            Self::Movement(MovementIntent::MoveToPosition(target)) => Some((*target, 5.0)),
-            Self::Movement(MovementIntent::ChaseBall) => Some((ball_pos, 8.0)),
+            Self::Movement(MovementIntent::MoveToPosition(target)) => Some((*target, 5.0 / 60.0)),
+            Self::Movement(MovementIntent::ChaseBall) => Some((ball_pos, 8.0 / 60.0)),
             Self::Movement(MovementIntent::Intercept) => {
                 // Existing behaviour: ball_vel is not on the perception
                 // snapshot, so the half-tick lead collapses to `ball_pos`.
-                Some((ball_pos, 9.0))
+                Some((ball_pos, 9.0 / 60.0))
             }
             Self::Movement(MovementIntent::HoldPosition) => None,
             Self::Movement(MovementIntent::SupportRun) => {
@@ -70,18 +74,20 @@ impl Intent {
                 // across the opponent (mirrors `player_pos +
                 // (player_pos - opp.relative_position)`).
                 closest_by_distance(&perception.nearby_opponents)
-                    .map(|worst| (player_pos + (player_pos - worst.relative_position), 5.0))
+                    .map(|worst| (player_pos + (player_pos - worst.relative_position), 5.0 / 60.0))
             }
-            Self::Movement(MovementIntent::TrackBack) => Some((Vec2::new(0.0, 34.0), 6.0)),
+            Self::Movement(MovementIntent::TrackBack) => {
+                Some((Vec2::new(0.0, 34.0), 6.0 / 60.0))
+            }
             Self::Action(ActionIntent::PassTo) => {
-                Some((nearest_teammate_pos().unwrap_or(ball_pos), 8.0))
+                Some((nearest_teammate_pos().unwrap_or(ball_pos), 8.0 / 60.0))
             }
-            Self::Action(ActionIntent::ShootAtGoal(target)) => Some((*target, 10.0)),
+            Self::Action(ActionIntent::ShootAtGoal(target)) => Some((*target, 10.0 / 60.0)),
             Self::Action(ActionIntent::Tackle(_) | ActionIntent::Press(_)) => {
-                Some((nearest_opponent_pos().unwrap_or(player_pos), 10.0))
+                Some((nearest_opponent_pos().unwrap_or(player_pos), 10.0 / 60.0))
             }
             Self::Action(ActionIntent::MarkOpponent(_)) => {
-                Some((nearest_opponent_pos().unwrap_or(player_pos), 4.0))
+                Some((nearest_opponent_pos().unwrap_or(player_pos), 4.0 / 60.0))
             }
         }
     }
@@ -195,20 +201,20 @@ mod tests {
         let player_pos = Vec2::new(10.0, 20.0);
         let ball_pos = Vec2::new(15.0, 25.0);
 
-        // MoveToPosition: target = the embedded point, speed = 5.0
+        // MoveToPosition: target = the embedded point, speed = 5.0 m/s ÷ 60 ≈ 0.0833 m/tick
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Movement(MovementIntent::MoveToPosition(Vec2::new(40.0, 50.0)));
-        assert_eq!(intent.steer_target(&p), Some((Vec2::new(40.0, 50.0), 5.0)));
+        assert_eq!(intent.steer_target(&p), Some((Vec2::new(40.0, 50.0), 5.0 / 60.0)));
 
-        // ChaseBall: target = ball_pos, speed = 8.0
+        // ChaseBall: target = ball_pos, speed = 8.0 m/s ÷ 60 ≈ 0.1333 m/tick
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Movement(MovementIntent::ChaseBall);
-        assert_eq!(intent.steer_target(&p), Some((ball_pos, 8.0)));
+        assert_eq!(intent.steer_target(&p), Some((ball_pos, 8.0 / 60.0)));
 
-        // Intercept: target = ball_pos (no ball_vel on perception), speed = 9.0
+        // Intercept: target = ball_pos (no ball_vel on perception), speed = 9.0 m/s ÷ 60 = 0.15 m/tick
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Movement(MovementIntent::Intercept);
-        assert_eq!(intent.steer_target(&p), Some((ball_pos, 9.0)));
+        assert_eq!(intent.steer_target(&p), Some((ball_pos, 9.0 / 60.0)));
 
         // HoldPosition: returns None
         let p = empty_perception(player_pos, ball_pos);
@@ -220,45 +226,45 @@ mod tests {
         let intent = Intent::Movement(MovementIntent::SupportRun);
         assert!(intent.steer_target(&p).is_none());
 
-        // SupportRun with opponent: target = reflection across opponent, speed = 5.0
+        // SupportRun with opponent: target = reflection across opponent, speed = 5.0 m/s ÷ 60
         let opp_rel = Vec2::new(2.0, 0.0);
         let p = perception_with_opponents(player_pos, ball_pos, opp_rel);
         let intent = Intent::Movement(MovementIntent::SupportRun);
         // player_pos + (player_pos - opp_rel) = (10, 20) + (8, 20) = (18, 40)
-        assert_eq!(intent.steer_target(&p), Some((Vec2::new(18.0, 40.0), 5.0)));
+        assert_eq!(intent.steer_target(&p), Some((Vec2::new(18.0, 40.0), 5.0 / 60.0)));
 
-        // TrackBack: hardcoded midline (0.0, 34.0), speed = 6.0
+        // TrackBack: hardcoded midline (0.0, 34.0), speed = 6.0 m/s ÷ 60 = 0.1 m/tick
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Movement(MovementIntent::TrackBack);
-        assert_eq!(intent.steer_target(&p), Some((Vec2::new(0.0, 34.0), 6.0)));
+        assert_eq!(intent.steer_target(&p), Some((Vec2::new(0.0, 34.0), 6.0 / 60.0)));
 
-        // PassTo with no teammate: target = ball_pos, speed = 8.0
+        // PassTo with no teammate: target = ball_pos, speed = 8.0 m/s ÷ 60 ≈ 0.1333 m/tick
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Action(ActionIntent::PassTo);
-        assert_eq!(intent.steer_target(&p), Some((ball_pos, 8.0)));
+        assert_eq!(intent.steer_target(&p), Some((ball_pos, 8.0 / 60.0)));
 
-        // PassTo with teammate: target = teammate world pos, speed = 8.0
+        // PassTo with teammate: target = teammate world pos, speed = 8.0 m/s ÷ 60
         let tm_rel = Vec2::new(5.0, 0.0);
         let p = perception_with_teammate(player_pos, ball_pos, tm_rel);
         let intent = Intent::Action(ActionIntent::PassTo);
-        assert_eq!(intent.steer_target(&p), Some((player_pos + tm_rel, 8.0)));
+        assert_eq!(intent.steer_target(&p), Some((player_pos + tm_rel, 8.0 / 60.0)));
 
-        // ShootAtGoal: target = embedded point, speed = 10.0
+        // ShootAtGoal: target = embedded point, speed = 10.0 m/s ÷ 60 ≈ 0.1667 m/tick
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Action(ActionIntent::ShootAtGoal(Vec2::new(60.0, 34.0)));
-        assert_eq!(intent.steer_target(&p), Some((Vec2::new(60.0, 34.0), 10.0)));
+        assert_eq!(intent.steer_target(&p), Some((Vec2::new(60.0, 34.0), 10.0 / 60.0)));
 
-        // Tackle / Press with no opponent: target = player_pos, speed = 10.0
+        // Tackle / Press with no opponent: target = player_pos, speed = 10.0 m/s ÷ 60
         let p = empty_perception(player_pos, ball_pos);
         for variant in [
             ActionIntent::Tackle(entity(99)),
             ActionIntent::Press(entity(99)),
         ] {
             let intent = Intent::Action(variant);
-            assert_eq!(intent.steer_target(&p), Some((player_pos, 10.0)));
+            assert_eq!(intent.steer_target(&p), Some((player_pos, 10.0 / 60.0)));
         }
 
-        // Tackle / Press with opponent: target = opponent world pos, speed = 10.0
+        // Tackle / Press with opponent: target = opponent world pos, speed = 10.0 m/s ÷ 60
         let opp_rel = Vec2::new(3.0, -1.0);
         let p = perception_with_opponents(player_pos, ball_pos, opp_rel);
         for variant in [
@@ -266,19 +272,19 @@ mod tests {
             ActionIntent::Press(entity(99)),
         ] {
             let intent = Intent::Action(variant);
-            assert_eq!(intent.steer_target(&p), Some((player_pos + opp_rel, 10.0)));
+            assert_eq!(intent.steer_target(&p), Some((player_pos + opp_rel, 10.0 / 60.0)));
         }
 
-        // MarkOpponent with no opponent: target = player_pos, speed = 4.0
+        // MarkOpponent with no opponent: target = player_pos, speed = 4.0 m/s ÷ 60 ≈ 0.0667 m/tick
         let p = empty_perception(player_pos, ball_pos);
         let intent = Intent::Action(ActionIntent::MarkOpponent(entity(99)));
-        assert_eq!(intent.steer_target(&p), Some((player_pos, 4.0)));
+        assert_eq!(intent.steer_target(&p), Some((player_pos, 4.0 / 60.0)));
 
-        // MarkOpponent with opponent: target = opponent world pos, speed = 4.0
+        // MarkOpponent with opponent: target = opponent world pos, speed = 4.0 m/s ÷ 60
         let opp_rel = Vec2::new(4.0, 0.0);
         let p = perception_with_opponents(player_pos, ball_pos, opp_rel);
         let intent = Intent::Action(ActionIntent::MarkOpponent(entity(99)));
-        assert_eq!(intent.steer_target(&p), Some((player_pos + opp_rel, 4.0)));
+        assert_eq!(intent.steer_target(&p), Some((player_pos + opp_rel, 4.0 / 60.0)));
     }
 
     /// `kick` should return `Some(direction)` for the kick-bearing variants

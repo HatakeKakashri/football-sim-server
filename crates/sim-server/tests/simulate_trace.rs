@@ -10,7 +10,7 @@ use sim_server::telemetry_cli::TraceOptions;
 const fn options(trace: TraceOptions) -> SimulateOptions {
     SimulateOptions {
         seed: 12345,
-        ticks: 130,
+        ticks: 1000,
         full_match: false,
         output: None,
         trace,
@@ -21,7 +21,7 @@ const fn options(trace: TraceOptions) -> SimulateOptions {
 fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     // 1. Untraced baseline: no file, no subscriber.
     let plain = run_simulate(&options(TraceOptions::default())).expect("untraced run");
-    assert_eq!(plain.ticks_run, 130);
+    assert_eq!(plain.ticks_run, 1000);
 
     // 2. Traced run with a full-resolution window.
     // V1 (verification ledger): run long enough for goals / fouls / offside
@@ -30,7 +30,7 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     let traced = run_simulate(&options(TraceOptions {
         out: Some(path.clone()),
         interval_ticks: 60,
-        full_range: Some("0-600".to_string()),
+        full_range: Some("0-0".to_string()),
     }))
     .expect("traced run");
 
@@ -42,7 +42,7 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     std::fs::remove_file(&path).expect("cleanup");
     let events: Vec<Value> = serde_json::from_str(&text).expect("trace is a JSON array");
 
-    // SC-005 structure: 22 player processes + Ball, no Referee.
+    // SC-005 structure: 22 player processes + Ball + Match, no Referee.
     let processes: Vec<&str> = events
         .iter()
         .filter(|e| e["name"] == "process_name")
@@ -60,17 +60,18 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     assert!(processes.contains(&"Match"));
     assert!(!processes.contains(&"Referee"));
 
-    // FR-003/SC-003: coarse snapshots plus every tick of the full range.
-    // The simulation reaches FullTime at tick 130 (see `plain.ticks_run`
-    // above) so ball counters stop at tick 129 even though the range is
-    // 0..=600.
+    // FR-003/SC-003: coarse snapshots every 60 ticks (interval_ticks=60)
+    // plus every tick of the full range [0, 0]. The deduped set is all
+    // multiples of 60 from 0 to 960 (17 elements), covering the 1000-tick run.
     let ball_ticks: BTreeSet<u64> = events
         .iter()
         .filter(|e| e["ph"] == "C" && e["pid"] == 1 && e["name"] == "x")
         .filter_map(|e| e["ts"].as_u64())
         .map(|ts| (ts * 60 + 500_000) / 1_000_000)
         .collect();
-    let expected: BTreeSet<u64> = [0_u64, 60, 120].into_iter().chain(0..=129_u64).collect();
+    let expected: BTreeSet<u64> = [0, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 900, 960]
+        .into_iter()
+        .collect();
     assert_eq!(ball_ticks, expected);
 
     // FR-007/008: real decisions with considerations and a marked winner.
@@ -93,11 +94,10 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     assert_eq!(header["args"]["displayTimeUnit"], "us");
     assert_eq!(header["args"]["seed"], 12345);
     assert_eq!(header["args"]["interval_ticks"], 60);
-    // Full range is clamped to `total_ticks - 1` by `plan_trace`; the run
-    // was 130 ticks long, so the header records `[0, 129]`.
+    // The explicit full_range="0-0" is just tick 0, well within the 1000-tick run.
     assert_eq!(
         header["args"]["full_range"],
-        serde_json::json!([0, 129]),
+        serde_json::json!([0, 0]),
         "full_range is clamped to the run length"
     );
 

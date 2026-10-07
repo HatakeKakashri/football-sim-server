@@ -16,12 +16,17 @@ use sim_telemetry::TelemetryConfig;
 /// gives every pass a unique id regardless of order.
 static NEXT_PASS_FLOW_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Speed imparted to the ball when a possessing player shoots or kicks it.
+/// Ball kick speed, in metres per tick.
 ///
-/// Demo-scope simplification (see `kick_execution_system`): a flat
-/// speed per action type, not scaled by player skill/power.
-pub const KICK_SPEED_SHOT: f32 = 22.0;
-pub const KICK_SPEED_PASS: f32 = 14.0;
+/// Previously declared as m/s but stored directly into `ball.kick_velocity`
+/// and applied via `pos += vel` with no dt scaling. Rescaled to m/tick:
+/// `KICK_SPEED_SHOT` = 22 m/s ÷ 60 ≈ 0.3667 m/tick.
+pub const KICK_SPEED_SHOT: f32 = 22.0 / 60.0;
+
+/// Ball kick speed for passes, in metres per tick.
+///
+/// Rescaled from 14 m/s to m/tick: 14 / 60 ≈ 0.2333 m/tick.
+pub const KICK_SPEED_PASS: f32 = 14.0 / 60.0;
 
 /// Resolve an intent to a target point and an action-specific speed,
 /// then return the unit-direction × speed vector. Target entities are
@@ -113,8 +118,10 @@ pub fn player_action_execution_system(
                 if roll > pass_prob {
                     // Pass goes awry - add random deviation
                     speed_modifier = 0.7;
+                    // Deviation values are in m/s, converted to m/tick
+                    let dev = 2.0 / 60.0;
                     direction_modifier =
-                        Vec2::new(rng.gen_range_f32(-2.0, 2.0), rng.gen_range_f32(-2.0, 2.0));
+                        Vec2::new(rng.gen_range_f32(-dev, dev), rng.gen_range_f32(-dev, dev));
                 }
             }
             Intent::Action(ActionIntent::ShootAtGoal(_)) => {
@@ -123,9 +130,12 @@ pub fn player_action_execution_system(
                 let roll: f32 = rng.gen_f32();
                 if roll > accuracy {
                     // Shot misses - add deviation
+                    // Deviation values are in m/s, converted to m/tick
                     speed_modifier = 0.8;
+                    let dev_x = 3.0 / 60.0;
+                    let dev_y = 2.0 / 60.0;
                     direction_modifier =
-                        Vec2::new(rng.gen_range_f32(-3.0, 3.0), rng.gen_range_f32(-2.0, 2.0));
+                        Vec2::new(rng.gen_range_f32(-dev_x, dev_x), rng.gen_range_f32(-dev_y, dev_y));
                 }
             }
             Intent::Movement(_)

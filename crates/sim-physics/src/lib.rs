@@ -50,8 +50,23 @@ impl SimRng {
     }
 }
 
-pub const MAX_PLAYER_SPEED: f32 = 10.0;
-pub const MAX_BALL_SPEED: f32 = 30.0;
+/// Maximum player velocity, in metres per tick.
+///
+/// Previously declared as "m/s" but applied as m/tick via `pos += vel`
+/// with no dt scaling. Rescaled to actual m/tick: realistic 8.5 m/s ÷ 60
+/// ticks/s ≈ 0.1417 m/tick.
+pub const MAX_PLAYER_SPEED: f32 = 10.0 / 60.0;
+
+/// Maximum ball velocity, in metres per tick.
+///
+/// Rescaled from 30 m/s to m/tick: 30 / 60 = 0.5 m/tick.
+pub const MAX_BALL_SPEED: f32 = 30.0 / 60.0;
+
+/// Ball velocity damping factor, applied per tick.
+///
+/// A value of 0.99 means the ball retains 99% of its velocity each tick.
+/// Per-second damping equivalent would be 0.99^60 ≈ 54.9% per second (very
+/// lossy), which is intentional: empirically tuned as a per-tick decay.
 pub const BALL_DAMPING: f32 = 0.99;
 
 /// Phase 2: pitch control grid constants (16 columns × 12 rows).

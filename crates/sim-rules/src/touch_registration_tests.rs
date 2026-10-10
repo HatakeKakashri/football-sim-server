@@ -90,6 +90,7 @@ fn kick_execution_registers_play_touch() {
         Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(kicker),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
             kind: TouchKind::Play,
         }),
         "kick must register the kicker as a Play touch"
@@ -133,6 +134,7 @@ fn test_kick_pushes_to_buffer_and_consumer_applies() {
         .push(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(kicker),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
             kind: TouchKind::Play,
         });
 
@@ -146,6 +148,7 @@ fn test_kick_pushes_to_buffer_and_consumer_applies() {
         Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(kicker),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
             kind: TouchKind::Play,
         }),
         "consumer must apply the buffer entry to Ball.last_touch"
@@ -181,11 +184,13 @@ fn test_two_consecutive_kicks_update_record() {
         pending.0.push(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(kicker_a),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker_a)),
             kind: TouchKind::Play,
         });
         pending.0.push(LastTouch {
             team: sim_components::TeamId(1),
             player: Some(kicker_b),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker_b)),
             kind: TouchKind::Play,
         });
     }
@@ -200,6 +205,7 @@ fn test_two_consecutive_kicks_update_record() {
         Some(LastTouch {
             team: sim_components::TeamId(1),
             player: Some(kicker_b),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker_b)),
             kind: TouchKind::Play,
         }),
         "two pushes — the second (latest) entry must win"
@@ -227,6 +233,7 @@ fn test_same_tick_double_kick_resolves_deterministically() {
         last_touch: Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(kicker),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
             kind: TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -246,6 +253,7 @@ fn test_same_tick_double_kick_resolves_deterministically() {
         .push(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(writer_first),
+            player_id: Some(sim_components::PlayerId::from_entity(writer_first)),
             kind: TouchKind::Play,
         });
     world
@@ -254,6 +262,7 @@ fn test_same_tick_double_kick_resolves_deterministically() {
         .push(LastTouch {
             team: sim_components::TeamId(1),
             player: Some(writer_second),
+            player_id: Some(sim_components::PlayerId::from_entity(writer_second)),
             kind: TouchKind::Play,
         });
 
@@ -267,6 +276,7 @@ fn test_same_tick_double_kick_resolves_deterministically() {
         Some(LastTouch {
             team: sim_components::TeamId(1),
             player: Some(writer_second),
+            player_id: Some(sim_components::PlayerId::from_entity(writer_second)),
             kind: TouchKind::Play,
         }),
         "same-tick double push resolves to the last-pushed entry (deterministic)"
@@ -329,6 +339,7 @@ fn test_possession_acquisition_pushes_play_touch() {
         Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(player),
+            player_id: Some(sim_components::PlayerId::from_entity(player)),
             kind: TouchKind::Play,
         }),
         "possession acquisition must register a Play touch on the new possessor"
@@ -423,6 +434,7 @@ fn test_oob_restart_registers_restart_touch() {
         last_touch: Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -449,6 +461,7 @@ fn test_oob_restart_registers_restart_touch() {
         Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         "Ball.last_touch survives the same tick (push lands in the buffer; consumer drains on next tick)"
@@ -466,6 +479,7 @@ fn test_oob_restart_registers_restart_touch() {
         vec![LastTouch {
             team: sim_components::TeamId(1),
             player: Some(taker),
+            player_id: Some(sim_components::PlayerId::from_entity(taker)),
             kind: TouchKind::Restart,
         }],
         "restart_system must push the Restart touch to PendingBallTouches"
@@ -507,6 +521,7 @@ fn test_oob_event_carries_full_touch() {
         last_touch: Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -528,6 +543,7 @@ fn test_oob_event_carries_full_touch() {
             Some(LastTouch {
                 team: sim_components::TeamId(0),
                 player: Some(toucher),
+                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
                 kind: TouchKind::Play,
             }),
             "OutOfBounds payload must carry the full last-touch record"
@@ -543,6 +559,7 @@ fn test_oob_event_carries_full_touch() {
         Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         "Ball.last_touch must be preserved on OOB, not cleared"
@@ -600,6 +617,7 @@ fn test_goal_event_carries_full_touch() {
         last_touch: Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -631,6 +649,7 @@ fn test_goal_event_carries_full_touch() {
             Some(LastTouch {
                 team: sim_components::TeamId(0),
                 player: Some(toucher),
+                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
                 kind: TouchKind::Play,
             }),
             "Goal payload must carry the full last-touch record"
@@ -646,6 +665,7 @@ fn test_goal_event_carries_full_touch() {
         Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         "Ball.last_touch must be preserved on goal, not cleared"
@@ -703,6 +723,7 @@ fn test_own_goal_attribution_preserved() {
         last_touch: Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(kicker),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
             kind: TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -734,6 +755,7 @@ fn test_own_goal_attribution_preserved() {
             Some(LastTouch {
                 team: sim_components::TeamId(0),
                 player: Some(kicker),
+                player_id: Some(sim_components::PlayerId::from_entity(kicker)),
                 kind: TouchKind::Play,
             }),
             "last_touch preserves the kicker (team 0) — own-goal identity is kept"
@@ -939,6 +961,7 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
         Some(LastTouch {
             team: sim_components::TeamId(0),
             player: Some(kicker),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
             kind: TouchKind::Play,
         }),
         "consumer must apply the kicker's touch before any Rules writer reads Ball.last_touch"
@@ -989,4 +1012,181 @@ fn test_last_deliberate_play_always_none() {
         ball.last_deliberate_play.is_none(),
         "after 1k ticks last_deliberate_play must still be None"
     );
+}
+
+// -----------------------------------------------------------------------------
+// Despawn survival: the record outlives the entity it was captured from
+// -----------------------------------------------------------------------------
+
+/// A touch registered against a live player keeps `team` and `player_id`
+/// after that player despawns. This is the property the ticket asks for:
+/// *"Touch record carries `TouchKind` and the team, captured even if the
+/// entity is later despawned, so OOB restart payloads survive."*
+#[test]
+fn test_touch_record_survives_toucher_despawn() {
+    let mut world = World::new();
+
+    // Toucher on team 0, registered by a real kick.
+    let kicker = world
+        .spawn((
+            Player {
+                team_id: sim_components::TeamId(0),
+                intent: Some(Intent::Action(ActionIntent::PassTo)),
+            },
+            Position(pos(50.0, 34.0)),
+            Velocity(Vec2::zero()),
+            PerceptionSnapshot {
+                self_position: pos(50.0, 34.0),
+                nearby_teammates: smallvec![NearbyEntity {
+                    entity: Entity::from_raw(42),
+                    distance: 15.0,
+                    relative_position: pos(15.0, 0.0),
+                }],
+                nearby_opponents: smallvec![],
+                ball_position: pos(52.5, 34.0),
+                ball_state: sim_components::BallState::Possessed,
+                goal_position: pos(105.0, 34.0),
+                pitch_bounds: PitchBounds {
+                    distance_to_left: 50.0,
+                    distance_to_right: 55.0,
+                    distance_to_top: 34.0,
+                    distance_to_bottom: 34.0,
+                },
+            },
+        ))
+        .id();
+    world.spawn(BallMarker);
+
+    world.insert_resource(Ball {
+        state: sim_components::BallState::Possessed,
+        possessor: Some(kicker),
+        last_touch: None,
+        last_deliberate_play: None,
+        kick_velocity: None,
+        spin: 0.0,
+    });
+    world.insert_resource(PendingBallTouches::default());
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems((kick_execution_system, apply_ball_touched_system).chain());
+    schedule.run(&mut world);
+
+    let expected = world
+        .resource::<Ball>()
+        .last_touch
+        .expect("kick must register a touch");
+    assert_eq!(
+        expected.player_id,
+        Some(sim_components::PlayerId::from_entity(kicker)),
+        "player_id must be minted from the live entity's bits"
+    );
+
+    // Now despawn the kicker — a substitution or a future roster rule.
+    world.entity_mut(kicker).despawn();
+
+    // The record is unchanged and still fully resolvable.
+    let after = world
+        .resource::<Ball>()
+        .last_touch
+        .expect("last_touch must survive the toucher despawn");
+    assert_eq!(
+        after.team,
+        sim_components::TeamId(0),
+        "team is denormalised and survives despawn"
+    );
+    assert_eq!(
+        after.player_id,
+        Some(sim_components::PlayerId::from_entity(kicker)),
+        "player_id survives despawn — this is what keeps event payloads resolvable"
+    );
+    assert_eq!(after.kind, TouchKind::Play);
+}
+
+/// The OOB restart-taker is resolved from the denormalised team on the
+/// **event payload**, not from the ball's live state or a player lookup.
+/// So the restart still awards the right team after the toucher
+/// despawns.
+#[test]
+fn test_oob_restart_taker_resolves_after_toucher_despawn() {
+    let mut world = World::new();
+
+    // Toucher on team 0. Ball settled on the touchline → ThrowIn, whose
+    // taker team is the opposite of the toucher (Law 9) → team 1.
+    let toucher = world.spawn(()).id();
+    world.entity_mut(toucher).insert(Player {
+        team_id: sim_components::TeamId(0),
+        intent: None,
+    });
+    world
+        .entity_mut(toucher)
+        .insert(TeamIdComponent(sim_components::TeamId(0)));
+
+    let taker = world.spawn(()).id();
+    world.entity_mut(taker).insert(Player {
+        team_id: sim_components::TeamId(1),
+        intent: None,
+    });
+    world
+        .entity_mut(taker)
+        .insert(TeamIdComponent(sim_components::TeamId(1)));
+
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(pos(20.0, 0.0)));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+    world.insert_resource(Ball {
+        kick_velocity: None,
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: Some(LastTouch::by_player(
+            sim_components::TeamId(0),
+            toucher,
+            TouchKind::Play,
+        )),
+        last_deliberate_play: None,
+    });
+    world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(CurrentTick(50));
+
+    // The toucher despawns *after* the ball already went out — the
+    // restart placement must still be attributed correctly.
+    world.entity_mut(toucher).despawn();
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(
+        (
+            apply_ball_touched_system,
+            out_of_bounds_system,
+            restart_system,
+        )
+            .chain(),
+    );
+    schedule.run(&mut world);
+
+    let pending = world.resource::<PendingBallTouches>();
+    assert_eq!(
+        pending.0,
+        vec![LastTouch::by_player(
+            sim_components::TeamId(1),
+            taker,
+            TouchKind::Restart,
+        )],
+        "restart taker is the opposite of the denormalised toucher team, \
+         resolved without the despawned entity"
+    );
+}
+
+/// `by_team` is the no-credited-player constructor: both identity
+/// fields must be `None`, and the record still carries the team that
+/// Law 9 restart resolution reads.
+#[test]
+fn test_by_team_captures_no_player_identity() {
+    let touch = LastTouch::by_team(sim_components::TeamId(1), TouchKind::Restart);
+    assert_eq!(touch.team, sim_components::TeamId(1));
+    assert_eq!(touch.player, None);
+    assert_eq!(touch.player_id, None);
+    assert_eq!(touch.kind, TouchKind::Restart);
 }

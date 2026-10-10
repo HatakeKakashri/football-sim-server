@@ -112,12 +112,20 @@ pub fn possession_resolution_system(
                 if skill_diff > SKILL_TOLERANCE
                     || (skill_diff <= SKILL_TOLERANCE && proximity.min_distance < best_dist)
                 {
-                    closest_player =
-                        Some((player_entity, player.team_id, proximity.min_distance, skill.0));
+                    closest_player = Some((
+                        player_entity,
+                        player.team_id,
+                        proximity.min_distance,
+                        skill.0,
+                    ));
                 }
             } else {
-                closest_player =
-                    Some((player_entity, player.team_id, proximity.min_distance, skill.0));
+                closest_player = Some((
+                    player_entity,
+                    player.team_id,
+                    proximity.min_distance,
+                    skill.0,
+                ));
             }
         }
     }
@@ -133,11 +141,9 @@ pub fn possession_resolution_system(
         // Push to `PendingBallTouches`; the consumer
         // `apply_ball_touched_system` applies it to `Ball.last_touch`
         // at the start of the Rules set.
-        pending.0.push(LastTouch {
-            team,
-            player: Some(entity),
-            kind: TouchKind::Play,
-        });
+        pending
+            .0
+            .push(LastTouch::by_player(team, entity, TouchKind::Play));
         ball.possessor = Some(entity);
         ball.state = BallState::Possessed;
     } else {

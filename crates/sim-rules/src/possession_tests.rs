@@ -121,6 +121,7 @@ fn test_possession_resolved_to_real_entity() {
         Some(sim_components::LastTouch {
             team: TeamId(0),
             player: Some(player_entity),
+            player_id: Some(sim_components::PlayerId::from_entity(player_entity)),
             kind: sim_components::TouchKind::Play,
         })
     );
@@ -231,6 +232,7 @@ fn test_possession_change_registers_play_touch() {
         Some(sim_components::LastTouch {
             team: TeamId(0),
             player: Some(player_a),
+            player_id: Some(sim_components::PlayerId::from_entity(player_a)),
             kind: sim_components::TouchKind::Play,
         }),
         "Player A (gains possession) should be recorded as last toucher with Play kind"
@@ -288,6 +290,7 @@ fn test_possession_change_registers_play_touch() {
         Some(sim_components::LastTouch {
             team: TeamId(0),
             player: Some(player_b),
+            player_id: Some(sim_components::PlayerId::from_entity(player_b)),
             kind: sim_components::TouchKind::Play,
         }),
         "After pass, last_touch should be player B with Play kind"
@@ -319,6 +322,7 @@ fn test_interception_registers_play_touch_on_new_possessor() {
             // only that B's acquisition overwrites the record.
             team: TeamId(0),
             player: None,
+            player_id: None,
             kind: sim_components::TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -359,6 +363,7 @@ fn test_interception_registers_play_touch_on_new_possessor() {
         Some(sim_components::LastTouch {
             team: TeamId(1),
             player: Some(player_b),
+            player_id: Some(sim_components::PlayerId::from_entity(player_b)),
             kind: sim_components::TouchKind::Play,
         }),
         "interception must register B as a Play touch, not leave the \

@@ -8,7 +8,9 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::time::{HALF_LENGTH_TICKS, HALFTIME_BREAK_TICKS};
-use sim_components::{Match, MatchClock, MatchState, Position, Velocity};
+use sim_components::{
+    LastTouch, Match, MatchClock, MatchState, PendingBallTouches, Position, TouchKind, Velocity,
+};
 use sim_math::Vec2;
 
 use super::formation::reset_formation_to_4_4_2;
@@ -250,16 +252,12 @@ pub fn apply_transition(
             _ => sim_components::TeamId(0),
         };
         let taker_entity = pick_kickoff_taker(world, kickoff_taker_team);
-        let is_placeholder = taker_entity == bevy_ecs::prelude::Entity::PLACEHOLDER;
-        world.resource_mut::<sim_components::Ball>().last_touch = Some(sim_components::LastTouch {
-            team: kickoff_taker_team,
-            player: if is_placeholder {
-                None
-            } else {
-                Some(taker_entity)
-            },
-            kind: sim_components::TouchKind::Restart,
-        });
+        let touch = if taker_entity == bevy_ecs::prelude::Entity::PLACEHOLDER {
+            LastTouch::by_team(kickoff_taker_team, TouchKind::Restart)
+        } else {
+            LastTouch::by_player(kickoff_taker_team, taker_entity, TouchKind::Restart)
+        };
+        world.resource_mut::<PendingBallTouches>().0.push(touch);
     }
     if decision.apply_kickoff_impulse
         && let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>()

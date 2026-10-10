@@ -69,9 +69,11 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
         .filter_map(|e| e["ts"].as_u64())
         .map(|ts| (ts * 60 + 500_000) / 1_000_000)
         .collect();
-    let expected: BTreeSet<u64> = [0, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 900, 960]
-        .into_iter()
-        .collect();
+    let expected: BTreeSet<u64> = [
+        0, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 900, 960,
+    ]
+    .into_iter()
+    .collect();
     assert_eq!(ball_ticks, expected);
 
     // FR-007/008: real decisions with considerations and a marked winner.

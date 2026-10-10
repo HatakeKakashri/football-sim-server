@@ -1,6 +1,8 @@
 //! `Simulation::tick` and `tick_clock`: the per-tick driver.
 
+use bevy_ecs::system::RunSystemOnce;
 use sim_components::MatchClock;
+use sim_rules::apply_ball_touched_system;
 
 use super::Simulation;
 use super::lifecycle_system;
@@ -24,6 +26,11 @@ impl Simulation {
             self.tick,
             &mut self.world,
         );
+
+        // Apply any touches registered by lifecycle_system (kickoff placement)
+        // which runs after the main schedule. This ensures the buffer is drained
+        // and Ball.last_touch is updated before the tick ends.
+        self.world.run_system_once(apply_ball_touched_system);
 
         // Advance match clock (integer ticks, no floating point).
         self.tick_clock();

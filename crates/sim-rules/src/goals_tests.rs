@@ -56,6 +56,7 @@ fn test_goal_scored_home_team() {
     b.last_touch = Some(LastTouch {
         team: sim_components::TeamId(1),
         player: Some(toucher),
+        player_id: Some(sim_components::PlayerId::from_entity(toucher)),
         kind: TouchKind::Play,
     });
     world.insert_resource(b);
@@ -97,6 +98,7 @@ fn test_goal_scored_home_team() {
             Some(LastTouch {
                 team: sim_components::TeamId(1),
                 player: Some(toucher),
+                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
                 kind: TouchKind::Play,
             })
         );
@@ -142,6 +144,7 @@ fn test_goal_scored_away_team() {
     b.last_touch = Some(LastTouch {
         team: sim_components::TeamId(0),
         player: Some(toucher),
+        player_id: Some(sim_components::PlayerId::from_entity(toucher)),
         kind: TouchKind::Play,
     });
     world.insert_resource(b);
@@ -173,6 +176,7 @@ fn test_goal_scored_away_team() {
             Some(LastTouch {
                 team: sim_components::TeamId(0),
                 player: Some(toucher),
+                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
                 kind: TouchKind::Play,
             })
         );
@@ -287,6 +291,7 @@ fn test_kickoff_restart_registers_restart_touch() {
         Some(LastTouch {
             team: sim_components::TeamId(1),
             player: Some(kicker),
+            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
             kind: TouchKind::Restart,
         }),
         "delayed kickoff restart must register the conceded-team \
@@ -325,6 +330,7 @@ fn test_goal_scorer_threads_into_post_goal_kickoff_taker() {
     b.last_touch = Some(LastTouch {
         team: sim_components::TeamId(0),
         player: None,
+        player_id: None,
         kind: TouchKind::Play,
     });
     world.insert_resource(b);
@@ -388,6 +394,7 @@ fn test_missed_shot_gives_goal_kick() {
         last_touch: Some(LastTouch {
             team: TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -455,6 +462,7 @@ fn test_deflected_shot_gives_corner() {
         last_touch: Some(LastTouch {
             team: TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -532,6 +540,7 @@ fn test_throw_in_to_opposite_team() {
         last_touch: Some(LastTouch {
             team: TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -562,6 +571,7 @@ fn test_throw_in_to_opposite_team() {
         last_touch: Some(LastTouch {
             team: TeamId(0),
             player: Some(toucher),
+            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
             kind: TouchKind::Play,
         }),
         last_deliberate_play: None,
@@ -586,6 +596,7 @@ fn test_throw_in_to_opposite_team() {
             Some(LastTouch {
                 team: TeamId(0),
                 player: Some(toucher),
+                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
                 kind: TouchKind::Play,
             }),
             "OutOfBounds payload must preserve the original toucher"
@@ -603,6 +614,7 @@ fn test_throw_in_to_opposite_team() {
         vec![LastTouch {
             team: TeamId(1),
             player: Some(taker),
+            player_id: Some(sim_components::PlayerId::from_entity(taker)),
             kind: TouchKind::Restart,
         }],
         "throw-in is awarded to the team opposite of the last toucher"

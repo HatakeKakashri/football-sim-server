@@ -23,6 +23,7 @@ fn ball_fixture_with_touch(toucher: bevy_ecs::prelude::Entity, team: TeamId) -> 
     b.last_touch = Some(LastTouch {
         team,
         player: Some(toucher),
+        player_id: Some(sim_components::PlayerId::from_entity(toucher)),
         kind: TouchKind::Play,
     });
     b
@@ -79,6 +80,7 @@ fn test_out_of_bounds_detection_throw_in() {
             Some(LastTouch {
                 team: TeamId(0),
                 player: Some(toucher),
+                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
                 kind: TouchKind::Play,
             }),
             "OOB event payload must capture the full last-touch record"

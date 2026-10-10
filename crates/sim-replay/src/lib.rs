@@ -397,7 +397,11 @@ mod tests {
             spin: 0.5,
             state: BallState::Free,
             possessor: Some(42),
-            last_touch: None,
+            last_touch: Some(LastTouch::by_player(
+                TeamId(1),
+                bevy_ecs::prelude::Entity::from_raw(7),
+                sim_components::TouchKind::Play,
+            )),
             last_deliberate_play: None,
         };
 
@@ -405,6 +409,42 @@ mod tests {
         let decoded: BallSnapshot = bincode::deserialize(&encoded).unwrap();
 
         assert_eq!(decoded, snapshot);
+    }
+
+    /// The stable `player_id` must survive a `BallSnapshot`
+    /// serialization round-trip — that is the whole point of
+    /// denormalising it. A recorded snapshot outlives the world it was
+    /// captured from, so an identity that only resolves against a live
+    /// entity would be useless to a replay consumer.
+    #[test]
+    fn test_ball_snapshot_preserves_stable_player_id() {
+        let player = bevy_ecs::prelude::Entity::from_raw(7);
+        let snapshot = BallSnapshot {
+            position: [0.0; 2],
+            velocity: [0.0; 2],
+            spin: 0.0,
+            state: BallState::Free,
+            possessor: None,
+            last_touch: Some(LastTouch::by_player(
+                TeamId(1),
+                player,
+                sim_components::TouchKind::Play,
+            )),
+            last_deliberate_play: None,
+        };
+
+        let encoded = bincode::serialize(&snapshot).unwrap();
+        let decoded: BallSnapshot = bincode::deserialize(&encoded).unwrap();
+
+        let touch = decoded
+            .last_touch
+            .expect("last_touch must survive the round-trip");
+        assert_eq!(
+            touch.player_id,
+            Some(sim_components::PlayerId::from_entity(player)),
+            "player_id must round-trip through the replay wire format"
+        );
+        assert_eq!(touch.team, TeamId(1), "denormalised team must round-trip");
     }
 
     /// Round-trip for `PlayerSnapshot`.

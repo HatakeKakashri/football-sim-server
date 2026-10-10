@@ -64,20 +64,24 @@ pub fn offside_detection_system(
     if last_touch.kind != TouchKind::Play {
         return;
     }
-    // A `Play` touch without a specific player is not produced by any
-    // current writer; without an entity there is nothing to resolve
-    // the toucher's team from, so skip offside judgement.
+
+    // The toucher's team is read from the denormalised `LastTouch.team`,
+    // NOT from a live `player_query.get(..)` lookup. That is what keeps
+    // offside judgement correct after the toucher despawns: the record
+    // outlives the entity, so the team does too.
+    let toucher_team_id = last_touch.team.0;
+
+    // Offside also needs the toucher's *position* to place the offside
+    // line, so a live entity is still required for the judgement
+    // itself. A despawned toucher means we cannot locate the line —
+    // skip the judgement rather than guess. The team resolution above
+    // stays valid regardless.
     let Some(last_toucher) = last_touch.player else {
         return;
     };
-
-    let Some(toucher_team_id) = player_query
-        .get(last_toucher)
-        .ok()
-        .map(|(_, _, team)| crate::team_id_u8(team))
-    else {
+    if player_query.get(last_toucher).is_err() {
         return;
-    };
+    }
 
     // Resolve attack polarity once — home (team 0) attacks +x, away (team 1) attacks -x.
     let dir = crate::attacking_direction(TeamId(toucher_team_id));

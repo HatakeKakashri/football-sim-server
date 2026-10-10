@@ -8,6 +8,9 @@
 //! - `lifecycle_tests.rs`: clock, half-time, kickoff, pause/resume.
 //! - `integration_tests.rs`: pipeline isolation, ball motion under physics,
 //!   exported-state sync.
+//! - `touch_drain_tests.rs`: the two per-tick `PendingBallTouches` drain
+//!   sites, including the post-schedule drain that carries the kickoff
+//!   placement onto `Ball.last_touch`.
 //!
 //! The `HalfTimeEntryTick` resource is reachable through
 //! `crate::simulation::lifecycle::HalfTimeEntryTick`.
@@ -29,6 +32,8 @@ mod state_hash_tests;
 mod team_id_tests;
 #[cfg(test)]
 mod telemetry_tests;
+#[cfg(test)]
+mod touch_drain_tests;
 
 use crate::Simulation;
 use sim_components::{Match, MatchState};

@@ -231,12 +231,19 @@ pub fn restart_system(
             // when the team has no players (sparse test worlds);
             // record the touch with no player identity rather than
             // a placeholder.
-            let player = (taker != Entity::PLACEHOLDER).then_some(taker);
-            pending_touches.0.push(sim_components::LastTouch {
-                team: conceded_team,
-                player,
-                kind: sim_components::TouchKind::Restart,
-            });
+            let touch = if taker == Entity::PLACEHOLDER {
+                sim_components::LastTouch::by_team(
+                    conceded_team,
+                    sim_components::TouchKind::Restart,
+                )
+            } else {
+                sim_components::LastTouch::by_player(
+                    conceded_team,
+                    taker,
+                    sim_components::TouchKind::Restart,
+                )
+            };
+            pending_touches.0.push(touch);
             if telemetry.is_some() {
                 sim_telemetry::emit::kickoff(current_tick.as_deref().map_or(0, |t| t.0));
             }
@@ -299,12 +306,16 @@ pub fn restart_system(
             // when the team has no players (sparse test worlds);
             // record the touch with no player identity rather than
             // a placeholder.
-            let player = (taker != Entity::PLACEHOLDER).then_some(taker);
-            pending_touches.0.push(sim_components::LastTouch {
-                team: taker_team,
-                player,
-                kind: sim_components::TouchKind::Restart,
-            });
+            let touch = if taker == Entity::PLACEHOLDER {
+                sim_components::LastTouch::by_team(taker_team, sim_components::TouchKind::Restart)
+            } else {
+                sim_components::LastTouch::by_player(
+                    taker_team,
+                    taker,
+                    sim_components::TouchKind::Restart,
+                )
+            };
+            pending_touches.0.push(touch);
             let kind = match oob_type {
                 sim_components::BallOutOfBoundsType::ThrowIn => "throw_in",
                 sim_components::BallOutOfBoundsType::GoalKick => "goal_kick",

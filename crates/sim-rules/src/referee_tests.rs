@@ -142,6 +142,7 @@ fn test_offside_ignores_restart_touch() {
         last_touch: Some(LastTouch {
             team: TeamId(0),
             player: Some(taker),
+            player_id: Some(sim_components::PlayerId::from_entity(taker)),
             kind: TouchKind::Restart,
         }),
         last_deliberate_play: None,
@@ -291,6 +292,7 @@ fn test_offside_flagged_on_teammate_pass() {
             last_touch: Some(LastTouch {
                 team: TeamId(0),
                 player: Some(passer),
+                player_id: Some(sim_components::PlayerId::from_entity(passer)),
                 kind: TouchKind::Play,
             }),
             last_deliberate_play: None,
@@ -406,6 +408,7 @@ fn test_offside_reset_by_opponent_kick() {
             last_touch: Some(LastTouch {
                 team: TeamId(1),
                 player: Some(opponent_kicker),
+                player_id: Some(sim_components::PlayerId::from_entity(opponent_kicker)),
                 kind: TouchKind::Play,
             }),
             last_deliberate_play: None,

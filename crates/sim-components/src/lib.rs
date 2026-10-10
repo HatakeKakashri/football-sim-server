@@ -7,7 +7,8 @@ pub mod intent_dispatch;
 pub mod time;
 
 pub use ball_touch::{
-    BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, RuleEvent, TouchKind,
+    BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, PlayerId, RuleEvent,
+    TouchKind,
 };
 
 #[derive(Component, Debug, Clone)]
@@ -237,13 +238,22 @@ pub struct Ball {
     /// Last registered touch of the ball — pushed to the buffer by
     /// `kick_execution_system` (kick), `possession_resolution_system`
     /// (proximity interception), `restart_system` (throw-in / corner /
-    /// goal-kick placement). The consumer `apply_ball_touched_system`
-    /// drains the buffer at the start of the Rules set and writes the
-    /// final entry here. `lifecycle_system` writes a `Restart` touch
-    /// directly at kickoff placement (`MatchAdmin` is the last system
-    /// set, so a buffer push would not be visible to this tick's
-    /// readers). M8 stopped the OOB/Goal clears; the record persists
-    /// across those events for replay data.
+    /// goal-kick placement), and `lifecycle_system` (kickoff placement).
+    /// Those are the only four write paths; no system assigns this field
+    /// directly.
+    ///
+    /// `apply_ball_touched_system` drains the buffer onto this field from
+    /// two sites: first in the `Rules` set (so the rules writers read the
+    /// same-tick touch), and again in `Simulation::tick` after the
+    /// post-schedule `lifecycle_system` (which runs outside the
+    /// schedule and so needs its own drain). See
+    /// `PendingBallTouches` for the full contract.
+    ///
+    /// The record is preserved across OOB and Goal events (M8 stopped
+    /// the clears) so downstream replay data can re-read it. Its
+    /// identity fields (`team`, `player_id`) are denormalised, so it
+    /// stays correct after the touching entity despawns.
+    ///
     /// `offside_detection_system` only consults touches with
     /// `kind == Play` (Law 11 ignores restarts).
     pub last_touch: Option<LastTouch>,

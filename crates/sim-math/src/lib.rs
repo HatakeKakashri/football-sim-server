@@ -382,10 +382,10 @@ mod tests {
         // Player moves from (0,0) to (5,0) — crosses the ball at (2.5, 0).
         // Ball stays at (2.5, 0). Minimum distance is 0 at t=0.5.
         let result = swept_proximity(
-            Vec2::new(0.0, 0.0),  // player start
-            Vec2::new(5.0, 0.0),  // player velocity: 5m/tick
-            Vec2::new(2.5, 0.0),  // ball start
-            Vec2::zero(),          // ball stationary
+            Vec2::new(0.0, 0.0), // player start
+            Vec2::new(5.0, 0.0), // player velocity: 5m/tick
+            Vec2::new(2.5, 0.0), // ball start
+            Vec2::zero(),        // ball stationary
             1.5,
         );
         assert!((result.min_distance - 0.0).abs() < 1e-6);

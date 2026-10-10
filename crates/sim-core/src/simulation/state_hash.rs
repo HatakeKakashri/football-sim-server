@@ -161,9 +161,20 @@ impl Simulation {
                     .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
             );
             if let Some(touch) = b.last_touch.as_ref() {
-                // `player` is `Some(entity)` in every real match
-                // (entities never despawn); the `u64::MAX` arm
+                // Mix the toucher identity and the `TouchKind`.
+                //
+                // `player` and `player_id` are two encodings of the
+                // same identity (the id is minted from the entity's
+                // bits), so mixing only one keeps the hash stable
+                // across the `LastTouch` shape change and avoids
+                // hashing a derived value twice. The `u64::MAX` arm
                 // mirrors the `None` mix for `possessor` above.
+                //
+                // `team` is deliberately not mixed: it is denormalised
+                // from the same `Player` component that `player` points
+                // at, so it carries no state the identity does not
+                // already imply. Mixing it would let two diverged
+                // worlds collide.
                 mix(
                     &mut h,
                     touch

@@ -2,6 +2,8 @@
 
 *Rust · ECS · Utility AI · Server-Authoritative*
 
+> **⚠️ NOTICE (2026-10-10):** This review was written against the now-superseded `spec/football-sim-server-spec.md` and `specs/001-football-sim-engine/`. The authoritative specification is now `docs/football-sim-mvp-prd.md` (10 Oct 2026). Several "confirmed" items in this review (Referee component, `sim-referee` crate, offside/foul systems, ManagerCommand validation, cross-machine determinism) are **explicitly out of MVP scope** per the PRD. A re-base of this review against the PRD is needed.
+
 **Scope.** A working review of the current codebase across all 10 crates
 (`sim-math`, `sim-components`, `sim-physics`, `sim-ai-core`, `sim-ai-player`,
 `sim-ai-manager`, `sim-rules`, `sim-core`, `sim-replay`, `sim-server`),

@@ -1,5 +1,7 @@
 # Ball-Touch Registration Refactor — Design
 
+> **Status relative to PRD (docs/football-sim-mvp-prd.md, 10 Oct 2026): RETAINED with PRD alignment notes.** The touch-registration mechanism (`PendingBallTouches`, `LastTouch` with `TouchKind::Play`/`Restart`, two-deep history) aligns with PRD §8.5 goal attribution and §6.2 Ball model. **Strip offside-related tests/assertions** (PRD §2: offside stub stays inert); `last_deliberate_play` field is YAGNI for MVP (offside out of scope) — keep only if explicitly reserved with a comment.
+
 **Date:** 2026-10-03
 **Source ticket:** "Replace proximity-based last-toucher with an explicit
 ball-touch registration system" (this is the same ticket whose Open Items

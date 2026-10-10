@@ -1,5 +1,7 @@
 # AI Pickup Intent — Ticket Body
 
+> **Status relative to PRD (docs/football-sim-mvp-prd.md, 10 Oct 2026): DEFERRED to PRD Phase 4.** PRD §15 Phase 4 "Mechanics" covers dribbling, pressing, and ball pickup. Half-time attacking-direction swap (referenced here) is PRD Phase 0 gate.
+
 **Filed as:** separate ticket (will be filed in current sprint per user)
 **Depends on:** the `Ball-Touch Registration Refactor` spec at
 `docs/superpowers/specs/2026-10-03-ball-touch-event-refactor-design.md`

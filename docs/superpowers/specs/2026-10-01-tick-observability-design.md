@@ -1,5 +1,7 @@
 # 002 Tick Observability — Implementation Design
 
+> **Status relative to PRD (docs/football-sim-mvp-prd.md, 10 Oct 2026): RETAINED as developer telemetry/debug tooling.** The PRD §4 treats telemetry as opt-in via `--trace-out`; this design implements that capability. Not a product-facing specification.
+
 Status: approved by user decisions 1–6 (2026-10-01). Supersedes the `tracing-chrome`
 assumption in `specs/002-tick-observability/{plan,tasks,contracts/trace-schema}.md`.
 

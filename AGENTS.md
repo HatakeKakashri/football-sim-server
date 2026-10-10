@@ -118,7 +118,7 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 - **Simulation driver**: `crates/sim-core/src/simulation/` (tick.rs, construct.rs, lifecycle.rs, snapshot.rs, state_hash.rs). `Simulation::new(seed)` and `Simulation::tick()` are the entry points.
 - **System-set order**: `SimulationSet` enum in `crates/sim-core/src/simulation.rs` — `Perception → Decision → Execution → Physics → Possession → Rules → MatchAdmin`. Add new systems to the right set in `register_systems` (`construct.rs:37`).
 - **AI**: `crates/sim-ai-player/` (per-player Utility AI, 6-tick decision cadence) and `crates/sim-ai-manager/` (weighted-table manager; effectively no-op today).
-- **Rules**: `crates/sim-rules/` — goals, OOB (law-correct throw-in / goal-kick / corner), possession, offside-detection stub, foul detection (no cards), clock + added time.
+- **Rules**: `crates/sim-rules/` — goals, OOB (law-correct throw-in / goal-kick / corner), possession, clock + added time. Offside detection and foul detection are **out of MVP scope** (PRD §2); any stubs should be removed or disabled.
 - **CLI**: `crates/sim-server/src/lib.rs` (subcommand enum + dispatch), one module per subcommand (`simulate.rs`, `trace_filter.rs`, `telemetry_cli.rs`). `main.rs` is 13 lines — keep logic in `lib` (standard §7).
 
 ## Conventions to follow
@@ -142,13 +142,14 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 
 ## Where specs / design docs live
 
-- `spec/football-sim-server-spec.md` — consolidated architecture spec.
+- `docs/football-sim-mvp-prd.md` — **authoritative MVP PRD (single source of truth, 10 Oct 2026)**.
 - `docs/CODING_STANDARDS.md` — authoritative coding standard.
-- `docs/reviews/CODEBASE_REVIEW.md` — current state review.
-- `specs/001-football-sim-engine/{spec,plan,tasks,data-model}.md` — feature spec for the engine (Phase 0–5).
-- `specs/002-tick-observability/{spec,plan,contracts/trace-schema}.md` — Chrome trace telemetry feature.
-- `specs/001-football-sim-engine/quickstart.md` — **stale** (mentions `--interactive`, `--record`, `--recover`, `--snapshot-interval` flags that don't exist in the current CLI). Don't follow it blindly; trust the current `--help`.
-- `specs/001-football-sim-engine/contracts/client-protocol.md` — **PROVISIONAL / NOT IMPLEMENTED**. The eventual wire format, deferred to Phase 7. Don't build clients against it.
+- `docs/reviews/CODEBASE_REVIEW.md` — current state review (needs re-basing against PRD).
+- `specs/002-tick-observability/{spec,plan,contracts/trace-schema}.md` — Chrome trace telemetry feature (developer tooling only, opt-in via `--trace-out`).
+- `docs/superpowers/specs/2026-10-01-tick-observability-design.md` — implementation design for 002 tick observability.
+- `docs/superpowers/specs/2026-10-03-ball-touch-event-refactor-design.md` — touch registration refactor (align with PRD §8.5, §6.2; strip offside tests).
+- `docs/superpowers/specs/2026-10-03-pickup-refactor-ticket.md` — future work: AI pickup (PRD Phase 4).
+- **Archived (superseded by PRD):** `spec/football-sim-server-spec.md`, `specs/001-football-sim-engine/`, `docs/superpowers/specs/2026-09-29-phase-e-*.md`, `2026-09-30-phase-f-*.md`, `2026-10-05-final-goal-design.md` — see `docs/archive/`.
 
 ## 🚫 Merge/Push Authorization Rule
 
@@ -304,7 +305,7 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 - **Simulation driver**: `crates/sim-core/src/simulation/` (tick.rs, construct.rs, lifecycle.rs, snapshot.rs, state_hash.rs). `Simulation::new(seed)` and `Simulation::tick()` are the entry points.
 - **System-set order**: `SimulationSet` enum in `crates/sim-core/src/simulation.rs` — `Perception → Decision → Execution → Physics → Possession → Rules → MatchAdmin`. Add new systems to the right set in `register_systems` (`construct.rs:37`).
 - **AI**: `crates/sim-ai-player/` (per-player Utility AI, 6-tick decision cadence) and `crates/sim-ai-manager/` (weighted-table manager; effectively no-op today).
-- **Rules**: `crates/sim-rules/` — goals, OOB (law-correct throw-in / goal-kick / corner), possession, offside-detection stub, foul detection (no cards), clock + added time.
+- **Rules**: `crates/sim-rules/` — goals, OOB (law-correct throw-in / goal-kick / corner), possession, clock + added time. Offside detection and foul detection are **out of MVP scope** (PRD §2); any stubs should be removed or disabled.
 - **CLI**: `crates/sim-server/src/lib.rs` (subcommand enum + dispatch), one module per subcommand (`simulate.rs`, `trace_filter.rs`, `telemetry_cli.rs`). `main.rs` is 13 lines — keep logic in `lib` (standard §7).
 
 ## Conventions to follow
@@ -328,13 +329,14 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 
 ## Where specs / design docs live
 
-- `spec/football-sim-server-spec.md` — consolidated architecture spec.
+- `docs/football-sim-mvp-prd.md` — **authoritative MVP PRD (single source of truth, 10 Oct 2026)**.
 - `docs/CODING_STANDARDS.md` — authoritative coding standard.
-- `docs/reviews/CODEBASE_REVIEW.md` — current state review.
-- `specs/001-football-sim-engine/{spec,plan,tasks,data-model}.md` — feature spec for the engine (Phase 0–5).
-- `specs/002-tick-observability/{spec,plan,contracts/trace-schema}.md` — Chrome trace telemetry feature.
-- `specs/001-football-sim-engine/quickstart.md` — **stale** (mentions `--interactive`, `--record`, `--recover`, `--snapshot-interval` flags that don't exist in the current CLI). Don't follow it blindly; trust the current `--help`.
-- `specs/001-football-sim-engine/contracts/client-protocol.md` — **PROVISIONAL / NOT IMPLEMENTED**. The eventual wire format, deferred to Phase 7. Don't build clients against it.
+- `docs/reviews/CODEBASE_REVIEW.md` — current state review (needs re-basing against PRD).
+- `specs/002-tick-observability/{spec,plan,contracts/trace-schema}.md` — Chrome trace telemetry feature (developer tooling only, opt-in via `--trace-out`).
+- `docs/superpowers/specs/2026-10-01-tick-observability-design.md` — implementation design for 002 tick observability.
+- `docs/superpowers/specs/2026-10-03-ball-touch-event-refactor-design.md` — touch registration refactor (align with PRD §8.5, §6.2; strip offside tests).
+- `docs/superpowers/specs/2026-10-03-pickup-refactor-ticket.md` — future work: AI pickup (PRD Phase 4).
+- **Archived (superseded by PRD):** `spec/football-sim-server-spec.md`, `specs/001-football-sim-engine/`, `docs/superpowers/specs/2026-09-29-phase-e-*.md`, `2026-09-30-phase-f-*.md`, `2026-10-05-final-goal-design.md` — see `docs/archive/`.
 
 ## 🚫 Merge/Push Authorization Rule
 

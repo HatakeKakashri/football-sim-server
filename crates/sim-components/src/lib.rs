@@ -298,6 +298,50 @@ pub struct Team {
     pub tactic: Tactic,
     pub players: Vec<Entity>,
     pub substitutes: Vec<Entity>,
+    /// Per-half attack direction for this team.
+    ///
+    /// `+1` means the team attacks toward `x = PITCH_LENGTH` (right goal)
+    /// in the current half; `-1` means they attack toward `x = 0` (left goal).
+    ///
+    /// Convention: the home team starts with `+1` in the first half;
+    /// the away team starts with `-1`. At half-time the values flip.
+    pub attack_direction: i8,
+}
+
+/// Match half identifier (First or Second).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Half {
+    First,
+    Second,
+}
+
+impl Half {
+    /// Convert from integer half representation (1 -> First, 2+ -> Second).
+    #[must_use]
+    pub const fn from_u8(half: u8) -> Self {
+        if half >= 2 {
+            Self::Second
+        } else {
+            Self::First
+        }
+    }
+}
+
+impl Team {
+    /// Attack direction for this team in the given `half`, assuming it started
+    /// with `initial_direction` in the first half.
+    #[must_use]
+    pub const fn attack_direction_for_half(initial_direction: i8, half: Half) -> i8 {
+        match half {
+            Half::First => initial_direction,
+            Half::Second => -initial_direction,
+        }
+    }
+
+    /// Flip the attack direction between +1 and -1 (called at half-time).
+    pub const fn flip_attack_direction(&mut self) {
+        self.attack_direction = -self.attack_direction;
+    }
 }
 
 /// `Match` is the singleton Resource holding all match-level state.

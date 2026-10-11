@@ -57,7 +57,7 @@ fn kick_execution_registers_play_touch() {
                 nearby_opponents: smallvec![],
                 ball_position: pos(52.5, 34.0),
                 ball_state: sim_components::BallState::Possessed,
-                goal_position: pos(105.0, 34.0),
+                goal_position: sim_math::goal_position_for(1),
                 pitch_bounds: PitchBounds {
                     distance_to_left: 50.0,
                     distance_to_right: 55.0,
@@ -902,7 +902,7 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
                 nearby_opponents: smallvec![],
                 ball_position: pos(50.5, 34.0),
                 ball_state: sim_components::BallState::Possessed,
-                goal_position: pos(105.0, 34.0),
+                goal_position: sim_math::goal_position_for(1),
                 pitch_bounds: PitchBounds {
                     distance_to_left: 50.0,
                     distance_to_right: 55.0,
@@ -1045,7 +1045,7 @@ fn test_touch_record_survives_toucher_despawn() {
                 nearby_opponents: smallvec![],
                 ball_position: pos(52.5, 34.0),
                 ball_state: sim_components::BallState::Possessed,
-                goal_position: pos(105.0, 34.0),
+                goal_position: sim_math::goal_position_for(1),
                 pitch_bounds: PitchBounds {
                     distance_to_left: 50.0,
                     distance_to_right: 55.0,

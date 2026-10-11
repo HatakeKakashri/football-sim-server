@@ -175,6 +175,7 @@ mod tests {
             tactic: Tactic::Possession,
             players: Vec::new(),
             substitutes: Vec::new(),
+            attack_direction: 1,
         });
 
         let manager_entity = world.spawn(()).id();
@@ -202,6 +203,7 @@ mod tests {
             tactic: Tactic::Possession,
             players: Vec::new(),
             substitutes: Vec::new(),
+            attack_direction: 1,
         });
 
         let mut schedule = Schedule::default();
@@ -260,6 +262,7 @@ mod tests {
             tactic: Tactic::Possession,
             players: vec![low_stamina_player],
             substitutes: vec![substitute_player],
+            attack_direction: 1,
         });
 
         let mut schedule = Schedule::default();
@@ -306,6 +309,7 @@ mod tests {
             tactic: Tactic::Possession,
             players: Vec::new(),
             substitutes: Vec::new(),
+            attack_direction: 1,
         });
 
         let mut schedule = Schedule::default();

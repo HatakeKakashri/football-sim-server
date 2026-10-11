@@ -80,7 +80,7 @@ fn test_cadence_full_roster_load_distribution() {
                     nearby_opponents: smallvec::SmallVec::new(),
                     ball_position: Vec2::new(52.5, 34.0),
                     ball_state: sim_components::BallState::Free,
-                    goal_position: Vec2::new(105.0, 34.0),
+                    goal_position: sim_math::goal_position_for(1),
                     pitch_bounds: sim_components::PitchBounds {
                         distance_to_left: 50.0,
                         distance_to_right: 55.0,

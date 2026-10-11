@@ -27,6 +27,8 @@ mod integration_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
+mod smoke_tests;
+#[cfg(test)]
 mod state_hash_tests;
 #[cfg(test)]
 mod team_id_tests;

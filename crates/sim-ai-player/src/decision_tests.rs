@@ -61,7 +61,7 @@ fn test_stamina_based_decision() {
             nearby_opponents: smallvec::SmallVec::new(),
             ball_position: Vec2::new(52.5, 34.0),
             ball_state: sim_components::BallState::Free,
-            goal_position: Vec2::new(105.0, 34.0),
+            goal_position: sim_math::goal_position_for(1),
             pitch_bounds: sim_components::PitchBounds {
                 distance_to_left: 50.0,
                 distance_to_right: 55.0,
@@ -172,7 +172,7 @@ fn test_passing_option() {
             nearby_opponents: smallvec::SmallVec::new(),
             ball_position: Vec2::new(52.5, 34.0),
             ball_state: sim_components::BallState::Free,
-            goal_position: Vec2::new(105.0, 34.0),
+            goal_position: sim_math::goal_position_for(1),
             pitch_bounds: sim_components::PitchBounds {
                 distance_to_left: 50.0,
                 distance_to_right: 55.0,
@@ -230,7 +230,7 @@ fn test_defender_tackle() {
     world.entity_mut(attacker_entity).insert(Player {
         team_id: TeamId(1),
         intent: Some(sim_components::Intent::Action(
-            sim_components::ActionIntent::ShootAtGoal(Vec2::new(105.0, 34.0)),
+            sim_components::ActionIntent::ShootAtGoal(sim_math::goal_position_for(1)),
         )),
     });
     world
@@ -280,7 +280,7 @@ fn test_defender_tackle() {
             }],
             ball_position: Vec2::new(45.0, 34.0),
             ball_state: sim_components::BallState::Free,
-            goal_position: Vec2::new(105.0, 34.0),
+            goal_position: sim_math::goal_position_for(1),
             pitch_bounds: sim_components::PitchBounds {
                 distance_to_left: 40.0,
                 distance_to_right: 65.0,
@@ -396,7 +396,7 @@ fn test_decision_cadence_does_not_re_evaluate_every_tick() {
             nearby_opponents: smallvec::SmallVec::new(),
             ball_position: Vec2::new(52.5, 34.0),
             ball_state: sim_components::BallState::Free,
-            goal_position: Vec2::new(105.0, 34.0),
+            goal_position: sim_math::goal_position_for(1),
             pitch_bounds: sim_components::PitchBounds {
                 distance_to_left: 50.0,
                 distance_to_right: 55.0,

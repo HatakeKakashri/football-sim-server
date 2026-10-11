@@ -219,14 +219,17 @@ impl Simulation {
                 nearby_opponents: smallvec::SmallVec::new(),
                 ball_position: Vec2::new(52.5, 34.0),
                 ball_state: sim_components::BallState::Free,
-                goal_position: Vec2::new(105.0, 34.0),
+                // Home team attacks right in the first half. Perception
+                // overwrites this every tick; this is just the pre-tick seed.
+                goal_position: sim_math::goal_position_for(1),
                 pitch_bounds: PitchBounds {
                     distance_to_left: pos.x,
-                    distance_to_right: 105.0 - pos.x,
+                    distance_to_right: sim_math::PITCH_LENGTH - pos.x,
                     distance_to_top: pos.y,
                     distance_to_bottom: 68.0 - pos.y,
                 },
             };
+
             world.entity_mut(player_entity).insert(Player {
                 team_id: TeamId(0),
                 intent: None,
@@ -259,6 +262,8 @@ impl Simulation {
             tactic: sim_components::Tactic::Possession,
             players: home_players,
             substitutes: Vec::new(),
+            // Home team attacks right (x = 105) in the first half.
+            attack_direction: 1,
         });
 
         // Create away team
@@ -275,10 +280,12 @@ impl Simulation {
                 nearby_opponents: smallvec::SmallVec::new(),
                 ball_position: Vec2::new(52.5, 34.0),
                 ball_state: sim_components::BallState::Free,
-                goal_position: Vec2::new(105.0, 34.0),
+                // Away team attacks left in the first half. Perception
+                // overwrites this every tick; this is just the pre-tick seed.
+                goal_position: sim_math::goal_position_for(-1),
                 pitch_bounds: PitchBounds {
                     distance_to_left: pos.x,
-                    distance_to_right: 105.0 - pos.x,
+                    distance_to_right: sim_math::PITCH_LENGTH - pos.x,
                     distance_to_top: pos.y,
                     distance_to_bottom: 68.0 - pos.y,
                 },
@@ -314,6 +321,8 @@ impl Simulation {
             tactic: sim_components::Tactic::Possession,
             players: away_players,
             substitutes: Vec::new(),
+            // Away team attacks left (x = 0) in the first half.
+            attack_direction: -1,
         });
 
         // Create match entity

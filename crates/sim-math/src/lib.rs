@@ -65,6 +65,26 @@ impl Vec2 {
     }
 }
 
+/// Standard pitch length in metres (along the x-axis).
+pub const PITCH_LENGTH: f32 = 105.0;
+/// Standard pitch width in metres (along the y-axis).
+pub const PITCH_WIDTH: f32 = 68.0;
+/// Standard goal centre y-coordinate (half of pitch width).
+pub const GOAL_Y_CENTER: f32 = 34.0;
+
+/// Returns the goal position `Vec2` for a team attacking in `attack_direction`.
+///
+/// - `attack_direction > 0` (+1): team attacks toward `x = PITCH_LENGTH` (right goal).
+/// - `attack_direction <= 0` (-1): team attacks toward `x = 0.0` (left goal).
+#[must_use]
+pub const fn goal_position_for(attack_direction: i8) -> Vec2 {
+    if attack_direction > 0 {
+        Vec2::new(PITCH_LENGTH, GOAL_Y_CENTER)
+    } else {
+        Vec2::new(0.0, GOAL_Y_CENTER)
+    }
+}
+
 /// Result of a swept proximity test between two moving points over a unit
 /// time interval.
 ///

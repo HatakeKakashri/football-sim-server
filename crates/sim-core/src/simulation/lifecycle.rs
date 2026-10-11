@@ -9,7 +9,8 @@
 use bevy_ecs::prelude::*;
 use sim_components::time::{HALF_LENGTH_TICKS, HALFTIME_BREAK_TICKS};
 use sim_components::{
-    LastTouch, Match, MatchClock, MatchState, PendingBallTouches, Position, TouchKind, Velocity,
+    LastTouch, Match, MatchClock, MatchState, PendingBallTouches, Position, Team, TouchKind,
+    Velocity,
 };
 use sim_math::Vec2;
 
@@ -259,20 +260,57 @@ pub fn apply_transition(
         };
         world.resource_mut::<PendingBallTouches>().0.push(touch);
     }
-    if decision.apply_kickoff_impulse
-        && let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>()
-    {
-        vel.0 = Vec2::new(2.0, 0.0);
+    if decision.apply_kickoff_impulse {
+        let kickoff_taker_team = match world.get_resource::<MatchClock>() {
+            Some(clock) if clock.half >= 2 => sim_components::TeamId(1),
+            _ => sim_components::TeamId(0),
+        };
+        let taker_dir = world
+            .iter_entities()
+            .find_map(|e| {
+                let team = e.get::<Team>()?;
+                (team.id == kickoff_taker_team).then_some(team.attack_direction)
+            })
+            .unwrap_or(1);
+        if let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>() {
+            vel.0 = Vec2::new(2.0 * f32::from(taker_dir), 0.0);
+        }
+    }
+
+    // Clear the HalfTime entry-tick resource once we've left HalfTime.
+    // Also flip every team's attack_direction so they attack the opposite
+    // end in the second half (Law 8: teams switch ends at half-time).
+    // This MUST run before `reset_formation_to_4_4_2` so the formation reset
+    // uses the second half's slot tables.
+    if current_state == MatchState::HalfTime && decision.next_state != MatchState::HalfTime {
+        world.insert_resource(HalfTimeEntryTick { tick: None });
+        // Collect team entities first to avoid borrow conflicts.
+        let team_entities: Vec<Entity> = world
+            .iter_entities()
+            .filter_map(|e_ref| {
+                let id = e_ref.id();
+                world.entity(id).get::<Team>().map(|_| id)
+            })
+            .collect();
+        for team_entity in team_entities {
+            if let Some(mut team) = world.entity_mut(team_entity).get_mut::<Team>() {
+                team.attack_direction = -team.attack_direction;
+            }
+        }
     }
 
     // Reset 4-4-2 formation whenever we enter Kickoff.
     if decision.next_state == MatchState::Kickoff && current_state != MatchState::Kickoff {
         reset_formation_to_4_4_2(world);
-    }
-
-    // Clear the HalfTime entry-tick resource once we've left HalfTime.
-    if current_state == MatchState::HalfTime && decision.next_state != MatchState::HalfTime {
-        world.insert_resource(HalfTimeEntryTick { tick: None });
+        if world
+            .get_resource::<sim_telemetry::TelemetryConfig>()
+            .is_some()
+        {
+            let tick = world
+                .get_resource::<sim_rules::CurrentTick>()
+                .map_or(0, |t| t.0);
+            sim_telemetry::emit::kickoff(tick);
+        }
     }
 
     // Commit state mutation.

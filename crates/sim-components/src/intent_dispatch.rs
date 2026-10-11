@@ -160,7 +160,7 @@ mod tests {
             goal_position: Vec2::new(60.0, 34.0),
             pitch_bounds: PitchBounds {
                 distance_to_left: self_pos.x,
-                distance_to_right: 105.0 - self_pos.x,
+                distance_to_right: sim_math::PITCH_LENGTH - self_pos.x,
                 distance_to_top: self_pos.y,
                 distance_to_bottom: 68.0 - self_pos.y,
             },

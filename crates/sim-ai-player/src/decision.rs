@@ -174,7 +174,18 @@ pub fn player_decision_system(
         }
 
         if let Some((intent, _score)) = best_action {
-            player.intent = Some(intent);
+            // Resolve the shoot target from the player's perception so the
+            // shot aims at the team's actual goal for this half, not the
+            // brain-template sentinel embedded in the `ShootAtGoal` variant.
+            let resolved = match intent {
+                sim_components::Intent::Action(
+                    sim_components::ActionIntent::ShootAtGoal(_template_target),
+                ) => sim_components::Intent::Action(
+                    sim_components::ActionIntent::ShootAtGoal(perception.goal_position),
+                ),
+                other => other,
+            };
+            player.intent = Some(resolved);
         } else if player.intent.is_none() {
             player.intent = Some(sim_components::Intent::Movement(
                 sim_components::MovementIntent::HoldPosition,

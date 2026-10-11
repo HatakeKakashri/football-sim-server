@@ -504,7 +504,7 @@ mod tests {
                     nearby_opponents: smallvec![],
                     ball_position: pos(52.5, 34.0),
                     ball_state: sim_components::BallState::Possessed,
-                    goal_position: pos(105.0, 34.0),
+                    goal_position: sim_math::goal_position_for(1),
                     pitch_bounds: PitchBounds {
                         distance_to_left: 50.0,
                         distance_to_right: 55.0,
@@ -578,7 +578,7 @@ mod tests {
                     nearby_opponents: smallvec![],
                     ball_position: pos(52.5, 34.0),
                     ball_state: sim_components::BallState::Possessed,
-                    goal_position: pos(105.0, 34.0),
+                    goal_position: sim_math::goal_position_for(1),
                     pitch_bounds: PitchBounds {
                         distance_to_left: 50.0,
                         distance_to_right: 55.0,
@@ -644,10 +644,10 @@ mod tests {
                     nearby_opponents: smallvec![],
                     ball_position: ball_pos,
                     ball_state: sim_components::BallState::Free,
-                    goal_position: Vec2::new(105.0, 34.0),
+                    goal_position: sim_math::goal_position_for(1),
                     pitch_bounds: PitchBounds {
                         distance_to_left: player_pos.x,
-                        distance_to_right: 105.0 - player_pos.x,
+                        distance_to_right: sim_math::PITCH_LENGTH - player_pos.x,
                         distance_to_top: player_pos.y,
                         distance_to_bottom: 68.0 - player_pos.y,
                     },
@@ -717,10 +717,10 @@ mod tests {
                     nearby_opponents: smallvec![],
                     ball_position: ball_pos,
                     ball_state: sim_components::BallState::Free,
-                    goal_position: Vec2::new(105.0, 34.0),
+                    goal_position: sim_math::goal_position_for(1),
                     pitch_bounds: PitchBounds {
                         distance_to_left: player_pos.x,
-                        distance_to_right: 105.0 - player_pos.x,
+                        distance_to_right: sim_math::PITCH_LENGTH - player_pos.x,
                         distance_to_top: player_pos.y,
                         distance_to_bottom: 68.0 - player_pos.y,
                     },

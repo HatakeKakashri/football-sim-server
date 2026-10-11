@@ -91,8 +91,11 @@ pub fn default_utility_brain() -> UtilityBrain {
             ],
         },
         // ShootAtGoal — distance sweet-spot, angle, low pressure.
+        // The embedded target Vec2 is a sentinel only; `player_decision_system`
+        // replaces it with `perception.goal_position` when this action wins,
+        // so no hardcoded pitch coordinate survives into the committed intent.
         PlayerAction {
-            intent: Intent::Action(ActionIntent::ShootAtGoal(Vec2::new(105.0, 34.0))),
+            intent: Intent::Action(ActionIntent::ShootAtGoal(Vec2::zero())),
             considerations: vec![
                 Consideration::DistanceToGoal {
                     weight: 0.5,

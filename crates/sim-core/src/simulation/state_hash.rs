@@ -130,6 +130,7 @@ impl Simulation {
             }
             if let Some(t) = er.get::<Team>() {
                 mix(&mut h, u64::from(t.id.0));
+                mix(&mut h, u64::from(t.attack_direction.cast_unsigned()));
             }
             if let Some(clock) = er.get::<MatchClock>() {
                 mix(&mut h, clock.elapsed_ticks);

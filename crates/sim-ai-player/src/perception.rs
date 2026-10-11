@@ -5,7 +5,7 @@ use sim_components::{
     Ball, BallMarker, Match, MatchClock, NearbyEntity, PerceptionSnapshot, PitchBounds, Position,
     Team, TeamIdComponent,
 };
-use sim_math::Vec2;
+use sim_math::{Vec2, goal_position_for, PITCH_LENGTH, PITCH_WIDTH};
 
 #[expect(
     clippy::type_complexity,
@@ -55,9 +55,13 @@ pub fn perception_system(
     // the previous `Query<&MatchClock>::iter().next()` lookup.
     let _clock = clock_res.clone();
 
-    // Snapshot mentalities by team id — two teams only, so a fixed array
-    // replaces the HashMap (no allocation, no iteration order nondeterminism).
+    // Snapshot mentalities and attack directions by team id — two teams only,
+    // so a fixed array replaces the HashMap (no allocation, no iteration order
+    // nondeterminism). `attack_direction_by_team[i]` is the i8 stored on the
+    // team: +1 = attacking right (PITCH_LENGTH), -1 = attacking left (0.0).
     let mut mentality_by_team: [f32; 2] = [0.0, 0.0];
+    // Default: home (+1) attacks right, away (-1) attacks left.
+    let mut attack_dir_by_team: [i8; 2] = [1, -1];
     {
         let q = queries.p3();
         for team in q.iter() {
@@ -68,6 +72,7 @@ pub fn perception_system(
             };
             if team.id.0 < 2 {
                 mentality_by_team[team.id.0 as usize] = m;
+                attack_dir_by_team[team.id.0 as usize] = team.attack_direction;
             }
         }
     }
@@ -118,11 +123,20 @@ pub fn perception_system(
 
         let pitch_bounds = PitchBounds {
             distance_to_left: player_pos.x,
-            distance_to_right: 105.0 - player_pos.x,
+            distance_to_right: PITCH_LENGTH - player_pos.x,
             distance_to_top: player_pos.y,
-            distance_to_bottom: 68.0 - player_pos.y,
+            distance_to_bottom: PITCH_WIDTH - player_pos.y,
         };
-        let goal_position = Vec2::new(105.0, 34.0);
+
+        // Resolve the goal position from the team's per-half attack direction.
+        // attack_direction = +1 → attacking right (PITCH_LENGTH).
+        // attack_direction = -1 → attacking left (0.0).
+        let team_attack_dir = if team_id.0 < 2 {
+            attack_dir_by_team[team_id.0 as usize]
+        } else {
+            1 // safe default for unexpected team ids
+        };
+        let goal_position = goal_position_for(team_attack_dir);
 
         let perception = PerceptionSnapshot {
             self_position: player_pos,

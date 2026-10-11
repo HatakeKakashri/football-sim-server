@@ -3,7 +3,7 @@
 pub mod brain_default;
 mod commands;
 mod construct;
-mod formation;
+pub mod formation;
 pub mod lifecycle;
 mod snapshot;
 pub mod state_hash;

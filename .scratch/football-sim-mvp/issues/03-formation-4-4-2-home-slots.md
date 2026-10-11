@@ -4,9 +4,35 @@
 
 **Blocked by:** 02 (attack direction must be in place or slot coordinates can't flip correctly).
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] Hardcoded 4-4-2 slot table lives in one place (e.g., `sim_components` or `sim_ai_player`), referenced by both halves via the team's `attack_direction`.
-- [ ] Grep finds zero `52.5` or `(52.5, 34)` literals in default brain code.
-- [ ] Slot positions in a windowed match show meaningful spread (not all 22 players on top of each other); assertion in the existing windowed smoke test.
-- [ ] `cargo test --workspace` green; `final_state_hash` for canonical seed recorded in `## Comments`.
+- [x] Hardcoded 4-4-2 slot table lives in one place (in `sim_components::formation_slot`), referenced by both halves via the team's `attack_direction`.
+- [x] Grep finds zero `52.5` or `(52.5, 34)` literals in default brain code.
+- [x] Slot positions in a windowed match show meaningful spread (not all 22 players on top of each other); assertion in the existing windowed smoke test.
+- [x] `cargo test --workspace` green; `final_state_hash` for canonical seed recorded in `## Comments`.
+
+## Comments
+
+### Canonical `final_state_hash` (seed 12345, 1000 ticks)
+
+```
+final_state_hash: 4822439035975581459
+```
+
+### Implementation Details
+
+1. **Canonical 4-4-2 Slot Table**:
+   - Implemented in `crates/sim-components/src/formation_slot.rs` as `FormationSlot` enum (11 slots: `GK`, `DL`, `DC1`, `DC2`, `DR`, `ML`, `MC1`, `MC2`, `MR`, `ST1`, `ST2`) and `FormationSlot::position_for(attack_direction)` with exact 180° point reflection across pitch center `(PITCH_LENGTH - x, PITCH_WIDTH - y)`.
+   - Lineup positions and roles are derived from `FormationSlot`.
+
+2. **HomeSlot Component & Perception**:
+   - Added `HomeSlot(pub Vec2)` component and `PerceptionSnapshot.home_slot`.
+   - `perception_system` computes `home_slot` using the player's `FormationSlot` and team's `attack_direction`, and populates `HomeSlot` and `PerceptionSnapshot.home_slot`.
+   - `steer_target` in `intent_dispatch`, consideration evaluation in `sim-ai-player`, and `player_decision_system` resolve the default sentinel `MoveToPosition(Vec2::zero())` to `perception.home_slot`.
+
+3. **Brain Code Decoupling**:
+   - Zero occurrences of `52.5` or `(52.5, 34)` literals in `crates/sim-core/src/simulation/brain_default.rs`.
+
+4. **Spread Verification**:
+   - Meaningful spread assertion added to `test_windowed_smoke_test_prd_14`.
+   - Added active smoke test `test_slot_positions_meaningful_spread_in_match` verifying horizontal spread > 50m and vertical spread > 35m across 300 ticks. All workspace tests and clippy pass cleanly.

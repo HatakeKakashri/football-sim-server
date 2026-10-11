@@ -30,6 +30,7 @@ fn perception() -> PerceptionSnapshot {
         ball_position: Vec2::new(60.0, 34.0),
         ball_state: sim_components::BallState::Free,
         goal_position: sim_math::goal_position_for(1),
+        home_slot: Vec2::new(50.0, 34.0),
         pitch_bounds: PitchBounds {
             distance_to_left: 50.0,
             distance_to_right: 55.0,

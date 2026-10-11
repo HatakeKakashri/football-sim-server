@@ -258,7 +258,12 @@ impl Consideration {
                     sim_components::MovementIntent::MoveToPosition(target),
                 ) = ctx.intent
                 {
-                    ctx.perception.self_position.distance(*target)
+                    let target_pos = if *target == sim_math::Vec2::zero() {
+                        ctx.perception.home_slot
+                    } else {
+                        *target
+                    };
+                    ctx.perception.self_position.distance(target_pos)
                 } else {
                     ctx.perception
                         .self_position

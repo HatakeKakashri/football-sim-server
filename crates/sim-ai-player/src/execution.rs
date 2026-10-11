@@ -505,6 +505,7 @@ mod tests {
                     ball_position: pos(52.5, 34.0),
                     ball_state: sim_components::BallState::Possessed,
                     goal_position: sim_math::goal_position_for(1),
+                    home_slot: pos(50.0, 34.0),
                     pitch_bounds: PitchBounds {
                         distance_to_left: 50.0,
                         distance_to_right: 55.0,
@@ -579,6 +580,7 @@ mod tests {
                     ball_position: pos(52.5, 34.0),
                     ball_state: sim_components::BallState::Possessed,
                     goal_position: sim_math::goal_position_for(1),
+                    home_slot: pos(50.0, 34.0),
                     pitch_bounds: PitchBounds {
                         distance_to_left: 50.0,
                         distance_to_right: 55.0,
@@ -645,6 +647,7 @@ mod tests {
                     ball_position: ball_pos,
                     ball_state: sim_components::BallState::Free,
                     goal_position: sim_math::goal_position_for(1),
+                    home_slot: player_pos,
                     pitch_bounds: PitchBounds {
                         distance_to_left: player_pos.x,
                         distance_to_right: sim_math::PITCH_LENGTH - player_pos.x,
@@ -718,6 +721,7 @@ mod tests {
                     ball_position: ball_pos,
                     ball_state: sim_components::BallState::Free,
                     goal_position: sim_math::goal_position_for(1),
+                    home_slot: player_pos,
                     pitch_bounds: PitchBounds {
                         distance_to_left: player_pos.x,
                         distance_to_right: sim_math::PITCH_LENGTH - player_pos.x,

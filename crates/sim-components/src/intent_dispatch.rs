@@ -60,7 +60,14 @@ impl Intent {
         // MAX_PLAYER_SPEED = 10/60 ≈ 0.1417 m/tick; most steering intents
         // use a fraction of that maximum.
         match self {
-            Self::Movement(MovementIntent::MoveToPosition(target)) => Some((*target, 5.0 / 60.0)),
+            Self::Movement(MovementIntent::MoveToPosition(target)) => {
+                let dest = if *target == Vec2::zero() {
+                    perception.home_slot
+                } else {
+                    *target
+                };
+                Some((dest, 5.0 / 60.0))
+            }
             Self::Movement(MovementIntent::ChaseBall) => Some((ball_pos, 8.0 / 60.0)),
             Self::Movement(MovementIntent::Intercept) => {
                 // Existing behaviour: ball_vel is not on the perception
@@ -158,6 +165,7 @@ mod tests {
             ball_position: ball_pos,
             ball_state: crate::BallState::Free,
             goal_position: Vec2::new(60.0, 34.0),
+            home_slot: Vec2::new(20.0, 30.0),
             pitch_bounds: PitchBounds {
                 distance_to_left: self_pos.x,
                 distance_to_right: sim_math::PITCH_LENGTH - self_pos.x,
@@ -209,6 +217,13 @@ mod tests {
         assert_eq!(
             intent.steer_target(&p),
             Some((Vec2::new(40.0, 50.0), 5.0 / 60.0))
+        );
+
+        // MoveToPosition with sentinel Vec2::zero(): targets perception.home_slot
+        let intent_zero = Intent::Movement(MovementIntent::MoveToPosition(Vec2::zero()));
+        assert_eq!(
+            intent_zero.steer_target(&p),
+            Some((p.home_slot, 5.0 / 60.0))
         );
 
         // ChaseBall: target = ball_pos, speed = 8.0 m/s ÷ 60 ≈ 0.1333 m/tick

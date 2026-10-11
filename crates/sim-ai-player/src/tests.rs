@@ -148,6 +148,7 @@ fn test_consideration_distance_to_target() {
         ball_position: Vec2::new(52.5, 34.0),
         ball_state: sim_components::BallState::Free,
         goal_position: sim_math::goal_position_for(1),
+        home_slot: Vec2::new(50.0, 34.0),
         pitch_bounds: sim_components::PitchBounds {
             distance_to_left: 50.0,
             distance_to_right: 55.0,
@@ -169,6 +170,41 @@ fn test_consideration_distance_to_target() {
     };
     let raw = c.raw_input(&ctx);
     assert!(raw > 25.0 && raw < 30.0, "raw input was {raw}");
+}
+
+#[test]
+fn test_consideration_distance_to_target_sentinel_uses_home_slot() {
+    let perception = sim_components::PerceptionSnapshot {
+        self_position: Vec2::new(20.0, 12.0),
+        nearby_teammates: smallvec::SmallVec::default(),
+        nearby_opponents: smallvec::SmallVec::default(),
+        ball_position: Vec2::new(52.5, 34.0),
+        ball_state: sim_components::BallState::Free,
+        goal_position: sim_math::goal_position_for(1),
+        home_slot: Vec2::new(22.0, 12.0), // 2.0m away from self_position
+        pitch_bounds: sim_components::PitchBounds {
+            distance_to_left: 20.0,
+            distance_to_right: 85.0,
+            distance_to_top: 12.0,
+            distance_to_bottom: 56.0,
+        },
+    };
+    // Sentinel MoveToPosition(Vec2::zero()) should evaluate distance to home_slot (2.0m)
+    let intent = sim_components::Intent::Movement(sim_components::MovementIntent::MoveToPosition(Vec2::zero()));
+    let c = Consideration::DistanceToTarget {
+        weight: 1.0,
+        curve: ResponseCurve::Linear { min: 0.0, max: 1.0 },
+    };
+    let ctx = ConsiderationContext {
+        perception: &perception,
+        intent: &intent,
+        stamina: 1.0,
+        skill: 0.7,
+        grid: None,
+    };
+    let raw = c.raw_input(&ctx);
+    // 30.0 - 2.0 = 28.0
+    assert!((raw - 28.0).abs() < 1e-4, "raw input was {raw}, expected 28.0");
 }
 
 /// Spec §10 deviation regression test: `player_stagger_slot` uses a

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sim_math::Vec2;
 
 pub mod ball_touch;
+pub mod formation_slot;
 pub mod intent_dispatch;
 pub mod time;
 
@@ -10,6 +11,7 @@ pub use ball_touch::{
     BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, PlayerId, RuleEvent,
     TouchKind,
 };
+pub use formation_slot::{FormationSlot, HomeSlot, formation_442_slot_position};
 
 #[derive(Component, Debug, Clone)]
 pub struct PerceptionSnapshot {
@@ -23,6 +25,7 @@ pub struct PerceptionSnapshot {
     /// and is read by systems that need the real entity reference.
     pub ball_state: BallState,
     pub goal_position: Vec2,
+    pub home_slot: Vec2,
     pub pitch_bounds: PitchBounds,
 }
 

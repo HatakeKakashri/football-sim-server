@@ -174,8 +174,8 @@ impl Simulation {
     )]
     pub fn create_match(world: &mut World, seed: u64) -> (Entity, Entity, Entity) {
         use sim_components::{
-            Ball, BallMarker, Match, MatchClock, MatchState, PendingBallTouches, Player, Position,
-            Team, TeamId, Velocity,
+            Ball, BallMarker, FormationSlot, HomeSlot, Match, MatchClock, MatchState,
+            PendingBallTouches, Player, Position, Team, TeamId, Velocity,
         };
         use sim_math::Vec2;
 
@@ -207,8 +207,9 @@ impl Simulation {
 
         // Create 11 home players
         for i in 0_u8..11 {
+            let slot = FormationSlot::ALL_442[i as usize];
+            let pos = slot.position_for(1);
             let player_entity = world.spawn(()).id();
-            let pos = Vec2::new(f32::from(i).mul_add(8.0, 10.0), 34.0);
             // Phase 1: seed each player with a default empty PerceptionSnapshot
             // stored in the existing `Player.perception` field so downstream
             // readers always have a valid snapshot without needing it to also
@@ -228,6 +229,7 @@ impl Simulation {
                     distance_to_top: pos.y,
                     distance_to_bottom: 68.0 - pos.y,
                 },
+                home_slot: pos,
             };
 
             world.entity_mut(player_entity).insert(Player {
@@ -244,7 +246,9 @@ impl Simulation {
             world.entity_mut(player_entity).insert(Stamina(1.0));
             world
                 .entity_mut(player_entity)
-                .insert(RoleComponent(sim_components::Role::CentralMidfielder));
+                .insert(RoleComponent(slot.role()));
+            world.entity_mut(player_entity).insert(slot);
+            world.entity_mut(player_entity).insert(HomeSlot(pos));
             world.entity_mut(player_entity).insert(Skill(0.7));
             // Insert PerceptionSnapshot as a Component (Phase B)
             world.entity_mut(player_entity).insert(default_snapshot);
@@ -272,8 +276,9 @@ impl Simulation {
 
         // Create 11 away players
         for i in 0_u8..11 {
+            let slot = FormationSlot::ALL_442[i as usize];
+            let pos = slot.position_for(-1);
             let player_entity = world.spawn(()).id();
-            let pos = Vec2::new(f32::from(i).mul_add(-8.0, 95.0), 34.0);
             let default_snapshot = PerceptionSnapshot {
                 self_position: pos,
                 nearby_teammates: smallvec::SmallVec::new(),
@@ -289,6 +294,7 @@ impl Simulation {
                     distance_to_top: pos.y,
                     distance_to_bottom: 68.0 - pos.y,
                 },
+                home_slot: pos,
             };
             world.entity_mut(player_entity).insert(Player {
                 team_id: TeamId(1),
@@ -304,7 +310,9 @@ impl Simulation {
             world.entity_mut(player_entity).insert(Stamina(1.0));
             world
                 .entity_mut(player_entity)
-                .insert(RoleComponent(sim_components::Role::CentralMidfielder));
+                .insert(RoleComponent(slot.role()));
+            world.entity_mut(player_entity).insert(slot);
+            world.entity_mut(player_entity).insert(HomeSlot(pos));
             world.entity_mut(player_entity).insert(Skill(0.7));
             world.entity_mut(player_entity).insert(default_snapshot);
             world

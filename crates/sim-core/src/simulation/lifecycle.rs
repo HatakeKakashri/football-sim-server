@@ -46,6 +46,12 @@ pub fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2)
     {
         p.intent = None;
     }
+    if let Some(mut hs) = world
+        .entity_mut(player_entity)
+        .get_mut::<sim_components::HomeSlot>()
+    {
+        hs.0 = target;
+    }
 }
 
 /// Pick the kickoff-taker entity for `team_id`:

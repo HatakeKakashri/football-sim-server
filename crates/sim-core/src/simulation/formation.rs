@@ -1,59 +1,21 @@
 //! Formation reset (4-4-2 placeholder).
 
 use bevy_ecs::prelude::*;
+use sim_components::formation_slot::{FormationSlot, formation_442_slot_position};
 use sim_components::{Player, Position, Team};
-use sim_math::Vec2;
 
 use super::lifecycle::apply_player_slot;
 
-/// Canonical 4-4-2 slot table for a team attacking toward `x = PITCH_LENGTH`
-/// (`attack_direction` = +1). Index 0 = GK, 1-4 = defenders, 5-8 = midfielders,
-/// 9-10 = forwards. GK is near x=5, forwards near x=88.
-const ATTACK_RIGHT_SLOTS: [Vec2; 11] = [
-    Vec2::new(5.0, 34.0),  // GK
-    Vec2::new(20.0, 20.0), // Defender 1
-    Vec2::new(35.0, 20.0), // Defender 2
-    Vec2::new(50.0, 20.0), // Defender 3
-    Vec2::new(65.0, 20.0), // Defender 4
-    Vec2::new(25.0, 34.0), // Midfielder 1
-    Vec2::new(40.0, 34.0), // Midfielder 2
-    Vec2::new(55.0, 34.0), // Midfielder 3
-    Vec2::new(70.0, 34.0), // Midfielder 4
-    Vec2::new(80.0, 34.0), // Forward 1
-    Vec2::new(88.0, 34.0), // Forward 2
-];
-
-/// Mirror of `ATTACK_RIGHT_SLOTS` for a team attacking toward `x = 0`
-/// (`attack_direction` = -1). Each slot is mirrored about x = 52.5. GK is near
-/// x=100, forwards near x=17.
-const ATTACK_LEFT_SLOTS: [Vec2; 11] = [
-    Vec2::new(100.0, 34.0), // GK (mirrored from 5)
-    Vec2::new(85.0, 48.0),  // Defender 1 (mirrored x: 105-20=85, y: 68-20=48)
-    Vec2::new(70.0, 48.0),  // Defender 2
-    Vec2::new(55.0, 48.0),  // Defender 3
-    Vec2::new(40.0, 48.0),  // Defender 4
-    Vec2::new(80.0, 34.0),  // Midfielder 1 (mirrored x: 105-25=80)
-    Vec2::new(65.0, 34.0),  // Midfielder 2 (105-40=65)
-    Vec2::new(50.0, 34.0),  // Midfielder 3 (105-55=50)
-    Vec2::new(35.0, 34.0),  // Midfielder 4 (105-70=35)
-    Vec2::new(25.0, 34.0),  // Forward 1 (105-80=25)
-    Vec2::new(17.0, 34.0),  // Forward 2 (105-88=17)
-];
-
 /// Phase 1 hardcoded 4-4-2 formation reset. Reads each team's `attack_direction`
-/// so that the correct half's slot table is used — teams attacking right
-/// (`attack_direction = +1`) use [`ATTACK_RIGHT_SLOTS`]; teams attacking left
-/// (`attack_direction = -1`) use [`ATTACK_LEFT_SLOTS`]. This single slot table
-/// is reused for both halves via the direction field, with no hardcoded
-/// home/away distinction.
+/// so that the correct half's slot positions are used via [`FormationSlot::position_for`].
+/// Teams attacking right (`attack_direction = +1`) place GK near x=5; teams attacking left
+/// (`attack_direction = -1`) place GK near x=100. This single slot table is reused
+/// for both halves via the direction field, with no hardcoded home/away distinction.
 ///
-/// Players within each team are sorted by current x-coordinate (ascending for
-/// attack-right teams, descending for attack-left teams) so the goalkeeper
-/// always lands in slot 0.
+/// Players with assigned [`FormationSlot`] components are placed at their dedicated
+/// slot positions. If a player lacks a slot component, they are sorted by x-coordinate
+/// and assigned by canonical index.
 pub fn reset_formation_to_4_4_2(world: &mut World) {
-    // Collect (entity, team_id, attack_direction, current_x) for every player.
-    // We need attack_direction from the team, which is a separate component,
-    // so we read it via the Team query keyed by team id.
     let mut attack_dir_by_team: [i8; 2] = [1, -1]; // safe default
     let team_entities: Vec<Entity> = world
         .iter_entities()
@@ -84,13 +46,13 @@ pub fn reset_formation_to_4_4_2(world: &mut World) {
         }
     }
 
-    // Sort and assign slots for team 0.
+    // Assign slots for team 0.
     assign_slots(
         world,
         &mut team0_players,
         attack_dir_by_team[0],
     );
-    // Sort and assign slots for team 1.
+    // Assign slots for team 1.
     assign_slots(
         world,
         &mut team1_players,
@@ -98,35 +60,38 @@ pub fn reset_formation_to_4_4_2(world: &mut World) {
     );
 }
 
-/// Sort `players` by x-coordinate according to `attack_direction` and assign
-/// each one the corresponding slot from the canonical slot table.
+/// Assign each player the corresponding slot from the canonical 4-4-2 slot table.
 ///
-/// For attack-right teams (`attack_direction = +1`) players are sorted
-/// ascending so the leftmost (deepest) player gets slot 0 (the GK position).
-/// For attack-left teams (`attack_direction = -1`) players are sorted
-/// descending so the rightmost (deepest) player gets slot 0.
+/// If players carry [`FormationSlot`] components, each player is directly placed at
+/// their slot's position for `attack_direction`. Otherwise, players are sorted by
+/// x-coordinate (ascending for attack-right, descending for attack-left) so the deepest
+/// player gets slot 0 (GK).
 fn assign_slots(world: &mut World, players: &mut [Entity], attack_direction: i8) {
-    players.sort_by(|a, b| {
-        let ax = world.entity(*a).get::<Position>().map_or(0.0, |p| p.0.x);
-        let bx = world.entity(*b).get::<Position>().map_or(0.0, |p| p.0.x);
-        if attack_direction > 0 {
-            // Attacking right: sort ascending — smallest x = deepest = GK slot 0.
-            ax.partial_cmp(&bx).unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            // Attacking left: sort descending — largest x = deepest = GK slot 0.
-            bx.partial_cmp(&ax).unwrap_or(std::cmp::Ordering::Equal)
+    let all_have_slots = !players.is_empty()
+        && players
+            .iter()
+            .all(|e| world.entity(*e).get::<FormationSlot>().is_some());
+
+    if all_have_slots {
+        for entity in players.iter() {
+            if let Some(slot) = world.entity(*entity).get::<FormationSlot>() {
+                apply_player_slot(world, *entity, slot.position_for(attack_direction));
+            }
         }
-    });
-
-    let slots = if attack_direction > 0 {
-        &ATTACK_RIGHT_SLOTS
     } else {
-        &ATTACK_LEFT_SLOTS
-    };
+        players.sort_by(|a, b| {
+            let ax = world.entity(*a).get::<Position>().map_or(0.0, |p| p.0.x);
+            let bx = world.entity(*b).get::<Position>().map_or(0.0, |p| p.0.x);
+            if attack_direction > 0 {
+                ax.partial_cmp(&bx).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                bx.partial_cmp(&ax).unwrap_or(std::cmp::Ordering::Equal)
+            }
+        });
 
-    for (i, entity) in players.iter().enumerate() {
-        if let Some(target) = slots.get(i) {
-            apply_player_slot(world, *entity, *target);
+        for (i, entity) in players.iter().enumerate() {
+            let target = formation_442_slot_position(i, attack_direction);
+            apply_player_slot(world, *entity, target);
         }
     }
 }

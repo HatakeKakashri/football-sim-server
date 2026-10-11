@@ -174,14 +174,19 @@ pub fn player_decision_system(
         }
 
         if let Some((intent, _score)) = best_action {
-            // Resolve the shoot target from the player's perception so the
-            // shot aims at the team's actual goal for this half, not the
-            // brain-template sentinel embedded in the `ShootAtGoal` variant.
+            // Resolve sentinels from the player's perception so shots aim
+            // at the team's actual goal and default movement targets the
+            // player's directional home slot, not template sentinels.
             let resolved = match intent {
                 sim_components::Intent::Action(
                     sim_components::ActionIntent::ShootAtGoal(_template_target),
                 ) => sim_components::Intent::Action(
                     sim_components::ActionIntent::ShootAtGoal(perception.goal_position),
+                ),
+                sim_components::Intent::Movement(
+                    sim_components::MovementIntent::MoveToPosition(target),
+                ) if target == sim_math::Vec2::zero() => sim_components::Intent::Movement(
+                    sim_components::MovementIntent::MoveToPosition(perception.home_slot),
                 ),
                 other => other,
             };

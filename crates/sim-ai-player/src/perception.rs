@@ -2,8 +2,8 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallMarker, Match, MatchClock, NearbyEntity, PerceptionSnapshot, PitchBounds, Position,
-    Team, TeamIdComponent,
+    Ball, BallMarker, FormationSlot, HomeSlot, Match, MatchClock, NearbyEntity, PerceptionSnapshot,
+    PitchBounds, Position, Team, TeamIdComponent,
 };
 use sim_math::{Vec2, goal_position_for, PITCH_LENGTH, PITCH_WIDTH};
 
@@ -14,7 +14,13 @@ use sim_math::{Vec2, goal_position_for, PITCH_LENGTH, PITCH_WIDTH};
 pub fn perception_system(
     mut commands: Commands,
     mut queries: ParamSet<(
-        Query<(Entity, &Position, &TeamIdComponent)>,
+        Query<(
+            Entity,
+            &Position,
+            &TeamIdComponent,
+            Option<&FormationSlot>,
+            Option<&HomeSlot>,
+        )>,
         Query<(Entity, &Position, &TeamIdComponent)>,
         Query<&Position, With<BallMarker>>,
         Query<&Team>,
@@ -83,12 +89,20 @@ pub fn perception_system(
 
     // Now iterate players via the mutable query, building and inserting
     // PerceptionSnapshot as a Component.
-    let entity_data: Vec<(Entity, Vec2, sim_components::TeamId)> = {
+    let entity_data: Vec<(
+        Entity,
+        Vec2,
+        sim_components::TeamId,
+        Option<FormationSlot>,
+        Option<HomeSlot>,
+    )> = {
         let q0 = queries.p0();
-        q0.iter().map(|(e, pos, team)| (e, pos.0, team.0)).collect()
+        q0.iter()
+            .map(|(e, pos, team, slot, hs)| (e, pos.0, team.0, slot.copied(), hs.copied()))
+            .collect()
     };
 
-    for (entity, player_pos, team_id) in entity_data {
+    for (entity, player_pos, team_id, slot, hs) in entity_data {
         let mut nearby_teammates = smallvec::SmallVec::new();
         let mut nearby_opponents = smallvec::SmallVec::new();
         for (other_entity, other_team_id, other_pos) in &others {
@@ -128,7 +142,7 @@ pub fn perception_system(
             distance_to_bottom: PITCH_WIDTH - player_pos.y,
         };
 
-        // Resolve the goal position from the team's per-half attack direction.
+        // Resolve the goal position and home slot from the team's per-half attack direction.
         // attack_direction = +1 → attacking right (PITCH_LENGTH).
         // attack_direction = -1 → attacking left (0.0).
         let team_attack_dir = if team_id.0 < 2 {
@@ -137,6 +151,10 @@ pub fn perception_system(
             1 // safe default for unexpected team ids
         };
         let goal_position = goal_position_for(team_attack_dir);
+        let home_slot = slot.map_or_else(
+            || hs.map_or(Vec2::zero(), |h| h.0),
+            |s| s.position_for(team_attack_dir),
+        );
 
         let perception = PerceptionSnapshot {
             self_position: player_pos,
@@ -145,10 +163,11 @@ pub fn perception_system(
             ball_position,
             ball_state,
             goal_position,
+            home_slot,
             pitch_bounds,
         };
 
-        // Insert or update the PerceptionSnapshot component for this player
-        commands.entity(entity).insert(perception);
+        // Insert or update the PerceptionSnapshot and HomeSlot components for this player
+        commands.entity(entity).insert((perception, HomeSlot(home_slot)));
     }
 }

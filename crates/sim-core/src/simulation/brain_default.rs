@@ -39,8 +39,11 @@ pub fn default_utility_brain() -> UtilityBrain {
 
     let actions = vec![
         // MoveToPosition — distance_to_target: closer = better.
+        // The embedded target Vec2 is a sentinel only; `player_decision_system`
+        // replaces it with `perception.home_slot` when this action wins,
+        // so no hardcoded pitch coordinate survives into the committed intent.
         PlayerAction {
-            intent: Intent::Movement(MovementIntent::MoveToPosition(Vec2::new(52.5, 34.0))),
+            intent: Intent::Movement(MovementIntent::MoveToPosition(Vec2::zero())),
             considerations: vec![Consideration::DistanceToTarget {
                 weight: 1.0,
                 curve: lin(0.0, 30.0),

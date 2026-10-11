@@ -219,6 +219,24 @@ fn test_windowed_smoke_test_prd_14() {
         let state = sim.get_state().expect("get_state succeeded");
         let ball_x = state.ball.position[0];
 
+        let xs: Vec<f32> = state.players.iter().map(|p| p.position[0]).collect();
+        let ys: Vec<f32> = state.players.iter().map(|p| p.position[1]).collect();
+        let min_x = xs.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_x = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let min_y = ys.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_y = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+        assert!(
+            max_x - min_x > 50.0,
+            "Players must show meaningful horizontal spread (> 50m), got {}",
+            max_x - min_x
+        );
+        assert!(
+            max_y - min_y > 35.0,
+            "Players must show meaningful vertical spread (> 35m), got {}",
+            max_y - min_y
+        );
+
         if (ball_x - 52.5).abs() > 1.0 {
             crossed_halfway = true;
         }
@@ -248,6 +266,70 @@ fn test_windowed_smoke_test_prd_14() {
     assert!(team0_touched, "Team 0 must touch the ball within 3 minutes");
     assert!(team1_touched, "Team 1 must touch the ball within 3 minutes");
     assert!(shot_occurred, "At least one shot must occur within 3 minutes");
+}
+
+/// Issue 03 contract: Slot positions in a match show meaningful spread
+/// across the pitch (not all 22 players on top of each other at (52.5, 34)).
+#[test]
+fn test_slot_positions_meaningful_spread_in_match() {
+    let mut sim = Simulation::new(12345);
+
+    // Verify positions over a 300-tick window (~5 seconds of play).
+    for _ in 0..300 {
+        sim.tick();
+        let state = sim.get_state().expect("get_state succeeded");
+
+        assert_eq!(state.players.len(), 22, "Must have exactly 22 players");
+
+        let xs: Vec<f32> = state.players.iter().map(|p| p.position[0]).collect();
+        let ys: Vec<f32> = state.players.iter().map(|p| p.position[1]).collect();
+        let min_x = xs.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_x = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let min_y = ys.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_y = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+        // Overall spread across pitch
+        assert!(
+            max_x - min_x > 50.0,
+            "Players must show meaningful horizontal spread (> 50m), got {}",
+            max_x - min_x
+        );
+        assert!(
+            max_y - min_y > 35.0,
+            "Players must show meaningful vertical spread (> 35m), got {}",
+            max_y - min_y
+        );
+
+        // Home team spread across their formation lines
+        let home_xs: Vec<f32> = state
+            .players
+            .iter()
+            .filter(|p| p.team_id == TeamId(0))
+            .map(|p| p.position[0])
+            .collect();
+        let home_min_x = home_xs.iter().copied().fold(f32::INFINITY, f32::min);
+        let home_max_x = home_xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            home_max_x - home_min_x > 25.0,
+            "Home team horizontal spread must be > 25m, got {}",
+            home_max_x - home_min_x
+        );
+
+        // Away team spread across their formation lines
+        let away_xs: Vec<f32> = state
+            .players
+            .iter()
+            .filter(|p| p.team_id == TeamId(1))
+            .map(|p| p.position[0])
+            .collect();
+        let away_min_x = away_xs.iter().copied().fold(f32::INFINITY, f32::min);
+        let away_max_x = away_xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            away_max_x - away_min_x > 25.0,
+            "Away team horizontal spread must be > 25m, got {}",
+            away_max_x - away_min_x
+        );
+    }
 }
 
 /// Issue 02 contract 3: Mirror-seed match (same squads, sides swapped) shows

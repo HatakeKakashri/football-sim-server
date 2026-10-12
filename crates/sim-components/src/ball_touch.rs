@@ -128,7 +128,7 @@ pub enum TouchKind {
 ///
 /// - `team` — the toucher's team, copied off `Player.team_id` at
 ///   registration time. This is what Law 9 restart-taker resolution
-///   reads, and what keeps an out-of-bounds `RuleEvent::OutOfBounds`
+///   reads, and what keeps an out-of-bounds restart signal
 ///   payload correct after the toucher is gone.
 /// - `player` — the live `Entity`, for the same-tick readers that need
 ///   a world lookup. `None` when no specific player is credited.

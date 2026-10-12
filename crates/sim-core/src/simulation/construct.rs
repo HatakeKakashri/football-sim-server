@@ -192,6 +192,7 @@ impl Simulation {
             kick_velocity: None,
         });
         world.insert_resource(PendingBallTouches::default());
+        world.insert_resource(sim_rules::PendingOutOfBounds::default());
         world.entity_mut(ball_entity).insert(BallMarker);
         world
             .entity_mut(ball_entity)

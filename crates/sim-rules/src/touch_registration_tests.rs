@@ -22,8 +22,8 @@ use sim_math::Vec2;
 use smallvec::smallvec;
 
 use crate::{
-    CurrentTick, goal_detection_system, out_of_bounds_system, possession_resolution_system,
-    restart_system, touch::apply_ball_touched_system,
+    CurrentTick, PendingOutOfBounds, goal_detection_system, out_of_bounds_system,
+    possession_resolution_system, restart_system, touch::apply_ball_touched_system,
 };
 
 fn pos(x: f32, y: f32) -> Vec2 {
@@ -375,6 +375,7 @@ fn test_oob_restart_registers_restart_touch() {
         last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world.insert_resource(CurrentTick(50));
 
     let mut schedule = Schedule::default();
@@ -416,7 +417,7 @@ fn test_oob_restart_registers_restart_touch() {
 // -----------------------------------------------------------------------------
 
 /// `out_of_bounds_system` captures the full last-touch record in the
-/// `RuleEvent::OutOfBounds { last_touch, .. }` payload. The ball's own
+/// `PendingOutOfBounds` signal payload. The ball's own
 /// `last_touch` field is **preserved** (M8) — the record stays on the
 /// ball for replay data; it is not cleared when the event fires.
 #[test]
@@ -446,6 +447,7 @@ fn test_oob_event_carries_full_touch() {
         last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world.insert_resource(CurrentTick(0));
 
     let mut schedule = Schedule::default();
@@ -453,18 +455,15 @@ fn test_oob_event_carries_full_touch() {
     schedule.run(&mut world);
 
     let event = world
-        .entity(ball_entity)
-        .get::<RuleEvent>()
-        .expect("RuleEvent::OutOfBounds must be emitted");
-    if let RuleEvent::OutOfBounds { last_touch, .. } = event {
-        assert_eq!(
-            *last_touch,
-            Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
-            "OutOfBounds payload must carry the full last-touch record"
-        );
-    } else {
-        panic!("expected RuleEvent::OutOfBounds, got {event:?}");
-    }
+        .resource::<PendingOutOfBounds>()
+        .get()
+        .copied()
+        .expect("OutOfBounds signal must be written");
+    assert_eq!(
+        event.last_touch,
+        Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
+        "OutOfBounds payload must carry the full last-touch record"
+    );
 
     // The ball's own `last_touch` is preserved (M8).
     let ball = world.resource::<Ball>();
@@ -616,6 +615,7 @@ fn test_own_goal_attribution_preserved() {
         last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world.insert_resource(CurrentTick(50));
 
     let mut schedule = Schedule::default();
@@ -651,7 +651,7 @@ fn test_own_goal_attribution_preserved() {
 // Pre-touch guard on OOB (M12.1, Step 11)
 // -----------------------------------------------------------------------------
 
-/// `out_of_bounds_system` must not emit a `RuleEvent::OutOfBounds` when
+/// `out_of_bounds_system` must not write an OOB signal when
 /// `Ball.last_touch` is `None` — a desync from a missing prior
 /// restart / kick. Spec §E: bail without event; release builds log
 /// `tracing::error!`, debug builds `debug_assert!` first.
@@ -682,6 +682,7 @@ fn test_pre_touch_oob_logs_error_and_skips() {
         last_touch: None,
     });
     world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world.insert_resource(CurrentTick(0));
 
     let mut schedule = Schedule::default();
@@ -699,10 +700,11 @@ fn test_pre_touch_oob_logs_error_and_skips() {
     // proceed past `out_of_bounds_system` (it never reached the
     // consumer or the restart system). Re-run a fresh schedule without
     // the OOB system to confirm Ball state is still untouched by any
-    // event emission (no RuleEvent on the ball entity).
-    assert!(
-        world.entity(ball_entity).get::<RuleEvent>().is_none(),
-        "no RuleEvent::OutOfBounds must be emitted when the guard fires"
+    // signal emission (nothing written to `PendingOutOfBounds`).
+    assert_eq!(
+        world.resource::<PendingOutOfBounds>().get(),
+        None,
+        "no OutOfBounds signal must be written when the guard fires"
     );
 }
 
@@ -809,6 +811,7 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
         last_touch: None,
     });
     world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world.insert_resource(CurrentTick(50));
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -976,6 +979,7 @@ fn test_oob_restart_taker_resolves_after_toucher_despawn() {
         )),
     });
     world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world.insert_resource(CurrentTick(50));
 
     // The toucher despawns *after* the ball already went out — the

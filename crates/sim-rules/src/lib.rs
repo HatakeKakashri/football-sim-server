@@ -2,7 +2,7 @@
 //! referee decisions, match clock).
 //!
 //! Public surface: the seven `pub fn` systems and the small support
-//! types (`CurrentTick`, `PendingRestart`).
+//! types (`CurrentTick`, `PendingRestart`, `PendingOutOfBounds`).
 
 pub(crate) mod clock;
 #[cfg(test)]
@@ -33,7 +33,7 @@ pub use referee::{foul_detection_system, minimum_player_count_system};
 pub use touch::apply_ball_touched_system;
 
 use bevy_ecs::prelude::*;
-use sim_components::{RuleEvent, Team, TeamId};
+use sim_components::{BallOutOfBoundsType, LastTouch, RuleEvent, Team, TeamId};
 
 /// Shared constants used by every rule system. Kept in one place so the
 /// pitch geometry has a single source of truth.
@@ -63,13 +63,56 @@ pub struct CurrentTick(pub u64);
 /// team that *conceded* the goal). `restart_system` resolves the
 /// conceded team as the opposite of `scorer_team`. Only set for
 /// `KickoffRestart` events; `None` for OOB-driven restarts (which
-/// derive the taker team from `RuleEvent::OutOfBounds.last_touch`
+/// derive the taker team from `PendingOutOfBounds`'s `last_touch`
 /// instead).
 #[derive(Resource, Debug, Clone, Default)]
 pub struct PendingRestart {
     pub event: Option<RuleEvent>,
     pub restart_tick: u64,
     pub scorer_team: Option<sim_components::TeamId>,
+}
+
+/// Out-of-bounds signal handed from `out_of_bounds_system` to
+/// `restart_system`.
+///
+/// Carried by a [`PendingOutOfBounds`] resource rather than a deferred
+/// `Commands` component insert, so the restarter sees it in the same
+/// system run without relying on an `apply_deferred` sync point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutOfBoundsEvent {
+    /// Which restart the ball's resting position earns (positional).
+    pub oob_type: BallOutOfBoundsType,
+    /// The last-touch record when the ball went out. The restart taker
+    /// is the team opposite `last_touch.team` (Law 9).
+    pub last_touch: Option<LastTouch>,
+}
+
+/// The out-of-bounds restart awaiting resolution, if any.
+///
+/// Must be present in any world that runs `out_of_bounds_system` or
+/// `restart_system` (`Simulation::create_match` inserts it).
+/// `out_of_bounds_system` writes it via [`Self::set`]; `restart_system`
+/// drains it via [`Self::take`].
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PendingOutOfBounds(Option<OutOfBoundsEvent>);
+
+impl PendingOutOfBounds {
+    /// Record an OOB event for the restarter to resolve on the same tick.
+    pub const fn set(&mut self, event: OutOfBoundsEvent) {
+        self.0 = Some(event);
+    }
+
+    /// Take the pending OOB event, leaving `None` for next time.
+    #[must_use]
+    pub const fn take(&mut self) -> Option<OutOfBoundsEvent> {
+        self.0.take()
+    }
+
+    /// Peek at the pending OOB event without consuming it.
+    #[must_use]
+    pub const fn get(&self) -> Option<&OutOfBoundsEvent> {
+        self.0.as_ref()
+    }
 }
 
 /// Team that attacks the goal at the given end of the pitch in the

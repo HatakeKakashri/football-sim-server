@@ -21,7 +21,10 @@ use bevy_ecs::prelude::*;
 use sim_components::{Ball, BallMarker, BallState, Position, RuleEvent, Velocity};
 use sim_math::Vec2;
 
-use crate::{CurrentTick, PendingRestart, restart_system, touch::apply_ball_touched_system};
+use crate::{
+    CurrentTick, PendingOutOfBounds, PendingRestart, restart_system,
+    touch::apply_ball_touched_system,
+};
 
 /// Produces a test `Ball` resource with the given `state`.
 /// All other fields are zeroed; `possessor` and `last_touch` are `None`.
@@ -71,6 +74,7 @@ fn test_kickoff_restart_places_ball_at_center() {
     world.entity_mut(ball_entity).insert(BallMarker);
     world.insert_resource(ball_fixture(Vec2::new(105.5, 34.0), BallState::Dead));
     world.insert_resource(sim_components::PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(105.5, 34.0)));

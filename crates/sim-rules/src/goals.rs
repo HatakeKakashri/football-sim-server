@@ -15,7 +15,9 @@ use sim_telemetry::TelemetryConfig;
 
 use crate::constants::{CENTER_SPOT, GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH};
 use crate::out_of_bounds::calculate_oob_restart_position;
-use crate::{CurrentTick, PendingRestart, team_attacking_goal};
+use crate::{
+    CurrentTick, OutOfBoundsEvent, PendingOutOfBounds, PendingRestart, team_attacking_goal,
+};
 
 /// Buffered goal event data collected in `goal_detection_system`'s first
 /// pass (avoiding a borrow on `Match` / `Ball` while iterating queries).
@@ -153,9 +155,10 @@ pub fn goal_detection_system(
 ///
 /// Handles ball placement after out-of-bounds and goal events.
 /// - `KickoffRestart` (from goal): place at center spot after 60-tick delay
-/// - `OutOfBounds`: place at correct restart spot immediately
+/// - out-of-bounds: place at correct restart spot immediately
 ///
-/// Reads `RuleEvent` directly from entity to determine restart type.
+/// Takes the out-of-bounds signal from the [`PendingOutOfBounds`]
+/// resource written by `out_of_bounds_system` earlier in the same tick.
 /// `PendingRestart` resource tracks the delayed kickoff restart timing.
 ///
 /// Registers the restart as a `TouchKind::Restart` touch (pushed to
@@ -171,14 +174,14 @@ pub fn goal_detection_system(
 )]
 pub fn restart_system(
     mut commands: Commands,
-    mut ball_query: Query<(Entity, &mut Position, &mut Velocity), With<BallMarker>>,
-    rule_event_query: Query<(Entity, &RuleEvent)>,
+    mut ball_query: Query<(&mut Position, &mut Velocity), With<BallMarker>>,
     player_query: Query<(Entity, &TeamIdComponent), With<Player>>,
     current_tick: Option<Res<CurrentTick>>,
     pending_restart: Option<Res<PendingRestart>>,
     mut ball: ResMut<Ball>,
     mut pending_touches: ResMut<PendingBallTouches>,
     telemetry: Option<Res<TelemetryConfig>>,
+    mut pending_oob: ResMut<PendingOutOfBounds>,
 ) {
     // Handle KickoffRestart from goal (delayed by 60 ticks)
     if let Some(pr) = pending_restart
@@ -187,7 +190,7 @@ pub fn restart_system(
         && current_tick.as_deref().map_or(0, |t| t.0) >= pr.restart_tick
     {
         // Place ball at center spot
-        if let Ok((_, mut pos, mut vel)) = ball_query.get_single_mut() {
+        if let Ok((mut pos, mut vel)) = ball_query.get_single_mut() {
             pos.0 = Vec2::new(CENTER_SPOT.0, CENTER_SPOT.1);
             vel.0 = Vec2::zero();
             ball.state = BallState::Free;
@@ -228,86 +231,76 @@ pub fn restart_system(
         commands.remove_resource::<PendingRestart>();
     }
 
-    // Handle OutOfBounds restarts by reading RuleEvent from entity
-    let mut processed_entities: Vec<Entity> = Vec::new();
-
-    if let Ok((ball_entity, mut pos, mut vel)) = ball_query.get_single_mut() {
-        // Only process Dead balls
-        if ball.state == BallState::Dead
-            && let Ok((_, rule_event)) = rule_event_query.get(ball_entity)
-            && let RuleEvent::OutOfBounds {
-                oob_type,
-                last_touch,
-            } = rule_event
-        {
-            // Determine restart position based on OOB type and ball position
-            let restart_pos = calculate_oob_restart_position(pos.0, *oob_type);
-            pos.0 = restart_pos;
-            vel.0 = Vec2::zero();
-            ball.state = BallState::Free;
-            // Drop any pending kick velocity — see goal-restart arm above.
-            ball.kick_velocity = None;
-            // Law 9: the restart taker is the team opposite of the
-            // last toucher. Find any player on that team to record
-            // as the taker identity.
-            //
-            // `last_touch` may be `None` only when the ball went out
-            // without ever being touched since the last restart — a
-            // wiring gap that `out_of_bounds_system` asserts against
-            // in debug builds. In that case the taker team is
-            // unknown: the record falls back to `TeamId(0)` with
-            // `player: None` rather than inventing a taker, and the
-            // desync is flagged via `tracing::error!` in release
-            // builds too.
-            let (taker_team, taker) = last_touch.as_ref().map_or_else(
-                || {
-                    tracing::error!(
-                        tick = current_tick.as_deref().map_or(0, |t| t.0),
-                        "restart_system OOB arm: last_touch is None (touch \
-                         entity desync); defaulting to home"
-                    );
-                    (TeamId(0), Entity::PLACEHOLDER)
-                },
-                |last| {
-                    // Opposite team: 0 ↔ 1.
-                    let team = if last.team == TeamId(0) {
-                        TeamId(1)
-                    } else {
-                        TeamId(0)
-                    };
-                    (team, first_player_on_team(&player_query, team))
-                },
-            );
-            // `first_player_on_team` returns `Entity::PLACEHOLDER`
-            // when the team has no players (sparse test worlds);
-            // `from_taker` collapses the placeholder case to a
-            // team-only touch so the check lives in one place.
-            let touch = sim_components::LastTouch::from_taker(
-                taker_team,
-                taker,
-                sim_components::TouchKind::Restart,
-            );
-            pending_touches.0.push(touch);
-            let kind = match oob_type {
-                sim_components::BallOutOfBoundsType::ThrowIn => "throw_in",
-                sim_components::BallOutOfBoundsType::GoalKick => "goal_kick",
-                sim_components::BallOutOfBoundsType::Corner => "corner",
-            };
-            if telemetry.is_some() {
-                sim_telemetry::emit::restart(
-                    current_tick.as_deref().map_or(0, |t| t.0),
-                    kind,
-                    restart_pos.x,
-                    restart_pos.y,
+    // Handle out-of-bounds restarts from the same-tick signal. Only
+    // Dead balls are restarted; the signal is taken (cleared) once used.
+    if ball.state == BallState::Dead
+        && let Some(OutOfBoundsEvent {
+            oob_type,
+            last_touch,
+        }) = pending_oob.take()
+        && let Ok((mut pos, mut vel)) = ball_query.get_single_mut()
+    {
+        // Determine restart position based on OOB type and ball position
+        let restart_pos = calculate_oob_restart_position(pos.0, oob_type);
+        pos.0 = restart_pos;
+        vel.0 = Vec2::zero();
+        ball.state = BallState::Free;
+        // Drop any pending kick velocity — see goal-restart arm above.
+        ball.kick_velocity = None;
+        // Law 9: the restart taker is the team opposite of the
+        // last toucher. Find any player on that team to record
+        // as the taker identity.
+        //
+        // `last_touch` may be `None` only when the ball went out
+        // without ever being touched since the last restart — a
+        // wiring gap that `out_of_bounds_system` asserts against
+        // in debug builds. In that case the taker team is
+        // unknown: the record falls back to `TeamId(0)` with
+        // `player: None` rather than inventing a taker, and the
+        // desync is flagged via `tracing::error!` in release
+        // builds too.
+        let (taker_team, taker) = last_touch.as_ref().map_or_else(
+            || {
+                tracing::error!(
+                    tick = current_tick.as_deref().map_or(0, |t| t.0),
+                    "restart_system OOB arm: last_touch is None (touch \
+                     entity desync); defaulting to home"
                 );
-            }
-            processed_entities.push(ball_entity);
+                (TeamId(0), Entity::PLACEHOLDER)
+            },
+            |last| {
+                // Opposite team: 0 ↔ 1.
+                let team = if last.team == TeamId(0) {
+                    TeamId(1)
+                } else {
+                    TeamId(0)
+                };
+                (team, first_player_on_team(&player_query, team))
+            },
+        );
+        // `first_player_on_team` returns `Entity::PLACEHOLDER`
+        // when the team has no players (sparse test worlds);
+        // `from_taker` collapses the placeholder case to a
+        // team-only touch so the check lives in one place.
+        let touch = sim_components::LastTouch::from_taker(
+            taker_team,
+            taker,
+            sim_components::TouchKind::Restart,
+        );
+        pending_touches.0.push(touch);
+        let kind = match oob_type {
+            sim_components::BallOutOfBoundsType::ThrowIn => "throw_in",
+            sim_components::BallOutOfBoundsType::GoalKick => "goal_kick",
+            sim_components::BallOutOfBoundsType::Corner => "corner",
+        };
+        if telemetry.is_some() {
+            sim_telemetry::emit::restart(
+                current_tick.as_deref().map_or(0, |t| t.0),
+                kind,
+                restart_pos.x,
+                restart_pos.y,
+            );
         }
-    }
-
-    // Remove RuleEvent component from processed entities
-    for entity in processed_entities {
-        commands.entity(entity).remove::<RuleEvent>();
     }
 }
 

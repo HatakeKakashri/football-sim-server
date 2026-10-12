@@ -1,17 +1,17 @@
 //! Out-of-bounds detection (Law 9) and restart placement.
 //!
 //! `out_of_bounds_system` detects a ball that has settled at the pitch
-//! boundary and emits a [`RuleEvent::OutOfBounds`] with the correct
-//! restart type. `calculate_oob_restart_position` then computes the
-//! placement spot for the restart (consumed by `goals::restart_system`).
+//! boundary and records the correct restart type in the
+//! [`PendingOutOfBounds`] resource. `calculate_oob_restart_position`
+//! then computes the placement spot for the restart (consumed by
+//! `goals::restart_system`).
 
 use bevy_ecs::prelude::*;
-use sim_components::{
-    Ball, BallMarker, BallOutOfBoundsType, BallState, Position, RuleEvent, Velocity,
-};
+use sim_components::{Ball, BallMarker, BallOutOfBoundsType, BallState, Position, Velocity};
 use sim_math::Vec2;
 
 use crate::constants::{GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH, PITCH_WIDTH};
+use crate::{OutOfBoundsEvent, PendingOutOfBounds};
 
 /// Phase 3: Out-of-bounds detection system (Law 9).
 ///
@@ -30,21 +30,24 @@ use crate::constants::{GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH, PITCH_WIDTH};
 ///
 /// Does NOT reset ball position — that belongs to `restart_system`.
 ///
-/// Records the full last-touch record in the emitted `RuleEvent::OutOfBounds`
-/// so the OOB restart-taker (awarded to the *opposite* team of the
-/// toucher per Law 9) can be resolved by downstream consumers.
+/// Records the full last-touch record in the [`PendingOutOfBounds`]
+/// resource so `restart_system` can resolve the OOB restart-taker
+/// (awarded to the *opposite* team of the toucher per Law 9) in the
+/// same tick. A resource is used instead of a `Commands` component
+/// insert because deferred commands are not visible to later systems
+/// until a sync point runs.
 pub fn out_of_bounds_system(
-    mut commands: Commands,
-    ball_query: Query<(Entity, &Position, &Velocity), With<BallMarker>>,
+    ball_query: Query<(&Position, &Velocity), With<BallMarker>>,
     current_tick: Res<crate::CurrentTick>,
     mut ball: ResMut<Ball>,
+    mut pending_oob: ResMut<PendingOutOfBounds>,
 ) {
     // Tolerance for "at boundary" detection (physics clamps to boundary)
     const OOB_TOLERANCE: f32 = 0.15;
     // Velocity threshold below which ball is considered "settled"
     const VELOCITY_THRESHOLD: f32 = 0.5;
 
-    let Ok((ball_entity, position, velocity)) = ball_query.get_single() else {
+    let Ok((position, velocity)) = ball_query.get_single() else {
         return;
     };
 
@@ -100,7 +103,7 @@ pub fn out_of_bounds_system(
     // restart (the opposite team of the last toucher), not *which
     // type* of restart is awarded. We therefore do not consult
     // `last_touch` for the classification itself; we only carry
-    // it forward in the event payload so downstream restart
+    // it forward in the signal payload so downstream restart
     // consumers can resolve the taker team.
     //
     // Capture the full last-touch record into the event payload.
@@ -125,7 +128,7 @@ pub fn out_of_bounds_system(
 
     // Apply state changes
     ball.state = BallState::Dead;
-    commands.entity(ball_entity).insert(RuleEvent::OutOfBounds {
+    pending_oob.set(OutOfBoundsEvent {
         oob_type,
         last_touch,
     });

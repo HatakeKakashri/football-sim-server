@@ -4,13 +4,16 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallMarker, BallOutOfBoundsType, BallState, LastTouch, Player, Position, RuleEvent,
-    TeamId, TeamIdComponent, TouchKind, Velocity,
+    Ball, BallMarker, BallOutOfBoundsType, BallState, LastTouch, Player, Position, TeamId,
+    TeamIdComponent, TouchKind, Velocity,
 };
 use sim_math::Vec2;
 
 use crate::tests::ball_fixture;
-use crate::{CurrentTick, out_of_bounds_system, touch::apply_ball_touched_system};
+use crate::{
+    CurrentTick, OutOfBoundsEvent, PendingOutOfBounds, out_of_bounds_system,
+    touch::apply_ball_touched_system,
+};
 
 /// Build a Ball resource with `last_touch = Some(LastTouch{team, toucher, Play})`.
 /// Use this in OOB tests so the debug-build `last_touch.is_some()` assertion
@@ -42,6 +45,7 @@ fn test_out_of_bounds_detection_throw_in() {
     world.entity_mut(ball_entity).insert(BallMarker);
     world.insert_resource(ball_fixture_with_touch(toucher, TeamId(0)));
     world.insert_resource(sim_components::PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(20.0, 0.0)));
@@ -59,25 +63,16 @@ fn test_out_of_bounds_detection_throw_in() {
     let ball = world.resource::<sim_components::Ball>();
     assert_eq!(ball.state, BallState::Dead);
 
-    let rule_event = world.entity(ball_entity).get::<RuleEvent>();
-    assert!(rule_event.is_some(), "RuleEvent should be emitted");
-    if let Some(RuleEvent::OutOfBounds {
-        oob_type,
-        last_touch,
-    }) = rule_event
-    {
-        assert!(
-            matches!(oob_type, BallOutOfBoundsType::ThrowIn),
-            "Ball at y=0 (touchline) should be ThrowIn"
-        );
-        assert_eq!(
-            *last_touch,
-            Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
-            "OOB event payload must capture the full last-touch record"
-        );
-    } else {
-        panic!("expected RuleEvent::OutOfBounds, got {rule_event:?}");
-    }
+    // The ball entity carries no deferred marker any more: the signal
+    // lives in the `PendingOutOfBounds` resource.
+    assert_eq!(
+        world.resource::<PendingOutOfBounds>().get().copied(),
+        Some(OutOfBoundsEvent {
+            oob_type: BallOutOfBoundsType::ThrowIn,
+            last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
+        }),
+        "Ball at y=0 (touchline) should signal a ThrowIn carrying the full last-touch record"
+    );
 }
 
 #[test]
@@ -97,6 +92,7 @@ fn test_out_of_bounds_detection_corner() {
     world.entity_mut(ball_entity).insert(BallMarker);
     world.insert_resource(ball_fixture_with_touch(toucher, TeamId(0)));
     world.insert_resource(sim_components::PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(0.1, 0.1)));
@@ -111,16 +107,12 @@ fn test_out_of_bounds_detection_corner() {
     let ball = world.resource::<sim_components::Ball>();
     assert_eq!(ball.state, BallState::Dead);
 
-    let rule_event = world.entity(ball_entity).get::<RuleEvent>();
-    assert!(rule_event.is_some());
-    if let Some(RuleEvent::OutOfBounds { oob_type, .. }) = rule_event {
-        assert!(
-            matches!(oob_type, BallOutOfBoundsType::Corner),
-            "Ball at corner position should be Corner"
-        );
-    } else {
-        panic!("expected RuleEvent::OutOfBounds, got {rule_event:?}");
-    }
+    let signal = world.resource::<PendingOutOfBounds>().get().copied();
+    assert_eq!(
+        signal.map(|event| event.oob_type),
+        Some(BallOutOfBoundsType::Corner),
+        "Ball at corner position should signal a Corner"
+    );
 }
 
 #[test]
@@ -139,6 +131,7 @@ fn test_out_of_bounds_goal_kick() {
     world.entity_mut(ball_entity).insert(BallMarker);
     world.insert_resource(ball_fixture_with_touch(toucher, TeamId(0)));
     world.insert_resource(sim_components::PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
     world
         .entity_mut(ball_entity)
         .insert(Position(Vec2::new(-0.5, 34.0)));
@@ -150,11 +143,9 @@ fn test_out_of_bounds_goal_kick() {
     world.insert_resource(CurrentTick(0));
     schedule.run(&mut world);
 
-    let rule_event = world.entity(ball_entity).get::<RuleEvent>();
-    assert!(rule_event.is_some());
-    if let Some(RuleEvent::OutOfBounds { oob_type, .. }) = rule_event {
-        assert!(matches!(oob_type, BallOutOfBoundsType::GoalKick));
-    } else {
-        panic!("expected RuleEvent::OutOfBounds, got {rule_event:?}");
-    }
+    let signal = world.resource::<PendingOutOfBounds>().get().copied();
+    assert_eq!(
+        signal.map(|event| event.oob_type),
+        Some(BallOutOfBoundsType::GoalKick)
+    );
 }

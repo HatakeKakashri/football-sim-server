@@ -133,7 +133,7 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 
 ## Gotchas
 
-- **Bevy ECS deferred commands**: `commands.entity(e).insert(...)` is not visible to queries in the same system run. If you need system-A to write a marker that system-B reads in the **same** tick, use a `Resource`, not a component. (This is why the OOB system can mark the ball entity `RuleEvent::OutOfBounds` but the restart system's query doesn't see it until the next tick — pre-existing bug; the ball can get stuck at center for long stretches.)
+- **Bevy ECS deferred commands**: `commands.entity(e).insert(...)` is not visible to queries in the same system run. If you need system-A to write a marker that system-B reads in the **same** tick, use a `Resource`, not a component. (The OOB → restart hand-off follows this: `out_of_bounds_system` writes `PendingOutOfBounds` and `restart_system` takes it in the same run, with no dependence on a sync point. Any world that runs either system must insert `PendingOutOfBounds`; `Simulation::create_match` does.)
 - **`simulation/snapshot.rs:42`** sorts `ball_entity_candidates` per `get_state()` call even though there's exactly one ball. At per-tick call rates this matters.
 - **No CI**. No `.github/workflows/`. The only CI-adjacent script is `scripts/clippy-changed.sh` (run manually per PR).
 - **No `rustfmt.toml` / `.editorconfig` / `rust-toolchain`**. Uses workspace defaults. If you add formatting, do it workspace-wide.

@@ -4,7 +4,7 @@
 //! matter:
 //!
 //! 1. Inside the `Rules` set (`simulation/construct.rs`), so the OOB /
-//!    goal / offside / foul / restart writers all read the same-tick
+//!    goal / foul / restart writers all read the same-tick
 //!    touch written by the `Execution` and `Possession` sets.
 //! 2. In `Simulation::tick` (`simulation/tick.rs`), via
 //!    `world.run_system_once`, immediately after `lifecycle_system`

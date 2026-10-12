@@ -167,16 +167,16 @@ mod tests {
         world.entity_mut(match_entity).insert(clock);
 
         let team_entity = world.spawn(()).id();
-        world.entity_mut(team_entity).insert(Team {
-            id: TeamId(0),
-            name: "Home".to_string(),
-            formation: Formation::FourFourTwo,
-            mentality: Mentality::Balance,
-            tactic: Tactic::Possession,
-            players: Vec::new(),
-            substitutes: Vec::new(),
-            attack_direction: 1,
-        });
+        world.entity_mut(team_entity).insert(Team::with_attack_direction(
+            TeamId(0),
+            "Home".to_string(),
+            Formation::FourFourTwo,
+            Mentality::Balance,
+            Tactic::Possession,
+            Vec::new(),
+            Vec::new(),
+            1,
+        ));
 
         let manager_entity = world.spawn(()).id();
         world.entity_mut(manager_entity).insert(Manager {
@@ -195,16 +195,16 @@ mod tests {
             last_decision_tick: 0,
             decision_cooldown: 0,
         });
-        world.entity_mut(manager_entity).insert(Team {
-            id: TeamId(0),
-            name: "Home".to_string(),
-            formation: Formation::FourFourTwo,
-            mentality: Mentality::Balance,
-            tactic: Tactic::Possession,
-            players: Vec::new(),
-            substitutes: Vec::new(),
-            attack_direction: 1,
-        });
+        world.entity_mut(manager_entity).insert(Team::with_attack_direction(
+            TeamId(0),
+            "Home".to_string(),
+            Formation::FourFourTwo,
+            Mentality::Balance,
+            Tactic::Possession,
+            Vec::new(),
+            Vec::new(),
+            1,
+        ));
 
         let mut schedule = Schedule::default();
         schedule.add_systems(manager_decision_system);
@@ -254,16 +254,16 @@ mod tests {
             .insert(RoleComponent(Role::Striker));
         world.entity_mut(substitute_player).insert(Skill(0.7));
 
-        world.entity_mut(team_entity).insert(Team {
-            id: TeamId(0),
-            name: "Home".to_string(),
-            formation: Formation::FourFourTwo,
-            mentality: Mentality::Balance,
-            tactic: Tactic::Possession,
-            players: vec![low_stamina_player],
-            substitutes: vec![substitute_player],
-            attack_direction: 1,
-        });
+        world.entity_mut(team_entity).insert(Team::with_attack_direction(
+            TeamId(0),
+            "Home".to_string(),
+            Formation::FourFourTwo,
+            Mentality::Balance,
+            Tactic::Possession,
+            vec![low_stamina_player],
+            vec![substitute_player],
+            1,
+        ));
 
         let mut schedule = Schedule::default();
         schedule.add_systems(substitution_system);
@@ -301,16 +301,16 @@ mod tests {
         world.entity_mut(match_entity).insert(clock);
 
         let team_entity = world.spawn(()).id();
-        world.entity_mut(team_entity).insert(Team {
-            id: TeamId(0),
-            name: "Home".to_string(),
-            formation: Formation::FourFourTwo,
-            mentality: Mentality::Balance,
-            tactic: Tactic::Possession,
-            players: Vec::new(),
-            substitutes: Vec::new(),
-            attack_direction: 1,
-        });
+        world.entity_mut(team_entity).insert(Team::with_attack_direction(
+            TeamId(0),
+            "Home".to_string(),
+            Formation::FourFourTwo,
+            Mentality::Balance,
+            Tactic::Possession,
+            Vec::new(),
+            Vec::new(),
+            1,
+        ));
 
         let mut schedule = Schedule::default();
         schedule.add_systems(mentality_shift_system);

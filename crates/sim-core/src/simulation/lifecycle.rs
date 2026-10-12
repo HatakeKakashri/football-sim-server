@@ -50,7 +50,7 @@ pub fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2)
         .entity_mut(player_entity)
         .get_mut::<sim_components::HomeSlot>()
     {
-        hs.0 = target;
+        hs.set_position(target);
     }
 }
 
@@ -63,46 +63,41 @@ pub fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2)
 /// This helper is deterministic and tolerates the current state where
 /// no player carries `Role::Striker` (every spawned player is
 /// `Role::CentralMidfielder`).
-fn pick_kickoff_taker(world: &World, team_id: sim_components::TeamId) -> bevy_ecs::prelude::Entity {
+fn pick_kickoff_taker(world: &mut World, team_id: sim_components::TeamId) -> bevy_ecs::prelude::Entity {
     use sim_components::{Player, Role, RoleComponent, TeamIdComponent};
 
     let mut striker: Option<bevy_ecs::prelude::Entity> = None;
     let mut last_player: Option<bevy_ecs::prelude::Entity> = None;
 
-    // Collect candidates first to avoid holding a borrow across the
-    // mutable entity access below. Determinism: iterate entities in
-    // their spawn (creation) order — World::iter_entities is stable.
-    let candidates: Vec<(bevy_ecs::prelude::Entity, Role, u64)> = world
-        .iter_entities()
-        .filter_map(|e_ref| {
-            let e = e_ref.id();
-            let _p = world.entity(e).get::<Player>()?;
-            let t = world.entity(e).get::<TeamIdComponent>()?;
-            if t.0 != team_id {
-                return None;
-            }
-            let r = world
-                .entity(e)
-                .get::<RoleComponent>()
-                .map_or(Role::CentralMidfielder, |rc| rc.0);
-            Some((e, r, e.to_bits()))
-        })
-        .collect();
-
-    for (e, r, bits) in candidates {
-        if r == Role::Striker {
+    // Bevy `Query` iterates in spawn (creation) order — the same
+    // ordering `World::iter_entities` provides, so determinism is
+    // preserved (§9: prefer a typed query over `iter_entities`
+    // reach-in).
+    let mut query = world.query::<(
+        Entity,
+        &Player,
+        &TeamIdComponent,
+        Option<&RoleComponent>,
+    )>();
+    for (entity, _player, team, role) in query.iter(world) {
+        if team.0 != team_id {
+            continue;
+        }
+        let role = role.copied().map_or(Role::CentralMidfielder, |rc| rc.0);
+        let bits = entity.to_bits();
+        if role == Role::Striker {
             // Among strikers, pick the smallest entity id for
             // determinism.
             striker = match striker {
                 Some(s) if s.to_bits() <= bits => Some(s),
-                _ => Some(e),
+                _ => Some(entity),
             };
         }
         // Track the largest entity id (last on the team by creation
         // order) — this is the fallback kickoff taker.
         last_player = match last_player {
             Some(l) if l.to_bits() >= bits => Some(l),
-            _ => Some(e),
+            _ => Some(entity),
         };
     }
 
@@ -210,6 +205,15 @@ pub fn decide_transition(
     }
 }
 
+/// Team that takes the kickoff for the current half: first half → home
+/// (team 0), second half → away (team 1), per Law 8.
+fn kickoff_taker_team(world: &World) -> sim_components::TeamId {
+    match world.get_resource::<MatchClock>() {
+        Some(clock) if clock.half >= 2 => sim_components::TeamId(1),
+        _ => sim_components::TeamId(0),
+    }
+}
+
 /// Apply a `TransitionDecision` to the world: write the new clock, place the
 /// ball at the center spot if requested, apply the kickoff impulse if
 /// requested, reset the formation when entering `Kickoff`, and commit the
@@ -250,34 +254,24 @@ pub fn apply_transition(
         // Register the kickoff placement as a `Restart` touch on the
         // team's striker (preferring a player with
         // `RoleComponent(Role::Striker)`, falling back to the last
-        // player on the team). The match-state-to-team mapping is:
-        // first half → home (team 0), second half → away (team 1)
-        // per Law 8. Half-time swap of player positions is a
-        // separate ticket; we only flip the kickoff taker here.
-        let kickoff_taker_team = match world.get_resource::<MatchClock>() {
-            Some(clock) if clock.half >= 2 => sim_components::TeamId(1),
-            _ => sim_components::TeamId(0),
-        };
+        // player on the team). The kickoff taker alternates by half
+        // (see `kickoff_taker_team`); the end swap itself happens via
+        // `attack_direction` below.
+        let kickoff_taker_team = kickoff_taker_team(world);
         let taker_entity = pick_kickoff_taker(world, kickoff_taker_team);
-        let touch = if taker_entity == bevy_ecs::prelude::Entity::PLACEHOLDER {
-            LastTouch::by_team(kickoff_taker_team, TouchKind::Restart)
-        } else {
-            LastTouch::by_player(kickoff_taker_team, taker_entity, TouchKind::Restart)
-        };
+        // `pick_kickoff_taker` returns `Entity::PLACEHOLDER` when the
+        // team has no players; `from_taker` collapses the placeholder
+        // case to a team-only touch.
+        let touch = LastTouch::from_taker(kickoff_taker_team, taker_entity, TouchKind::Restart);
         world.resource_mut::<PendingBallTouches>().0.push(touch);
     }
     if decision.apply_kickoff_impulse {
-        let kickoff_taker_team = match world.get_resource::<MatchClock>() {
-            Some(clock) if clock.half >= 2 => sim_components::TeamId(1),
-            _ => sim_components::TeamId(0),
-        };
+        let kickoff_taker_team = kickoff_taker_team(world);
         let taker_dir = world
-            .iter_entities()
-            .find_map(|e| {
-                let team = e.get::<Team>()?;
-                (team.id == kickoff_taker_team).then_some(team.attack_direction)
-            })
-            .unwrap_or(1);
+            .query::<&Team>()
+            .iter(world)
+            .find(|team| team.id == kickoff_taker_team)
+            .map_or(1, Team::attack_direction);
         if let Some(mut vel) = world.entity_mut(ball_entity).get_mut::<Velocity>() {
             vel.0 = Vec2::new(2.0 * f32::from(taker_dir), 0.0);
         }
@@ -290,18 +284,14 @@ pub fn apply_transition(
     // uses the second half's slot tables.
     if current_state == MatchState::HalfTime && decision.next_state != MatchState::HalfTime {
         world.insert_resource(HalfTimeEntryTick { tick: None });
-        // Collect team entities first to avoid borrow conflicts.
-        let team_entities: Vec<Entity> = world
-            .iter_entities()
-            .filter_map(|e_ref| {
-                let id = e_ref.id();
-                world.entity(id).get::<Team>().map(|_| id)
-            })
-            .collect();
-        for team_entity in team_entities {
-            if let Some(mut team) = world.entity_mut(team_entity).get_mut::<Team>() {
-                team.attack_direction = -team.attack_direction;
-            }
+        // Bevy `Query` iterates in spawn (creation) order — the same
+        // ordering `World::iter_entities` provides, so determinism is
+        // preserved (§9: prefer a typed query over `iter_entities`
+        // reach-in).
+        let mut team_query = world.query::<&mut Team>();
+        for mut team in team_query.iter_mut(world) {
+            let flipped = -team.attack_direction();
+            team.set_attack_direction(flipped);
         }
     }
 

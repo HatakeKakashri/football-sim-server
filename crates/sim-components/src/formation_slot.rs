@@ -25,9 +25,57 @@ pub enum FormationSlot {
     ST2,
 }
 
+/// The role associated with each `FormationSlot` in canonical 4-4-2
+/// order. Companion to `FormationSlot::ALL_442`: the slot at
+/// `ALL_442[i]` carries `ROLE_FOR_SLOT[i]`. Keeping the two in the
+/// same order avoids the parallel-array smell of a `match self` per
+/// accessor (Repeated Switches).
+const ROLE_FOR_SLOT: [Role; 11] = [
+    Role::Goalkeeper,         // GK
+    Role::FullBack,           // DL
+    Role::CenterBack,         // DC1
+    Role::CenterBack,         // DC2
+    Role::FullBack,           // DR
+    Role::Winger,             // ML
+    Role::CentralMidfielder,  // MC1
+    Role::CentralMidfielder,  // MC2
+    Role::Winger,             // MR
+    Role::Striker,            // ST1
+    Role::Striker,            // ST2
+];
+
 /// Component storing a player's assigned home slot coordinates.
+///
+/// Inner `Vec2` is private (§5): access goes through `position()` /
+/// `set_position()` so the invariant "`HomeSlot.position()` agrees with
+/// the team's `FormationSlot.position_for(attack_direction)`" stays
+/// enforced via `apply_player_slot`.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct HomeSlot(pub Vec2);
+pub struct HomeSlot(Vec2);
+
+impl HomeSlot {
+    /// Position of this home slot in pitch coordinates.
+    #[must_use]
+    pub const fn position(self) -> Vec2 {
+        self.0
+    }
+
+    /// Set the slot position. Only `apply_player_slot` calls this;
+    /// production callers outside that function should be a smell.
+    /// `pub` because the workspace spans multiple crates; the doc
+    /// comment is the load-bearing guard, not the visibility.
+    pub const fn set_position(&mut self, pos: Vec2) {
+        self.0 = pos;
+    }
+
+    /// Construct a new `HomeSlot` at `pos`. Field-private so external
+    /// callers cannot bypass `apply_player_slot` to plant an arbitrary
+    /// coordinate.
+    #[must_use]
+    pub const fn new(pos: Vec2) -> Self {
+        Self(pos)
+    }
+}
 
 impl FormationSlot {
     /// The 11 slots of a 4-4-2 formation in canonical order.
@@ -56,34 +104,29 @@ impl FormationSlot {
     }
 
     /// Return the index (0..11) of this slot in the canonical 4-4-2 order.
+    /// Derived from `ALL_442` so the index list and the variant list
+    /// cannot drift apart (Repeated Switches smell: parallel arrays).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` is not a variant in `ALL_442`. By construction
+    /// every `FormationSlot` variant appears in `ALL_442`, so this is
+    /// an unreachable invariant violation.
     #[must_use]
-    pub const fn index(self) -> usize {
-        match self {
-            Self::GK => 0,
-            Self::DL => 1,
-            Self::DC1 => 2,
-            Self::DC2 => 3,
-            Self::DR => 4,
-            Self::ML => 5,
-            Self::MC1 => 6,
-            Self::MC2 => 7,
-            Self::MR => 8,
-            Self::ST1 => 9,
-            Self::ST2 => 10,
-        }
+    pub fn index(self) -> usize {
+        Self::ALL_442
+            .iter()
+            .position(|&s| s == self)
+            .expect("invariant: every FormationSlot variant appears in ALL_442")
     }
 
-    /// Primary role associated with this slot.
+    /// Primary role associated with this slot. Derived from
+    /// `ROLE_FOR_SLOT` (the companion table indexed by `self.index()`)
+    /// so adding a new variant only touches `ALL_442` + `ROLE_FOR_SLOT`,
+    /// not a `match self` in every accessor.
     #[must_use]
-    pub const fn role(self) -> Role {
-        match self {
-            Self::GK => Role::Goalkeeper,
-            Self::DL | Self::DR => Role::FullBack,
-            Self::DC1 | Self::DC2 => Role::CenterBack,
-            Self::ML | Self::MR => Role::Winger,
-            Self::MC1 | Self::MC2 => Role::CentralMidfielder,
-            Self::ST1 | Self::ST2 => Role::Striker,
-        }
+    pub fn role(self) -> Role {
+        ROLE_FOR_SLOT[self.index()]
     }
 
     /// Pitch position for this slot given the team's attack direction.
@@ -113,15 +156,6 @@ impl FormationSlot {
             Vec2::new(PITCH_LENGTH - base.x, PITCH_WIDTH - base.y)
         }
     }
-}
-
-/// Lookup slot position for 4-4-2 by slot index and team attack direction.
-#[must_use]
-pub fn formation_442_slot_position(slot_index: usize, attack_direction: i8) -> Vec2 {
-    FormationSlot::from_index(slot_index).map_or_else(
-        || Vec2::new(PITCH_LENGTH * 0.5, GOAL_Y_CENTER),
-        |s| s.position_for(attack_direction),
-    )
 }
 
 #[cfg(test)]

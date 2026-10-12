@@ -75,7 +75,6 @@ fn kick_execution_registers_play_touch() {
         possessor: Some(kicker),
         // Pre-condition: last_touch is None (ball just gained possession).
         last_touch: None,
-        last_deliberate_play: None,
         kick_velocity: None,
         spin: 0.0,
     });
@@ -88,12 +87,7 @@ fn kick_execution_registers_play_touch() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(kicker),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
-            kind: TouchKind::Play,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play)),
         "kick must register the kicker as a Play touch"
     );
     assert_eq!(
@@ -124,7 +118,6 @@ fn test_kick_pushes_to_buffer_and_consumer_applies() {
         state: BallState::Possessed,
         possessor: Some(kicker),
         last_touch: None,
-        last_deliberate_play: None,
     });
 
     // Direct push (no kick system) — exercises the writer/consumer contract
@@ -132,12 +125,7 @@ fn test_kick_pushes_to_buffer_and_consumer_applies() {
     world
         .resource_mut::<PendingBallTouches>()
         .0
-        .push(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(kicker),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
-            kind: TouchKind::Play,
-        });
+        .push(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play));
 
     let mut schedule = Schedule::default();
     schedule.add_systems(apply_ball_touched_system);
@@ -146,12 +134,7 @@ fn test_kick_pushes_to_buffer_and_consumer_applies() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(kicker),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
-            kind: TouchKind::Play,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play)),
         "consumer must apply the buffer entry to Ball.last_touch"
     );
     assert!(
@@ -177,23 +160,12 @@ fn test_two_consecutive_kicks_update_record() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
-        last_deliberate_play: None,
     });
 
     {
         let mut pending = world.resource_mut::<PendingBallTouches>();
-        pending.0.push(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(kicker_a),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker_a)),
-            kind: TouchKind::Play,
-        });
-        pending.0.push(LastTouch {
-            team: sim_components::TeamId(1),
-            player: Some(kicker_b),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker_b)),
-            kind: TouchKind::Play,
-        });
+        pending.0.push(LastTouch::by_player(sim_components::TeamId(0), kicker_a, TouchKind::Play));
+        pending.0.push(LastTouch::by_player(sim_components::TeamId(1), kicker_b, TouchKind::Play));
     }
 
     let mut schedule = Schedule::default();
@@ -203,12 +175,7 @@ fn test_two_consecutive_kicks_update_record() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(1),
-            player: Some(kicker_b),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker_b)),
-            kind: TouchKind::Play,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(1), kicker_b, TouchKind::Play)),
         "two pushes — the second (latest) entry must win"
     );
 }
@@ -231,13 +198,7 @@ fn test_same_tick_double_kick_resolves_deterministically() {
         spin: 0.0,
         state: BallState::Possessed,
         possessor: Some(kicker),
-        last_touch: Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(kicker),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
-            kind: TouchKind::Play,
-        }),
-        last_deliberate_play: None,
+        last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
 
@@ -251,21 +212,11 @@ fn test_same_tick_double_kick_resolves_deterministically() {
     world
         .resource_mut::<PendingBallTouches>()
         .0
-        .push(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(writer_first),
-            player_id: Some(sim_components::PlayerId::from_entity(writer_first)),
-            kind: TouchKind::Play,
-        });
+        .push(LastTouch::by_player(sim_components::TeamId(0), writer_first, TouchKind::Play));
     world
         .resource_mut::<PendingBallTouches>()
         .0
-        .push(LastTouch {
-            team: sim_components::TeamId(1),
-            player: Some(writer_second),
-            player_id: Some(sim_components::PlayerId::from_entity(writer_second)),
-            kind: TouchKind::Play,
-        });
+        .push(LastTouch::by_player(sim_components::TeamId(1), writer_second, TouchKind::Play));
 
     let mut schedule = Schedule::default();
     schedule.add_systems(apply_ball_touched_system);
@@ -274,12 +225,7 @@ fn test_same_tick_double_kick_resolves_deterministically() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(1),
-            player: Some(writer_second),
-            player_id: Some(sim_components::PlayerId::from_entity(writer_second)),
-            kind: TouchKind::Play,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(1), writer_second, TouchKind::Play)),
         "same-tick double push resolves to the last-pushed entry (deterministic)"
     );
 }
@@ -309,7 +255,6 @@ fn test_possession_acquisition_pushes_play_touch() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
-        last_deliberate_play: None,
     });
 
     let player = world.spawn(()).id();
@@ -337,12 +282,7 @@ fn test_possession_acquisition_pushes_play_touch() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(player),
-            player_id: Some(sim_components::PlayerId::from_entity(player)),
-            kind: TouchKind::Play,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(0), player, TouchKind::Play)),
         "possession acquisition must register a Play touch on the new possessor"
     );
     assert_eq!(ball.possessor, Some(player));
@@ -432,13 +372,7 @@ fn test_oob_restart_registers_restart_touch() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touch: Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
-        last_deliberate_play: None,
+        last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(50));
@@ -459,12 +393,7 @@ fn test_oob_restart_registers_restart_touch() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
         "Ball.last_touch survives the same tick (push lands in the buffer; consumer drains on next tick)"
     );
     assert_eq!(
@@ -477,12 +406,7 @@ fn test_oob_restart_registers_restart_touch() {
     let pending = world.resource::<PendingBallTouches>();
     assert_eq!(
         pending.0,
-        vec![LastTouch {
-            team: sim_components::TeamId(1),
-            player: Some(taker),
-            player_id: Some(sim_components::PlayerId::from_entity(taker)),
-            kind: TouchKind::Restart,
-        }],
+        vec![LastTouch::by_player(sim_components::TeamId(1), taker, TouchKind::Restart)],
         "restart_system must push the Restart touch to PendingBallTouches"
     );
 }
@@ -519,13 +443,7 @@ fn test_oob_event_carries_full_touch() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touch: Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
-        last_deliberate_play: None,
+        last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(0));
@@ -541,12 +459,7 @@ fn test_oob_event_carries_full_touch() {
     if let RuleEvent::OutOfBounds { last_touch, .. } = event {
         assert_eq!(
             *last_touch,
-            Some(LastTouch {
-                team: sim_components::TeamId(0),
-                player: Some(toucher),
-                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-                kind: TouchKind::Play,
-            }),
+            Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
             "OutOfBounds payload must carry the full last-touch record"
         );
     } else {
@@ -557,12 +470,7 @@ fn test_oob_event_carries_full_touch() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
         "Ball.last_touch must be preserved on OOB, not cleared"
     );
 }
@@ -615,13 +523,7 @@ fn test_goal_event_carries_full_touch() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touch: Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
-        last_deliberate_play: None,
+        last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(100));
@@ -647,12 +549,7 @@ fn test_goal_event_carries_full_touch() {
         );
         assert_eq!(
             *last_touch,
-            Some(LastTouch {
-                team: sim_components::TeamId(0),
-                player: Some(toucher),
-                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-                kind: TouchKind::Play,
-            }),
+            Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
             "Goal payload must carry the full last-touch record"
         );
     } else {
@@ -663,12 +560,7 @@ fn test_goal_event_carries_full_touch() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
         "Ball.last_touch must be preserved on goal, not cleared"
     );
 }
@@ -721,13 +613,7 @@ fn test_own_goal_attribution_preserved() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touch: Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(kicker),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
-            kind: TouchKind::Play,
-        }),
-        last_deliberate_play: None,
+        last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(50));
@@ -753,12 +639,7 @@ fn test_own_goal_attribution_preserved() {
         );
         assert_eq!(
             *last_touch,
-            Some(LastTouch {
-                team: sim_components::TeamId(0),
-                player: Some(kicker),
-                player_id: Some(sim_components::PlayerId::from_entity(kicker)),
-                kind: TouchKind::Play,
-            }),
+            Some(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play)),
             "last_touch preserves the kicker (team 0) — own-goal identity is kept"
         );
     } else {
@@ -799,7 +680,6 @@ fn test_pre_touch_oob_logs_error_and_skips() {
         possessor: None,
         // Pre-touch guard trip: last_touch is None.
         last_touch: None,
-        last_deliberate_play: None,
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(0));
@@ -851,7 +731,6 @@ fn test_pending_ball_touches_resource_registered() {
         state: BallState::Possessed,
         possessor: Some(possessor),
         last_touch: None,
-        last_deliberate_play: None,
     });
 
     // No pushes to the buffer — the consumer should still run, but
@@ -875,10 +754,10 @@ fn test_pending_ball_touches_resource_registered() {
 }
 
 /// The `apply_ball_touched_system` consumer must run **before** every
-/// other Rules system (out-of-bounds, goal, offside, foul, restart).
+/// other Rules system (out-of-bounds, goal, foul, restart).
 /// Spec §3 reads: "Rules = ball-touch consumer → out-of-bounds → goal →
-/// offside → foul → restart". This test pins the ordering by running
-/// all six in `.chain()` and asserting the consumer ran first (by
+/// foul → restart". This test pins the ordering by running
+/// all five in `.chain()` and asserting the consumer ran first (by
 /// observing that a kicker's touch is visible to the subsequent
 /// Rules writers).
 #[test]
@@ -928,7 +807,6 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
         state: BallState::Possessed,
         possessor: Some(kicker),
         last_touch: None,
-        last_deliberate_play: None,
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(50));
@@ -948,7 +826,6 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
             apply_ball_touched_system,
             out_of_bounds_system,
             goal_detection_system,
-            crate::offside_detection_system,
             crate::foul_detection_system,
             restart_system,
         )
@@ -960,59 +837,8 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(0),
-            player: Some(kicker),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
-            kind: TouchKind::Play,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play)),
         "consumer must apply the kicker's touch before any Rules writer reads Ball.last_touch"
-    );
-}
-
-// -----------------------------------------------------------------------------
-// last_deliberate_play stays None (M12.1, Step 14) — guardrail guardrail
-// -----------------------------------------------------------------------------
-
-/// M1.4 reserved `Ball.last_deliberate_play` for Law 11's deliberate-play
-/// wording. No system in this milestone writes to it; it must stay
-/// `None` across the kickoff lifecycle so the guardrail is enforced.
-///
-/// We exercise the same lifecycle path as `test_kickoff_registers_restart_touch`
-/// and then read `Ball.last_deliberate_play` directly. A release-binary
-/// full-match run would also satisfy this; the in-process path is
-/// faster and self-contained.
-#[test]
-fn test_last_deliberate_play_always_none() {
-    let mut sim = Simulation::new(12345);
-    // Tick through the kickoff transition (PreMatch → Kickoff → InPlay)
-    // and a few in-play ticks to confirm nothing writes the deliberate
-    // touch slot.
-    for _ in 0..10 {
-        sim.tick();
-    }
-
-    let ball = sim.world().resource::<Ball>();
-    assert!(
-        ball.last_deliberate_play.is_none(),
-        "no system may write to Ball.last_deliberate_play in this plan; \
-         got {:?}",
-        ball.last_deliberate_play
-    );
-
-    // Also run a full match in-process: 324_000 ticks. We cap at
-    // half-time entry to keep the test under a second (the field is
-    // already None by tick 10 — the longer run is overkill for this
-    // invariant, but a quick 1k-tick run is cheap and gives extra
-    // confidence).
-    let mut sim = Simulation::new(42);
-    for _ in 0..1_000 {
-        sim.tick();
-    }
-    let ball = sim.world().resource::<Ball>();
-    assert!(
-        ball.last_deliberate_play.is_none(),
-        "after 1k ticks last_deliberate_play must still be None"
     );
 }
 
@@ -1064,7 +890,6 @@ fn test_touch_record_survives_toucher_despawn() {
         state: sim_components::BallState::Possessed,
         possessor: Some(kicker),
         last_touch: None,
-        last_deliberate_play: None,
         kick_velocity: None,
         spin: 0.0,
     });
@@ -1149,7 +974,6 @@ fn test_oob_restart_taker_resolves_after_toucher_despawn() {
             toucher,
             TouchKind::Play,
         )),
-        last_deliberate_play: None,
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(50));

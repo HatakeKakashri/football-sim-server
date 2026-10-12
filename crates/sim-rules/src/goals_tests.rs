@@ -5,8 +5,8 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallMarker, BallState, LastTouch, MatchClock, PendingBallTouches, Player, Position,
-    RuleEvent, TeamId, TeamIdComponent, TouchKind, Velocity,
+    Ball, BallMarker, BallState, Formation, LastTouch, MatchClock, Mentality, PendingBallTouches,
+    Player, Position, RuleEvent, Tactic, Team, TeamId, TeamIdComponent, TouchKind, Velocity,
 };
 use sim_math::Vec2;
 
@@ -53,12 +53,7 @@ fn test_goal_scored_home_team() {
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
     let mut b = ball_fixture(Vec2::new(105.5, 34.0), BallState::Free);
-    b.last_touch = Some(LastTouch {
-        team: sim_components::TeamId(1),
-        player: Some(toucher),
-        player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-        kind: TouchKind::Play,
-    });
+    b.last_touch = Some(LastTouch::by_player(sim_components::TeamId(1), toucher, TouchKind::Play));
     world.insert_resource(b);
     world
         .entity_mut(ball_entity)
@@ -95,12 +90,7 @@ fn test_goal_scored_home_team() {
         assert_eq!(*scorer_team, sim_components::TeamId(0));
         assert_eq!(
             *last_touch,
-            Some(LastTouch {
-                team: sim_components::TeamId(1),
-                player: Some(toucher),
-                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-                kind: TouchKind::Play,
-            })
+            Some(LastTouch::by_player(sim_components::TeamId(1), toucher, TouchKind::Play))
         );
     } else {
         panic!("expected RuleEvent::Goal, got {event:?}");
@@ -141,12 +131,7 @@ fn test_goal_scored_away_team() {
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
     let mut b = ball_fixture(Vec2::new(-0.5, 34.0), BallState::Free);
-    b.last_touch = Some(LastTouch {
-        team: sim_components::TeamId(0),
-        player: Some(toucher),
-        player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-        kind: TouchKind::Play,
-    });
+    b.last_touch = Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play));
     world.insert_resource(b);
     world
         .entity_mut(ball_entity)
@@ -173,12 +158,7 @@ fn test_goal_scored_away_team() {
         assert_eq!(*scorer_team, sim_components::TeamId(1));
         assert_eq!(
             *last_touch,
-            Some(LastTouch {
-                team: sim_components::TeamId(0),
-                player: Some(toucher),
-                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-                kind: TouchKind::Play,
-            })
+            Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play))
         );
     } else {
         panic!("expected RuleEvent::Goal, got {event:?}");
@@ -288,12 +268,7 @@ fn test_kickoff_restart_registers_restart_touch() {
     assert_eq!(ball.state, BallState::Free);
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch {
-            team: sim_components::TeamId(1),
-            player: Some(kicker),
-            player_id: Some(sim_components::PlayerId::from_entity(kicker)),
-            kind: TouchKind::Restart,
-        }),
+        Some(LastTouch::by_player(sim_components::TeamId(1), kicker, TouchKind::Restart)),
         "delayed kickoff restart must register the conceded-team \
          kickoff taker (Law 10), not always the home team"
     );
@@ -327,12 +302,7 @@ fn test_goal_scorer_threads_into_post_goal_kickoff_taker() {
     // goal detection only fires after a registered touch. The scorer
     // threads off ball position, so the seeded record's identity is
     // not under test here.
-    b.last_touch = Some(LastTouch {
-        team: sim_components::TeamId(0),
-        player: None,
-        player_id: None,
-        kind: TouchKind::Play,
-    });
+    b.last_touch = Some(LastTouch::by_team(sim_components::TeamId(0), TouchKind::Play));
     world.insert_resource(b);
     world
         .entity_mut(ball_entity)
@@ -391,13 +361,7 @@ fn test_missed_shot_gives_goal_kick() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touch: Some(LastTouch {
-            team: TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
-        last_deliberate_play: None,
+        last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(50));
@@ -459,13 +423,7 @@ fn test_deflected_shot_gives_corner() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touch: Some(LastTouch {
-            team: TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
-        last_deliberate_play: None,
+        last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(60));
@@ -537,13 +495,7 @@ fn test_throw_in_to_opposite_team() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touch: Some(LastTouch {
-            team: TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
-        last_deliberate_play: None,
+        last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(70));
@@ -568,13 +520,7 @@ fn test_throw_in_to_opposite_team() {
         spin: 0.0,
         state: BallState::Free,
         possessor: None,
-        last_touch: Some(LastTouch {
-            team: TeamId(0),
-            player: Some(toucher),
-            player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-            kind: TouchKind::Play,
-        }),
-        last_deliberate_play: None,
+        last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
     });
     world2.insert_resource(PendingBallTouches::default());
     let ball2 = world2.spawn(()).id();
@@ -593,12 +539,7 @@ fn test_throw_in_to_opposite_team() {
     if let Some(RuleEvent::OutOfBounds { last_touch, .. }) = event {
         assert_eq!(
             *last_touch,
-            Some(LastTouch {
-                team: TeamId(0),
-                player: Some(toucher),
-                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-                kind: TouchKind::Play,
-            }),
+            Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
             "OutOfBounds payload must preserve the original toucher"
         );
     } else {
@@ -611,12 +552,75 @@ fn test_throw_in_to_opposite_team() {
     let pending = world.resource::<PendingBallTouches>();
     assert_eq!(
         pending.0,
-        vec![LastTouch {
-            team: TeamId(1),
-            player: Some(taker),
-            player_id: Some(sim_components::PlayerId::from_entity(taker)),
-            kind: TouchKind::Restart,
-        }],
+        vec![LastTouch::by_player(TeamId(1), taker, TouchKind::Restart)],
         "throw-in is awarded to the team opposite of the last toucher"
     );
+}
+
+// -----------------------------------------------------------------------------
+// Scorer attribution follows the per-half attack direction (issue 02)
+// -----------------------------------------------------------------------------
+
+/// Spawn both teams with `home_direction` for the home team and the
+/// opposite for the away team.
+fn spawn_teams(world: &mut World, home_direction: i8) {
+    for (id, direction) in [(0, home_direction), (1, -home_direction)] {
+        world.spawn(Team::with_attack_direction(
+            TeamId(id),
+            format!("team-{id}"),
+            Formation::FourFourTwo,
+            Mentality::Balance,
+            Tactic::Possession,
+            Vec::new(),
+            Vec::new(),
+            direction,
+        ));
+    }
+}
+
+/// Run `goal_detection_system` once with the ball at `(ball_x, 34)` and
+/// return the resulting score plus the scorer carried by the goal event.
+fn score_for_ball_at(ball_x: f32, home_direction: i8) -> ((u8, u8), TeamId) {
+    let mut world = World::new();
+    world.insert_resource(sim_components::Match {
+        id: 1,
+        home_team: Entity::PLACEHOLDER,
+        away_team: Entity::PLACEHOLDER,
+        score: (0, 0),
+        state: sim_components::MatchState::InPlay,
+        seed: 12345,
+    });
+    spawn_teams(&mut world, home_direction);
+
+    let ball_entity = world.spawn((BallMarker, Position(Vec2::new(ball_x, 34.0)))).id();
+    let mut ball = ball_fixture(Vec2::new(ball_x, 34.0), BallState::Free);
+    ball.last_touch = Some(LastTouch::by_team(TeamId(0), TouchKind::Play));
+    world.insert_resource(ball);
+    world.insert_resource(CurrentTick(100));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(goal_detection_system);
+    schedule.run(&mut world);
+
+    let score = world.resource::<sim_components::Match>().score;
+    let Some(RuleEvent::Goal { scorer_team, .. }) = world.entity(ball_entity).get::<RuleEvent>()
+    else {
+        panic!("expected a RuleEvent::Goal for ball at x = {ball_x}");
+    };
+    (score, *scorer_team)
+}
+
+#[test]
+fn test_first_half_goals_follow_attack_direction() {
+    // Home attacks +x in the first half.
+    assert_eq!(score_for_ball_at(105.5, 1), ((1, 0), TeamId(0)));
+    assert_eq!(score_for_ball_at(-0.5, 1), ((0, 1), TeamId(1)));
+}
+
+#[test]
+fn test_second_half_goals_follow_swapped_attack_direction() {
+    // After the half-time swap home attacks -x: a ball in the x = 0
+    // goal is a home goal and a ball in the x = 105 goal is an away goal.
+    assert_eq!(score_for_ball_at(-0.5, -1), ((1, 0), TeamId(0)));
+    assert_eq!(score_for_ball_at(105.5, -1), ((0, 1), TeamId(1)));
 }

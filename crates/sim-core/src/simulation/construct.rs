@@ -13,8 +13,7 @@ use sim_physics::{
 };
 use sim_rules::{
     added_time_calculation_system, apply_ball_touched_system, foul_detection_system,
-    goal_detection_system, minimum_player_count_system, offside_detection_system,
-    out_of_bounds_system, possession_resolution_system, restart_system,
+    goal_detection_system, minimum_player_count_system, out_of_bounds_system, possession_resolution_system, restart_system,
 };
 
 use super::Simulation;
@@ -93,7 +92,7 @@ fn register_systems(schedule: &mut Schedule) {
             .after(SimulationSet::Physics),
     );
 
-    // Rules — ball-touch consumer → out-of-bounds → goal → offside → foul → restart (spec §3).
+    // Rules — ball-touch consumer → out-of-bounds → goal → foul → restart (spec §3).
     // The consumer drains `PendingBallTouches` first so every downstream
     // Rules system sees the latest touch in the same tick.
     schedule.add_systems(
@@ -101,7 +100,6 @@ fn register_systems(schedule: &mut Schedule) {
             apply_ball_touched_system,
             out_of_bounds_system,
             goal_detection_system,
-            offside_detection_system,
             foul_detection_system,
             restart_system,
         )
@@ -191,7 +189,6 @@ impl Simulation {
             state: sim_components::BallState::Free,
             possessor: None,
             last_touch: None,
-            last_deliberate_play: None,
             kick_velocity: None,
         });
         world.insert_resource(PendingBallTouches::default());
@@ -248,7 +245,7 @@ impl Simulation {
                 .entity_mut(player_entity)
                 .insert(RoleComponent(slot.role()));
             world.entity_mut(player_entity).insert(slot);
-            world.entity_mut(player_entity).insert(HomeSlot(pos));
+            world.entity_mut(player_entity).insert(HomeSlot::new(pos));
             world.entity_mut(player_entity).insert(Skill(0.7));
             // Insert PerceptionSnapshot as a Component (Phase B)
             world.entity_mut(player_entity).insert(default_snapshot);
@@ -258,17 +255,17 @@ impl Simulation {
             home_players.push(player_entity);
         }
 
-        world.entity_mut(home_team_entity).insert(Team {
-            id: TeamId(0),
-            name: "Home".to_string(),
-            formation: sim_components::Formation::FourFourTwo,
-            mentality: sim_components::Mentality::Balance,
-            tactic: sim_components::Tactic::Possession,
-            players: home_players,
-            substitutes: Vec::new(),
+        world.entity_mut(home_team_entity).insert(Team::with_attack_direction(
+            TeamId(0),
+            "Home".to_string(),
+            sim_components::Formation::FourFourTwo,
+            sim_components::Mentality::Balance,
+            sim_components::Tactic::Possession,
+            home_players,
+            Vec::new(),
             // Home team attacks right (x = 105) in the first half.
-            attack_direction: 1,
-        });
+            1,
+        ));
 
         // Create away team
         let away_team_entity = world.spawn(()).id();
@@ -312,7 +309,7 @@ impl Simulation {
                 .entity_mut(player_entity)
                 .insert(RoleComponent(slot.role()));
             world.entity_mut(player_entity).insert(slot);
-            world.entity_mut(player_entity).insert(HomeSlot(pos));
+            world.entity_mut(player_entity).insert(HomeSlot::new(pos));
             world.entity_mut(player_entity).insert(Skill(0.7));
             world.entity_mut(player_entity).insert(default_snapshot);
             world
@@ -321,17 +318,17 @@ impl Simulation {
             away_players.push(player_entity);
         }
 
-        world.entity_mut(away_team_entity).insert(Team {
-            id: TeamId(1),
-            name: "Away".to_string(),
-            formation: sim_components::Formation::FourFourTwo,
-            mentality: sim_components::Mentality::Balance,
-            tactic: sim_components::Tactic::Possession,
-            players: away_players,
-            substitutes: Vec::new(),
+        world.entity_mut(away_team_entity).insert(Team::with_attack_direction(
+            TeamId(1),
+            "Away".to_string(),
+            sim_components::Formation::FourFourTwo,
+            sim_components::Mentality::Balance,
+            sim_components::Tactic::Possession,
+            away_players,
+            Vec::new(),
             // Away team attacks left (x = 0) in the first half.
-            attack_direction: -1,
-        });
+            -1,
+        ));
 
         // Create match entity
         let match_entity = world.spawn(()).id();

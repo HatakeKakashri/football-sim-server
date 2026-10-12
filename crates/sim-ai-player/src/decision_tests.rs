@@ -552,3 +552,81 @@ fn test_move_to_position_sentinel_resolves_to_home_slot() {
         "MoveToPosition(Vec2::zero()) must resolve to MoveToPosition(home_slot)"
     );
 }
+
+/// A chosen `ShootAtGoal` carries the goal the player's team attacks in the
+/// current half (`perception.goal_position`), for either attack direction.
+#[test]
+fn test_shoot_at_goal_sentinel_resolves_to_directional_goal() {
+    for direction in [1_i8, -1_i8] {
+        let mut world = World::new();
+
+        let player_entity = world
+            .spawn((
+                Player {
+                    team_id: TeamId(0),
+                    intent: None,
+                },
+                Position(Vec2::new(60.0, 34.0)),
+                Velocity(Vec2::zero()),
+                Stamina(1.0),
+                Skill(0.8),
+                RoleComponent(Role::Striker),
+                TeamIdComponent(TeamId(0)),
+                UtilityBrain {
+                    actions: vec![PlayerAction {
+                        intent: sim_components::Intent::Action(
+                            sim_components::ActionIntent::ShootAtGoal(Vec2::zero()),
+                        ),
+                        considerations: vec![],
+                    }],
+                    hysteresis: 0.1,
+                },
+            ))
+            .id();
+        let goal = sim_math::goal_position_for(direction);
+        world
+            .entity_mut(player_entity)
+            .insert(sim_components::PerceptionSnapshot {
+                self_position: Vec2::new(60.0, 34.0),
+                nearby_teammates: smallvec::SmallVec::new(),
+                nearby_opponents: smallvec::SmallVec::new(),
+                ball_position: Vec2::new(60.0, 34.0),
+                ball_state: sim_components::BallState::Possessed,
+                goal_position: goal,
+                home_slot: Vec2::new(60.0, 34.0),
+                pitch_bounds: sim_components::PitchBounds {
+                    distance_to_left: 60.0,
+                    distance_to_right: 45.0,
+                    distance_to_top: 34.0,
+                    distance_to_bottom: 34.0,
+                },
+            });
+
+        let match_entity = world.spawn(()).id();
+        let clock = sim_components::MatchClock {
+            elapsed_ticks: 0,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
+        };
+        world.insert_resource(clock.clone());
+        world.entity_mut(match_entity).insert(clock);
+        world.insert_resource(DecisionEvaluationCount::default());
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(player_decision_system);
+        run_one_cadence_window(&mut world, &mut schedule, match_entity);
+
+        let player = world
+            .entity(player_entity)
+            .get::<Player>()
+            .expect("invariant: player entity has a Player component");
+        assert_eq!(
+            player.intent,
+            Some(sim_components::Intent::Action(
+                sim_components::ActionIntent::ShootAtGoal(goal)
+            )),
+            "ShootAtGoal must target the goal for attack_direction {direction}"
+        );
+    }
+}

@@ -11,7 +11,7 @@ pub use ball_touch::{
     BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, PlayerId, RuleEvent,
     TouchKind,
 };
-pub use formation_slot::{FormationSlot, HomeSlot, formation_442_slot_position};
+pub use formation_slot::{FormationSlot, HomeSlot};
 
 #[derive(Component, Debug, Clone)]
 pub struct PerceptionSnapshot {
@@ -106,6 +106,26 @@ pub enum MovementIntent {
     TrackBack,
 }
 
+impl MovementIntent {
+    /// Resolve the destination of `MoveToPosition(target)`:
+    /// `Vec2::zero()` is the "go to your home slot" sentinel and maps
+    /// to `perception.home_slot`; every other target is passed through.
+    ///
+    /// Brain templates encode "go to your home slot" as `Vec2::zero()`
+    /// so the intent can be written without a perception snapshot in
+    /// scope; every consumer (steer target, decision scoring, distance
+    /// consideration) resolves the sentinel through this single helper.
+    /// See `default_utility_brain` for the only authoring site.
+    #[must_use]
+    pub fn resolve_target(target: Vec2, perception: &PerceptionSnapshot) -> Vec2 {
+        if target == Vec2::zero() {
+            perception.home_slot
+        } else {
+            target
+        }
+    }
+}
+
 /// Action-style intents: commit the player to a tactical action. Most of
 /// these will resolve into a kick, tackle, or marking assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -178,7 +198,7 @@ pub struct Skill(pub f32);
 #[derive(Component, Debug, Clone)]
 pub struct TeamIdComponent(pub TeamId);
 
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Copy)]
 pub struct RoleComponent(pub Role);
 
 /// Simulation-time clock for the active match.
@@ -256,16 +276,7 @@ pub struct Ball {
     /// the clears) so downstream replay data can re-read it. Its
     /// identity fields (`team`, `player_id`) are denormalised, so it
     /// stays correct after the touching entity despawns.
-    ///
-    /// `offside_detection_system` only consults touches with
-    /// `kind == Play` (Law 11 ignores restarts).
     pub last_touch: Option<LastTouch>,
-    /// Reserved for Law 11's "deliberate play" wording. No system
-    /// writes to this field in this plan; it is added now so a
-    /// future deflection system does not need a Ball-shape change.
-    /// Always `None` until that work is done. The state hash mixes
-    /// it (M10); every Ball constructor must initialise it.
-    pub last_deliberate_play: Option<LastTouch>,
     /// Pending velocity from a kick, to be applied in the Physics set.
     /// This avoids static query conflicts between `kick_execution_system`
     /// (Execution set) and `ball_physics_system` (Physics set).
@@ -307,43 +318,63 @@ pub struct Team {
     /// in the current half; `-1` means they attack toward `x = 0` (left goal).
     ///
     /// Convention: the home team starts with `+1` in the first half;
-    /// the away team starts with `-1`. At half-time the values flip.
-    pub attack_direction: i8,
-}
-
-/// Match half identifier (First or Second).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Half {
-    First,
-    Second,
-}
-
-impl Half {
-    /// Convert from integer half representation (1 -> First, 2+ -> Second).
-    #[must_use]
-    pub const fn from_u8(half: u8) -> Self {
-        if half >= 2 {
-            Self::Second
-        } else {
-            Self::First
-        }
-    }
+    /// the away team starts with `-1`. At half-time the values flip in
+    /// `apply_transition` (`sim_core::simulation::lifecycle`). Field is
+    /// private (§5) so the half-time-only flip invariant cannot be
+    /// bypassed by other systems; readers go through
+    /// `attack_direction()`, and the only writer is `apply_transition`.
+    attack_direction: i8,
 }
 
 impl Team {
-    /// Attack direction for this team in the given `half`, assuming it started
-    /// with `initial_direction` in the first half.
+    /// Per-half attack direction. `+1` = attacking right (`PITCH_LENGTH`),
+    /// `-1` = attacking left (0.0).
     #[must_use]
-    pub const fn attack_direction_for_half(initial_direction: i8, half: Half) -> i8 {
-        match half {
-            Half::First => initial_direction,
-            Half::Second => -initial_direction,
-        }
+    pub const fn attack_direction(&self) -> i8 {
+        self.attack_direction
     }
 
-    /// Flip the attack direction between +1 and -1 (called at half-time).
-    pub const fn flip_attack_direction(&mut self) {
-        self.attack_direction = -self.attack_direction;
+    /// Set the per-half attack direction. Only the half-time state
+    /// machine (`apply_transition` in `sim_core::simulation::lifecycle`)
+    /// calls this; production callers outside that function should be a
+    /// smell. `pub` because the workspace spans multiple crates; the
+    /// doc comment is the load-bearing guard, not the visibility.
+    pub const fn set_attack_direction(&mut self, dir: i8) {
+        self.attack_direction = dir;
+    }
+
+    /// Constructor. Migrate struct-literal sites to this method so
+    /// `attack_direction` can stay private (§5) and the half-time-only
+    /// flip invariant cannot be bypassed by other systems.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "struct constructor mirrors Team's field-for-field shape; a builder would scatter the field set across crates and obscure the migration away from struct literals"
+    )]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "constructor allocates a String and (via) takes Vec<Entity>; not eligible for const fn"
+    )]
+    #[must_use]
+    pub fn with_attack_direction(
+        id: TeamId,
+        name: String,
+        formation: Formation,
+        mentality: Mentality,
+        tactic: Tactic,
+        players: Vec<Entity>,
+        substitutes: Vec<Entity>,
+        attack_direction: i8,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            formation,
+            mentality,
+            tactic,
+            players,
+            substitutes,
+            attack_direction,
+        }
     }
 }
 

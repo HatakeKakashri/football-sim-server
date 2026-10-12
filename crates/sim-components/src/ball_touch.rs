@@ -29,14 +29,23 @@ use crate::TeamId;
 /// and deterministic for a given world. When the PRD's roster fixture
 /// lands, `PlayerId` becomes the fixture's `player_id` and every
 /// existing site keeps compiling — the type is the seam.
+/// Internal u64 is private (§5): access goes through accessors so the
+/// invariant "the id came from a fixture or from `Entity::to_bits()`"
+/// stays intact across the planned roster-fixture migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct PlayerId(pub u64);
+pub struct PlayerId(u64);
 
 impl PlayerId {
     /// Mint a stable id from a live entity's bits.
     #[must_use]
     pub const fn from_entity(entity: Entity) -> Self {
         Self(entity.to_bits())
+    }
+
+    /// Raw bits accessor for serialisation and hashing.
+    #[must_use]
+    pub const fn bits(self) -> u64 {
+        self.0
     }
 }
 
@@ -99,10 +108,9 @@ pub enum RuleEvent {
 /// (kick / interception) or whether the ball was merely placed by a
 /// restart procedure.
 ///
-/// Law 11 (offside) is judged at the moment the ball is "played" by a
-/// teammate of the potentially-offside attacker. Touches registered as
-/// `Restart` (kickoff, throw-in, goal-kick, corner placement) do **not**
-/// reset offside judgement — `offside_detection_system` ignores them.
+/// `Restart` touches (kickoff, throw-in, goal-kick, corner placement)
+/// credit a team for Law 9 / Law 10 restart-taker resolution but are not
+/// an active play of the ball; only `Play` touches are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TouchKind {
     /// Ball placed by `restart_system` or `lifecycle_system` (kickoff,
@@ -123,15 +131,12 @@ pub enum TouchKind {
 ///   reads, and what keeps an out-of-bounds `RuleEvent::OutOfBounds`
 ///   payload correct after the toucher is gone.
 /// - `player` — the live `Entity`, for the same-tick readers that need
-///   a world lookup (`offside_detection_system` reads the toucher's
-///   position). `None` when no specific player is credited.
+///   a world lookup. `None` when no specific player is credited.
 /// - `player_id` — the stable identity paired with `player`, so a
 ///   replay record or event payload survives despawn. `None` whenever
 ///   `player` is `None`.
 ///
-/// `kind` distinguishes active play from restart placements so Law 11
-/// (offside) can ignore restart touches via `offside_detection_system`'s
-/// existing `kind == Play` filter.
+/// `kind` distinguishes active play from restart placements.
 ///
 /// Note: `team` and `player_id` are denormalised for replay-data
 /// persistence but are **not** mixed into the state hash — see
@@ -169,6 +174,21 @@ impl LastTouch {
             kind,
         }
     }
+
+    /// Register a touch from a (possibly placeholder) taker entity.
+    /// `Entity::PLACEHOLDER` collapses to `by_team` (no resolvable
+    /// player identity); every other entity is recorded with its
+    /// `player` and minted `player_id` via `by_player`. This is the
+    /// single helper the restart / kickoff / lifecycle writers all use
+    /// so the placeholder check lives in exactly one place.
+    #[must_use]
+    pub fn from_taker(team: TeamId, taker: Entity, kind: TouchKind) -> Self {
+        if taker == Entity::PLACEHOLDER {
+            Self::by_team(team, kind)
+        } else {
+            Self::by_player(team, taker, kind)
+        }
+    }
 }
 
 /// Pending ball touches registered this tick.
@@ -180,7 +200,7 @@ impl LastTouch {
 /// The consumer runs at **two** sites, and both are load-bearing:
 ///
 /// 1. First in the `Rules` set (`sim-core`'s `register_systems`), so
-///    OOB / goal / offside / foul / restart all read the same-tick
+///    OOB / goal / foul / restart all read the same-tick
 ///    touch written by the `Execution` and `Possession` sets.
 /// 2. In `Simulation::tick`, immediately after the post-schedule
 ///    `lifecycle_system` returns. `lifecycle_system` runs outside the

@@ -25,7 +25,6 @@ fn test_possession_resolution() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
-        last_deliberate_play: None,
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world
@@ -76,7 +75,6 @@ fn test_possession_resolved_to_real_entity() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
-        last_deliberate_play: None,
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world
@@ -118,12 +116,7 @@ fn test_possession_resolved_to_real_entity() {
     // last_touch should also be set on possession change (Play kind)
     assert_eq!(
         ball.last_touch,
-        Some(sim_components::LastTouch {
-            team: TeamId(0),
-            player: Some(player_entity),
-            player_id: Some(sim_components::PlayerId::from_entity(player_entity)),
-            kind: sim_components::TouchKind::Play,
-        })
+        Some(sim_components::LastTouch::by_player(TeamId(0), player_entity, sim_components::TouchKind::Play))
     );
 }
 
@@ -141,7 +134,6 @@ fn test_possession_cleared_when_ball_free() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
-        last_deliberate_play: None,
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world
@@ -196,7 +188,6 @@ fn test_possession_change_registers_play_touch() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
-        last_deliberate_play: None,
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world
@@ -229,12 +220,7 @@ fn test_possession_change_registers_play_touch() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(sim_components::LastTouch {
-            team: TeamId(0),
-            player: Some(player_a),
-            player_id: Some(sim_components::PlayerId::from_entity(player_a)),
-            kind: sim_components::TouchKind::Play,
-        }),
+        Some(sim_components::LastTouch::by_player(TeamId(0), player_a, sim_components::TouchKind::Play)),
         "Player A (gains possession) should be recorded as last toucher with Play kind"
     );
 
@@ -287,12 +273,7 @@ fn test_possession_change_registers_play_touch() {
     let ball = world.resource::<Ball>();
     assert_eq!(
         ball.last_touch,
-        Some(sim_components::LastTouch {
-            team: TeamId(0),
-            player: Some(player_b),
-            player_id: Some(sim_components::PlayerId::from_entity(player_b)),
-            kind: sim_components::TouchKind::Play,
-        }),
+        Some(sim_components::LastTouch::by_player(TeamId(0), player_b, sim_components::TouchKind::Play)),
         "After pass, last_touch should be player B with Play kind"
     );
     assert_eq!(ball.possessor, Some(player_b));
@@ -302,7 +283,7 @@ fn test_possession_change_registers_play_touch() {
 /// Interception scenario: A (team 0) kicks the ball; B (team 1) is within
 /// proximity when the ball arrives and gains possession by
 /// `possession_resolution_system`. The `last_touch` must point at B with
-/// `kind = Play` so Law 11 (offside) resets to team 1 from this point.
+/// `kind = Play`.
 #[test]
 fn test_interception_registers_play_touch_on_new_possessor() {
     let mut world = World::new();
@@ -325,7 +306,6 @@ fn test_interception_registers_play_touch_on_new_possessor() {
             player_id: None,
             kind: sim_components::TouchKind::Play,
         }),
-        last_deliberate_play: None,
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world
@@ -360,12 +340,7 @@ fn test_interception_registers_play_touch_on_new_possessor() {
     assert_eq!(ball.possessor, Some(player_b));
     assert_eq!(
         ball.last_touch,
-        Some(sim_components::LastTouch {
-            team: TeamId(1),
-            player: Some(player_b),
-            player_id: Some(sim_components::PlayerId::from_entity(player_b)),
-            kind: sim_components::TouchKind::Play,
-        }),
+        Some(sim_components::LastTouch::by_player(TeamId(1), player_b, sim_components::TouchKind::Play)),
         "interception must register B as a Play touch, not leave the \
          last_touch on the previous kicker"
     );

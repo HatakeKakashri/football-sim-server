@@ -24,7 +24,7 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     assert_eq!(plain.ticks_run, 1000);
 
     // 2. Traced run with a full-resolution window.
-    // V1 (verification ledger): run long enough for goals / fouls / offside
+    // V1 (verification ledger): run long enough for goals / fouls
     // to fire so every Perfetto-rendered event type lands at least once.
     let path = std::env::temp_dir().join(format!("sim-server-e2e-{}.json", std::process::id()));
     let traced = run_simulate(&options(TraceOptions {
@@ -108,7 +108,7 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     // assertions fail, opening the trace in Perfetto will show that
     // piece missing.
 
-    // Step 2: goals / fouls / offside / restarts / half_time / kickoff on
+    // Step 2: goals / fouls / restarts / half_time / kickoff on
     // the Match process.
     let match_events = events
         .iter()

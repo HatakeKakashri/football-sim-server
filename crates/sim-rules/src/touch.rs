@@ -24,8 +24,8 @@ use sim_components::{Ball, PendingBallTouches};
 /// Drains `PendingBallTouches` and applies the last touch to
 /// `Ball.last_touch`.
 ///
-/// Registered first in the `Rules` set so that offside detection, OOB
-/// detection, goal detection, and restart placement all see the latest
+/// Registered first in the `Rules` set so that OOB detection, goal
+/// detection, foul detection, and restart placement all see the latest
 /// touch in the same tick. Also invoked post-schedule from
 /// `Simulation::tick` to drain `lifecycle_system`'s kickoff placement.
 ///

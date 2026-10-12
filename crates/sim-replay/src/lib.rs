@@ -157,7 +157,6 @@ pub struct BallSnapshot {
     pub state: BallState,
     pub possessor: Option<u64>,
     pub last_touch: Option<LastTouch>,
-    pub last_deliberate_play: Option<LastTouch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -402,7 +401,6 @@ mod tests {
                 bevy_ecs::prelude::Entity::from_raw(7),
                 sim_components::TouchKind::Play,
             )),
-            last_deliberate_play: None,
         };
 
         let encoded = bincode::serialize(&snapshot).unwrap();
@@ -430,7 +428,6 @@ mod tests {
                 player,
                 sim_components::TouchKind::Play,
             )),
-            last_deliberate_play: None,
         };
 
         let encoded = bincode::serialize(&snapshot).unwrap();

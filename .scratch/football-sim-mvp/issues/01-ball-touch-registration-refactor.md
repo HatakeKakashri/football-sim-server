@@ -9,7 +9,9 @@
 - [x] All five `Ball.last_touch` writers route through the registration mechanism; no direct mutation remains.
 - [x] Touch record carries `TouchKind` and the team, captured even if the entity is later despawned, so OOB restart payloads survive.
 - [x] `Ball.last_touch` and the player-id mapping appear in `BallSnapshot` for both `sim-core` report and `sim-replay`.
-- [x] Test coverage: each writer has a unit test asserting the registered touch; replay fixture golden hashes refreshed and committed.
+- [x] Test coverage: each writer has a unit test asserting the registered touch.
+- [x] Replay fixture golden hashes refreshed and committed — N/A: `sim-replay` holds no literal golden hashes (see *State-hash change*).
+- [x] Offside-related fields, tests and system stay stripped (PRD §2): `offside_detection_system`, its three tests, `emit::offside`, and `Ball.last_deliberate_play` (field, snapshot/replay fields, state-hash mix, guardrail test) are removed.
 - [x] `cargo test --workspace` green; state-hash change documented in the ticket's `## Comments`.
 
 ## Comments
@@ -33,7 +35,7 @@ direct mutation; it now pushes to the buffer like the other four.
 `apply_ball_touched_system` runs twice per tick, and **both** are required:
 
 1. **First in the `Rules` set** (`sim-core`'s `register_systems`), so OOB /
-   goal / offside / foul / restart read the same-tick touch written by the
+   goal / foul / restart read the same-tick touch written by the
    `Execution` and `Possession` sets.
 2. **Post-schedule in `Simulation::tick`** (`world.run_system_once`),
    immediately after the non-schedule `lifecycle_system` returns.
@@ -56,18 +58,17 @@ meaningful after the touching entity is despawned:
 - `team` — copied off `Player.team_id` at registration time. What Law 9
   restart-taker resolution reads.
 - `player` — the live `Entity`, for same-tick readers that need a world
-  lookup (`offside_detection_system` reads the toucher's position).
+  lookup.
 - `player_id` — the stable identity paired with `player`
   (`sim_components::PlayerId`, PRD §9.1: *"Players are identified by
   stable fixture `player_id`, never by engine entity ids."*). Minted from
   `Entity::to_bits()` today; when the PRD's roster fixture lands,
   `PlayerId` becomes the fixture id and every call site keeps compiling.
 
-This also fixes a live bug: `offside_detection_system` previously
-re-resolved the toucher's team via `player_query.get(..)`, which silently
-skipped offside judgement if the toucher had despawned — even though
-`LastTouch.team` already carried the answer. It now reads the
-denormalised team and only requires a live entity for the position.
+Offside is out of MVP scope (PRD §2), so the earlier offside-system fix
+that this ticket carried was reverted as scope creep: the system was a
+read-only logging stub, and it is now deleted together with its tests and
+`Ball.last_deliberate_play`.
 
 Constructors `LastTouch::by_player(team, entity, kind)` and
 `LastTouch::by_team(team, kind)` replace the repeated struct literals so
@@ -80,6 +81,10 @@ change because the underlying writes change path"*). Cause: the kickoff
 touch now lands on `Ball.last_touch` within the tick it is created
 (drain site 2), where before it lagged by one tick, so the per-tick hash
 sequence shifted from tick 1 onward.
+
+Removing `Ball.last_deliberate_play` also drops its two mixed words per
+tick from the hash shape. The offside stub never wrote state, so this is
+the only hash effect of the strip.
 
 `LastTouch.player_id` is deliberately **not** mixed into the hash: it is
 derived from `Entity::to_bits()`, so mixing it would hash the same
@@ -95,6 +100,10 @@ per-tick hashes):
 | 1000 ticks | `simulate --ticks 1000 --seed 12345` | `14167462516872484156` |
 | full match | `simulate --full-match --seed 12345` | `16930036101688498291` (tick 324019, `FullTime`, score `[0, 0]`) |
 
+Values above are as recorded when this ticket landed. Later tickets (02,
+03) and the offside strip re-baselined them; the current canonical values
+are in tickets 02 and 03.
+
 `sim-replay` holds no literal golden hashes — its determinism tests
 assert *same-seed ⇒ same per-tick hash history* rather than absolute
 values, so they needed no refresh and stayed green throughout.
@@ -102,6 +111,8 @@ values, so they needed no refresh and stayed green throughout.
 ### Verification
 
 - `cargo test --workspace` — 223 passed, 0 failed, 2 ignored
-  (the two full-match tests; unchanged from before this work).
+  (the two full-match tests; unchanged from before this work). After the
+  offside strip and the issue 02 rules fix: 233 passed, 0 failed, 3 ignored
+  (the third is the PRD §14 windowed smoke test, see ticket 02).
 - `bash scripts/clippy-changed.sh` — clean.
 - Full-match run reaches `FullTime` at tick 324019.

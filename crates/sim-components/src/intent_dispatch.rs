@@ -60,14 +60,10 @@ impl Intent {
         // MAX_PLAYER_SPEED = 10/60 ≈ 0.1417 m/tick; most steering intents
         // use a fraction of that maximum.
         match self {
-            Self::Movement(MovementIntent::MoveToPosition(target)) => {
-                let dest = if *target == Vec2::zero() {
-                    perception.home_slot
-                } else {
-                    *target
-                };
-                Some((dest, 5.0 / 60.0))
-            }
+            Self::Movement(MovementIntent::MoveToPosition(target)) => Some((
+                MovementIntent::resolve_target(*target, perception),
+                5.0 / 60.0,
+            )),
             Self::Movement(MovementIntent::ChaseBall) => Some((ball_pos, 8.0 / 60.0)),
             Self::Movement(MovementIntent::Intercept) => {
                 // Existing behaviour: ball_vel is not on the perception

@@ -20,12 +20,7 @@ use crate::{CurrentTick, out_of_bounds_system, touch::apply_ball_touched_system}
 /// producers.
 fn ball_fixture_with_touch(toucher: bevy_ecs::prelude::Entity, team: TeamId) -> Ball {
     let mut b = ball_fixture(Vec2::zero(), BallState::Free);
-    b.last_touch = Some(LastTouch {
-        team,
-        player: Some(toucher),
-        player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-        kind: TouchKind::Play,
-    });
+    b.last_touch = Some(LastTouch::by_player(team, toucher, TouchKind::Play));
     b
 }
 
@@ -77,12 +72,7 @@ fn test_out_of_bounds_detection_throw_in() {
         );
         assert_eq!(
             *last_touch,
-            Some(LastTouch {
-                team: TeamId(0),
-                player: Some(toucher),
-                player_id: Some(sim_components::PlayerId::from_entity(toucher)),
-                kind: TouchKind::Play,
-            }),
+            Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
             "OOB event payload must capture the full last-touch record"
         );
     } else {

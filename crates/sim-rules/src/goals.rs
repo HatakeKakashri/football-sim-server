@@ -8,14 +8,14 @@
 use bevy_ecs::prelude::*;
 use sim_components::{
     Ball, BallMarker, BallState, LastTouch, Match, PendingBallTouches, Player, Position, RuleEvent,
-    TeamId, TeamIdComponent, Velocity,
+    Team, TeamId, TeamIdComponent, Velocity,
 };
 use sim_math::Vec2;
 use sim_telemetry::TelemetryConfig;
 
 use crate::constants::{CENTER_SPOT, GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH};
 use crate::out_of_bounds::calculate_oob_restart_position;
-use crate::{CurrentTick, PendingRestart};
+use crate::{CurrentTick, PendingRestart, team_attacking_goal};
 
 /// Buffered goal event data collected in `goal_detection_system`'s first
 /// pass (avoiding a borrow on `Match` / `Ball` while iterating queries).
@@ -34,13 +34,17 @@ struct GoalEvent {
 ///
 /// BUG FIX: Guards against repeat scoring by checking `BallState::Dead` first.
 ///
-/// Scorer attribution uses **ball position** (x ≤ 0 → away, x ≥
-/// `PITCH_LENGTH` → home). The full last-touch record is captured in
-/// the event payload for completeness but does **not** drive scorer
+/// Scorer attribution uses **ball position and per-half attack
+/// direction**: the team credited is the one whose current
+/// `Team.attack_direction` points at the goal end the ball crossed
+/// (see `team_attacking_goal`), so it stays correct after the
+/// half-time end swap. The full last-touch record is captured in the
+/// event payload for completeness but does **not** drive scorer
 /// attribution.
 pub fn goal_detection_system(
     mut commands: Commands,
     ball_query: Query<(Entity, &Position), With<BallMarker>>,
+    team_query: Query<&Team>,
     mut match_res: ResMut<Match>,
     mut ball: ResMut<Ball>,
     current_tick: Option<Res<CurrentTick>>,
@@ -86,58 +90,37 @@ pub fn goal_detection_system(
                 );
                 return;
             }
-            // Away goal: ball at x <= 0 (left goal)
-            if ball_pos.0.x <= 0.0 {
-                match_res.score.1 += 1;
-                let final_score = match_res.score;
-                goal_events.push(GoalEvent {
-                    ball_entity,
-                    scorer_team: TeamId(1),
-                    final_score,
-                    // Capture the full record into the event payload
-                    // (`Ball.last_touch` itself is preserved; M8).
-                    last_touch: ball.last_touch,
-                });
-                tracing::info!(
-                    "GOAL scored by away team! Score: {}-{}",
-                    final_score.0,
-                    final_score.1
-                );
-                if telemetry.is_some() {
-                    sim_telemetry::emit::goal(
-                        current_tick.as_deref().map_or(0, |t| t.0),
-                        1,
-                        final_score.0,
-                        final_score.1,
-                    );
-                }
-            }
-            // Home goal: ball at x >= PITCH_LENGTH (right goal)
-            else {
+            // The ball crossed the left goal (x <= 0) or the right goal
+            // (x >= PITCH_LENGTH); the scorer is whichever team is
+            // attacking that end in the current half.
+            let scorer_team = team_attacking_goal(&team_query, ball_pos.0.x >= PITCH_LENGTH);
+            if scorer_team == TeamId(0) {
                 match_res.score.0 += 1;
-                let final_score = match_res.score;
-                goal_events.push(GoalEvent {
-                    ball_entity,
-                    scorer_team: TeamId(0),
-                    final_score,
-                    // Capture the full record into the event payload
-                    // (`Ball.last_touch` itself is preserved; same
-                    // policy as the away arm).
-                    last_touch: ball.last_touch,
-                });
-                tracing::info!(
-                    "GOAL scored by home team! Score: {}-{}",
+            } else {
+                match_res.score.1 += 1;
+            }
+            let final_score = match_res.score;
+            goal_events.push(GoalEvent {
+                ball_entity,
+                scorer_team,
+                final_score,
+                // Capture the full record into the event payload
+                // (`Ball.last_touch` itself is preserved; M8).
+                last_touch: ball.last_touch,
+            });
+            tracing::info!(
+                "GOAL scored by team {}! Score: {}-{}",
+                scorer_team.0,
+                final_score.0,
+                final_score.1
+            );
+            if telemetry.is_some() {
+                sim_telemetry::emit::goal(
+                    current_tick.as_deref().map_or(0, |t| t.0),
+                    scorer_team.0,
                     final_score.0,
-                    final_score.1
+                    final_score.1,
                 );
-                if telemetry.is_some() {
-                    sim_telemetry::emit::goal(
-                        current_tick.as_deref().map_or(0, |t| t.0),
-                        0,
-                        final_score.0,
-                        final_score.1,
-                    );
-                }
             }
         }
     }
@@ -178,7 +161,7 @@ pub fn goal_detection_system(
 /// Registers the restart as a `TouchKind::Restart` touch (pushed to
 /// `PendingBallTouches`, applied to `Ball.last_touch` by the consumer
 /// at the start of the next Rules set; Law 9 / Law 10 restart
-/// placement, `offside_detection_system` ignores it). The
+/// placement). The
 /// `restart_taker` is resolved from the event payload — for OOB it is
 /// the team opposite of the last toucher, for kickoff-after-goal it is
 /// the team that conceded the goal.
@@ -229,20 +212,13 @@ pub fn restart_system(
             let taker = first_player_on_team(&player_query, conceded_team);
             // `first_player_on_team` returns `Entity::PLACEHOLDER`
             // when the team has no players (sparse test worlds);
-            // record the touch with no player identity rather than
-            // a placeholder.
-            let touch = if taker == Entity::PLACEHOLDER {
-                sim_components::LastTouch::by_team(
-                    conceded_team,
-                    sim_components::TouchKind::Restart,
-                )
-            } else {
-                sim_components::LastTouch::by_player(
-                    conceded_team,
-                    taker,
-                    sim_components::TouchKind::Restart,
-                )
-            };
+            // `from_taker` collapses the placeholder case to a
+            // team-only touch so the check lives in one place.
+            let touch = sim_components::LastTouch::from_taker(
+                conceded_team,
+                taker,
+                sim_components::TouchKind::Restart,
+            );
             pending_touches.0.push(touch);
             if telemetry.is_some() {
                 sim_telemetry::emit::kickoff(current_tick.as_deref().map_or(0, |t| t.0));
@@ -304,17 +280,13 @@ pub fn restart_system(
             );
             // `first_player_on_team` returns `Entity::PLACEHOLDER`
             // when the team has no players (sparse test worlds);
-            // record the touch with no player identity rather than
-            // a placeholder.
-            let touch = if taker == Entity::PLACEHOLDER {
-                sim_components::LastTouch::by_team(taker_team, sim_components::TouchKind::Restart)
-            } else {
-                sim_components::LastTouch::by_player(
-                    taker_team,
-                    taker,
-                    sim_components::TouchKind::Restart,
-                )
-            };
+            // `from_taker` collapses the placeholder case to a
+            // team-only touch so the check lives in one place.
+            let touch = sim_components::LastTouch::from_taker(
+                taker_team,
+                taker,
+                sim_components::TouchKind::Restart,
+            );
             pending_touches.0.push(touch);
             let kind = match oob_type {
                 sim_components::BallOutOfBoundsType::ThrowIn => "throw_in",

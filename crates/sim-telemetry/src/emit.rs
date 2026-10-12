@@ -252,25 +252,6 @@ pub fn half_time(tick: u64, score_home: u8, score_away: u8, full_time: bool) {
     );
 }
 
-/// Offside position detected instant (debug-tier event).
-pub fn offside(tick: u64, team: u8, x: f32, y: f32) {
-    let track = match_track();
-    tracing::event!(
-        target: TRACE_TARGET,
-        Level::DEBUG,
-        trace.kind = "instant",
-        trace.pid = track.pid,
-        trace.tid = track.tid,
-        trace.process = track.process,
-        trace.thread = track.thread,
-        trace.name = "offside",
-        tick = tick,
-        team = team,
-        x = x,
-        y = y,
-    );
-}
-
 /// Foul detected instant.
 #[expect(
     clippy::similar_names,

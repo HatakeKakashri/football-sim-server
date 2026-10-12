@@ -2,7 +2,7 @@
 //! referee decisions, match clock).
 //!
 //! Public surface: the seven `pub fn` systems and the small support
-//! types (`CurrentTick`, `PendingRestart`, `AttackingDirection`).
+//! types (`CurrentTick`, `PendingRestart`).
 
 pub(crate) mod clock;
 #[cfg(test)]
@@ -29,11 +29,11 @@ pub use clock::{added_time_calculation_system, match_duration_enforcement_system
 pub use goals::{goal_detection_system, restart_system};
 pub use out_of_bounds::out_of_bounds_system;
 pub use possession::possession_resolution_system;
-pub use referee::{foul_detection_system, minimum_player_count_system, offside_detection_system};
+pub use referee::{foul_detection_system, minimum_player_count_system};
 pub use touch::apply_ball_touched_system;
 
 use bevy_ecs::prelude::*;
-use sim_components::{RuleEvent, TeamId, TeamIdComponent};
+use sim_components::{RuleEvent, Team, TeamId};
 
 /// Shared constants used by every rule system. Kept in one place so the
 /// pitch geometry has a single source of truth.
@@ -72,47 +72,25 @@ pub struct PendingRestart {
     pub scorer_team: Option<sim_components::TeamId>,
 }
 
-/// Attack polarity for a given team. Home (team 0) attacks toward +x
-/// (right goal, x = `PITCH_LENGTH`); away (team 1) attacks toward -x
-/// (left goal, x = 0).
-#[derive(Debug, Clone, Copy)]
-pub struct AttackingDirection {
-    /// True if this team attacks in the positive-x direction.
-    pub(crate) attacks_positive_x: bool,
-}
-
-impl AttackingDirection {
-    /// Returns true if `player_x` is in the opponent's half.
-    pub(crate) fn in_opponent_half(self, player_x: f32) -> bool {
-        if self.attacks_positive_x {
-            player_x > crate::constants::PITCH_LENGTH / 2.0
-        } else {
-            player_x < crate::constants::PITCH_LENGTH / 2.0
-        }
-    }
-
-    /// Returns true if `player_x` is nearer to the attacking goal line
-    /// than `reference_x`.  For a team attacking +x, nearer means larger x.
-    pub(crate) fn closer_than(self, player_x: f32, reference_x: f32) -> bool {
-        if self.attacks_positive_x {
-            player_x > reference_x
-        } else {
-            player_x < reference_x
-        }
-    }
-}
-
-/// Returns the `AttackingDirection` for the given team.
-/// Home (team 0) → attacks +x; away (team 1) → attacks -x.
-pub(crate) const fn attacking_direction(team: TeamId) -> AttackingDirection {
-    AttackingDirection {
-        attacks_positive_x: team.0 == 0,
-    }
-}
-
-/// Extracts the raw `u8` team-id from a `TeamIdComponent`.
-pub(crate) const fn team_id_u8(team: &TeamIdComponent) -> u8 {
-    team.0.0
+/// Team that attacks the goal at the given end of the pitch in the
+/// current half, read from each team's per-half `attack_direction`
+/// (`+1` attacks `x = PITCH_LENGTH`, `-1` attacks `x = 0`).
+///
+/// Worlds with no `Team` component pointing that way (unit fixtures that
+/// never spawn teams) fall back to the construction-time convention:
+/// home (team 0) attacks +x, away (team 1) attacks -x. A live
+/// `Simulation` always has both teams, so the fallback never fires there.
+pub(crate) fn team_attacking_goal<'a>(
+    teams: impl IntoIterator<Item = &'a Team>,
+    goal_at_positive_x: bool,
+) -> TeamId {
+    teams
+        .into_iter()
+        .find(|team| (team.attack_direction() > 0) == goal_at_positive_x)
+        .map_or_else(
+            || TeamId(u8::from(!goal_at_positive_x)),
+            |team| team.id,
+        )
 }
 
 pub const fn referee_advantage_system(

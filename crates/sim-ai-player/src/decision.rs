@@ -43,6 +43,10 @@ pub const fn consideration_scoring_system(_query: Query<(&mut Player, &Stamina, 
 /// the 6 slots without any team-partition bias (spec §10 "individual
 /// players can still be time-sliced … that staggering has no
 /// team-level bias").
+#[allow(
+    clippy::too_many_lines,
+    reason = "single linear per-player scoring pass over the brain's actions; splitting it would scatter the action-ranking logic across helpers and obscure the hysteresis / scoring flow"
+)]
 #[allow(clippy::type_complexity, reason = "Bevy Query signature")]
 pub fn player_decision_system(
     mut query: Query<(
@@ -185,9 +189,12 @@ pub fn player_decision_system(
                 ),
                 sim_components::Intent::Movement(
                     sim_components::MovementIntent::MoveToPosition(target),
-                ) if target == sim_math::Vec2::zero() => sim_components::Intent::Movement(
-                    sim_components::MovementIntent::MoveToPosition(perception.home_slot),
-                ),
+                ) => {
+                    let dest = sim_components::MovementIntent::resolve_target(target, perception);
+                    sim_components::Intent::Movement(
+                        sim_components::MovementIntent::MoveToPosition(dest),
+                    )
+                }
                 other => other,
             };
             player.intent = Some(resolved);

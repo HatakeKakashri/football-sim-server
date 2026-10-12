@@ -78,7 +78,7 @@ pub fn perception_system(
             };
             if team.id.0 < 2 {
                 mentality_by_team[team.id.0 as usize] = m;
-                attack_dir_by_team[team.id.0 as usize] = team.attack_direction;
+                attack_dir_by_team[team.id.0 as usize] = team.attack_direction();
             }
         }
     }
@@ -151,10 +151,16 @@ pub fn perception_system(
             1 // safe default for unexpected team ids
         };
         let goal_position = goal_position_for(team_attack_dir);
-        let home_slot = slot.map_or_else(
-            || hs.map_or(Vec2::zero(), |h| h.0),
-            |s| s.position_for(team_attack_dir),
-        );
+        // Resolve the home slot from the per-half attack direction:
+// prefer `FormationSlot.position_for` when the player carries one,
+// fall back to the existing `HomeSlot` (set by
+// `apply_player_slot` at formation reset), and fall back to
+// `Vec2::zero()` (the brain-template sentinel for "no home slot")
+// when neither is set.
+let home_slot = slot.map_or_else(
+    || hs.map_or(Vec2::zero(), HomeSlot::position),
+    |s| s.position_for(team_attack_dir),
+);
 
         let perception = PerceptionSnapshot {
             self_position: player_pos,
@@ -167,7 +173,18 @@ pub fn perception_system(
             pitch_bounds,
         };
 
-        // Insert or update the PerceptionSnapshot and HomeSlot components for this player
-        commands.entity(entity).insert((perception, HomeSlot(home_slot)));
+        // Insert or update the PerceptionSnapshot for this player. The
+        // `HomeSlot` component is the authoritative formation slot, set
+        // by `apply_player_slot` in `lifecycle_system`. We deliberately
+        // do NOT re-insert `HomeSlot(home_slot)` from perception: doing
+        // so would (a) re-introduce the same-tick deferred-command bug
+        // AGENTS.md warns against (commands.entity(...).insert(...) is
+        // not visible to queries in the same system run), and (b)
+        // overwrite the formation-reset `HomeSlot` with whatever the
+        // perception fallback produced (which can be `Vec2::zero()` for
+        // a player missing both `FormationSlot` and `HomeSlot`). The
+        // perception fallback path in this function still *reads*
+        // `HomeSlot` for any player that already carries one.
+        commands.entity(entity).insert(perception);
     }
 }

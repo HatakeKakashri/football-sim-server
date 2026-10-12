@@ -39,9 +39,11 @@ pub fn default_utility_brain() -> UtilityBrain {
 
     let actions = vec![
         // MoveToPosition — distance_to_target: closer = better.
-        // The embedded target Vec2 is a sentinel only; `player_decision_system`
-        // replaces it with `perception.home_slot` when this action wins,
-        // so no hardcoded pitch coordinate survives into the committed intent.
+        // The embedded target Vec2 is a sentinel only;
+        // `MovementIntent::resolve_target` (sim-components) replaces
+        // `Vec2::zero()` with `perception.home_slot` when this action
+        // wins, so no hardcoded pitch coordinate survives into the
+        // committed intent.
         PlayerAction {
             intent: Intent::Movement(MovementIntent::MoveToPosition(Vec2::zero())),
             considerations: vec![Consideration::DistanceToTarget {
@@ -94,9 +96,10 @@ pub fn default_utility_brain() -> UtilityBrain {
             ],
         },
         // ShootAtGoal — distance sweet-spot, angle, low pressure.
-        // The embedded target Vec2 is a sentinel only; `player_decision_system`
-        // replaces it with `perception.goal_position` when this action wins,
-        // so no hardcoded pitch coordinate survives into the committed intent.
+        // The embedded target Vec2 is a sentinel only;
+        // `player_decision_system` replaces it with `perception.goal_position`
+        // when this action wins, so no hardcoded pitch coordinate
+        // survives into the committed intent.
         PlayerAction {
             intent: Intent::Action(ActionIntent::ShootAtGoal(Vec2::zero())),
             considerations: vec![

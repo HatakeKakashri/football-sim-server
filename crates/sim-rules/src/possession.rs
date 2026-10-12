@@ -44,10 +44,7 @@ const ACQUISITION_RADIUS: f32 = 1.5;
 /// - On possession change, register a `LastTouch { team, player, kind:
 ///   Play }` on `PendingBallTouches` (applied to `Ball.last_touch` by
 ///   the consumer `apply_ball_touched_system` at the start of the
-///   Rules set) so Law 11 (offside) sees the new possessor as the most
-///   recent "play" touch. Without this, offside would continue to be
-///   evaluated for the previous kicker's team (Law 11 says it resets on
-///   the next play).
+///   Rules set) so the new possessor is the most recent "play" touch.
 ///
 /// # Swept Acquisition
 ///
@@ -133,8 +130,7 @@ pub fn possession_resolution_system(
     if let Some((entity, team, _, _)) = closest_player {
         // Register the new possessor as a Play touch: the previous
         // proximity-based `last_touched_by` would have lagged or
-        // pointed at the wrong player. Law 11 resets offside at
-        // this moment. The toucher's team (from `Player.team_id`,
+        // pointed at the wrong player. The toucher's team (from `Player.team_id`,
         // carried through the selection above) is denormalised into
         // the record so it resolves even if the entity despawns.
         //

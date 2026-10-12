@@ -41,7 +41,6 @@ pub struct BallView {
     pub state: sim_components::BallState,
     pub possessor: Option<u64>,
     pub last_touch: Option<sim_components::LastTouch>,
-    pub last_deliberate_play: Option<sim_components::LastTouch>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

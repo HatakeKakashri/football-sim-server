@@ -8,7 +8,8 @@
 
 - [x] Hardcoded 4-4-2 slot table lives in one place (in `sim_components::formation_slot`), referenced by both halves via the team's `attack_direction`.
 - [x] Grep finds zero `52.5` or `(52.5, 34)` literals in default brain code.
-- [x] Slot positions in a windowed match show meaningful spread (not all 22 players on top of each other); assertion in the existing windowed smoke test.
+- [x] Slot positions in a windowed match show meaningful spread (not all 22 players on top of each other). Asserted by the active `test_slot_positions_distinct_and_spread_in_match` (22 distinct slots, pairwise ≥ 3 m, none on the centre spot, 300 ticks). The PRD §14 windowed test is `#[ignore]`d (see ticket 02), so it is not the carrier of this assertion.
+- [x] Second-half mirroring is asserted: after a real `HalfTime → Kickoff` transition every `HomeSlot` is the 180° reflection of its first-half slot (`test_attack_direction_half_time_swap`).
 - [x] `cargo test --workspace` green; `final_state_hash` for canonical seed recorded in `## Comments`.
 
 ## Comments
@@ -16,7 +17,7 @@
 ### Canonical `final_state_hash` (seed 12345, 1000 ticks)
 
 ```
-final_state_hash: 4822439035975581459
+final_state_hash: 4822439035975581459   (as landed; current canonical value is 13289728479385266083, see ticket 02)
 ```
 
 ### Implementation Details
@@ -32,7 +33,8 @@ final_state_hash: 4822439035975581459
 
 3. **Brain Code Decoupling**:
    - Zero occurrences of `52.5` or `(52.5, 34)` literals in `crates/sim-core/src/simulation/brain_default.rs`.
+   - `formation_442_slot_position` and the sort-by-x fallback in `reset_formation_to_4_4_2` are removed; every player is spawned with a `FormationSlot`, so the fallback was dead and its centre-pitch default reintroduced the constant this ticket removes.
 
-4. **Spread Verification**:
-   - Meaningful spread assertion added to `test_windowed_smoke_test_prd_14`.
-   - Added active smoke test `test_slot_positions_meaningful_spread_in_match` verifying horizontal spread > 50m and vertical spread > 35m across 300 ticks. All workspace tests and clippy pass cleanly.
+4. **Spread Verification** (revised in review):
+   - The first version asserted horizontal spread > 50 m, which the two goalkeepers (x≈5 and x≈100) satisfy from tick 0 even if every other player stood still, so it did not test the criterion. It is replaced by `test_slot_positions_distinct_and_spread_in_match`.
+   - Slots alone do not make players play the ball: the `MoveToPosition(home_slot)` default still outscores `ChaseBall` once a player is on its slot. See ticket 02.

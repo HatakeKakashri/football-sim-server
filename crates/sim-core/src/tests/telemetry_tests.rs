@@ -304,7 +304,6 @@ fn ball_change_events_fire_only_when_state_or_possessor_changes() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
-        last_deliberate_play: None,
         kick_velocity: None,
     });
     world.spawn((

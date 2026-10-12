@@ -302,13 +302,11 @@ pub fn kick_execution_system(
     // don't touch `ball.kick_velocity` or clear `ball.possessor`.
     if kick_dir.length() > 0.01 {
         ball.kick_velocity = Some(kick_dir * kick_speed);
-        // Register the kick as an explicit `Play` touch (Law 11 input
-        // for offside judgement). Push to `PendingBallTouches`; the
-        // consumer `apply_ball_touched_system` applies it to
-        // `Ball.last_touch` at the start of the Rules set. The same
-        // entity is recorded as both the kicker (during this tick) and
-        // the last-toucher (after this tick), which keeps offside
-        // sampling coherent with the physical act of striking the ball.
+        // Register the kick as an explicit `Play` touch. Push to
+        // `PendingBallTouches`; the consumer `apply_ball_touched_system`
+        // applies it to `Ball.last_touch` at the start of the Rules set.
+        // The same entity is recorded as both the kicker (during this
+        // tick) and the last-toucher (after this tick).
         pending.0.push(LastTouch::by_player(
             possessor_player.team_id,
             possessor,
@@ -523,7 +521,6 @@ mod tests {
             state: sim_components::BallState::Possessed,
             possessor: Some(kicker),
             last_touch: None,
-            last_deliberate_play: None,
             kick_velocity: None,
             spin: 0.0,
         });
@@ -596,7 +593,6 @@ mod tests {
             state: sim_components::BallState::Possessed,
             possessor: Some(kicker),
             last_touch: None,
-            last_deliberate_play: None,
             kick_velocity: None,
             spin: 0.0,
         });

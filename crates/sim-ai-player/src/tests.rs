@@ -167,6 +167,8 @@ fn test_consideration_distance_to_target() {
         stamina: 1.0,
         skill: 0.7,
         grid: None,
+        team_id: None,
+        is_possessor: false,
     };
     let raw = c.raw_input(&ctx);
     assert!(raw > 25.0 && raw < 30.0, "raw input was {raw}");
@@ -201,6 +203,8 @@ fn test_consideration_distance_to_target_sentinel_uses_home_slot() {
         stamina: 1.0,
         skill: 0.7,
         grid: None,
+        team_id: None,
+        is_possessor: false,
     };
     let raw = c.raw_input(&ctx);
     // 30.0 - 2.0 = 28.0

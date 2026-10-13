@@ -127,6 +127,8 @@ pub struct ConsiderationContext<'a> {
     pub stamina: f32,
     pub skill: f32,
     pub grid: Option<&'a PitchControlGrid>,
+    pub team_id: Option<sim_components::TeamId>,
+    pub is_possessor: bool,
 }
 
 /// Macro that generates `Consideration::weight` and `Consideration::curve`.
@@ -277,10 +279,15 @@ impl Consideration {
                 .distance(ctx.perception.ball_position),
             Self::Stamina { .. } => ctx.stamina,
             Self::PitchControlAtBall { .. } => ctx.grid.map_or(50.0, |g| {
-                g.control_at(
+                let home_ctrl = g.control_at(
                     ctx.perception.ball_position.x,
                     ctx.perception.ball_position.y,
-                ) * tactical_thresholds::PITCH_CONTROL_SCALE
+                );
+                let ctrl = match ctx.team_id {
+                    Some(sim_components::TeamId(1)) => 1.0 - home_ctrl,
+                    _ => home_ctrl,
+                };
+                ctrl * tactical_thresholds::PITCH_CONTROL_SCALE
             }),
             Self::PassAngleClear { .. } => {
                 if matches!(
@@ -324,8 +331,7 @@ impl Consideration {
                 } else {
                     tactical_thresholds::TEAMMATE_SPACE_DEFAULT_M
                 };
-                tactical_thresholds::TEAMMATE_SPACE_CAP_M
-                    - space_m.min(tactical_thresholds::TEAMMATE_SPACE_CAP_M)
+                space_m.min(tactical_thresholds::TEAMMATE_SPACE_CAP_M)
             }
             Self::DistanceToGoal { .. } => {
                 tactical_thresholds::DISTANCE_TO_GOAL_CAP_M
@@ -335,14 +341,24 @@ impl Consideration {
                         .distance(ctx.perception.goal_position)
             }
             Self::GoalAngle { .. } => {
-                let to_ball = ctx.perception.ball_position - ctx.perception.self_position;
-                let to_goal = ctx.perception.goal_position - ctx.perception.self_position;
-                let dot = to_ball.dot(to_goal);
-                let mags = to_ball.length() * to_goal.length();
-                if mags > tactical_thresholds::GOAL_ANGLE_MIN_MAGNITUDE {
-                    (dot / mags).clamp(-1.0, 1.0)
+                if ctx.is_possessor {
+                    let to_goal = ctx.perception.goal_position - ctx.perception.self_position;
+                    let goal_dist = to_goal.length();
+                    if goal_dist > tactical_thresholds::GOAL_ANGLE_MIN_MAGNITUDE {
+                        (to_goal.x.abs() / goal_dist).clamp(-1.0, 1.0)
+                    } else {
+                        1.0
+                    }
                 } else {
-                    0.0
+                    let to_ball = ctx.perception.ball_position - ctx.perception.self_position;
+                    let to_goal = ctx.perception.goal_position - ctx.perception.self_position;
+                    let dot = to_ball.dot(to_goal);
+                    let mags = to_ball.length() * to_goal.length();
+                    if mags > tactical_thresholds::GOAL_ANGLE_MIN_MAGNITUDE {
+                        (dot / mags).clamp(-1.0, 1.0)
+                    } else {
+                        0.0
+                    }
                 }
             }
             Self::DefenderPressure { .. } => count_to_f32(

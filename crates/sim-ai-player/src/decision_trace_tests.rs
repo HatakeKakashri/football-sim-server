@@ -184,6 +184,8 @@ fn traced_values_match_an_independent_recomputation() {
         stamina: 0.9,
         skill: 0.7,
         grid: None,
+        team_id: Some(TeamId(0)),
+        is_possessor: false,
     };
     let expected: Vec<(f32, f32, f32)> = chase
         .considerations
@@ -264,6 +266,8 @@ fn hysteresis_is_included_only_for_the_current_intent() {
             stamina: 0.9,
             skill: 0.7,
             grid: None,
+            team_id: Some(TeamId(0)),
+            is_possessor: false,
         };
         let scores: Vec<f32> = action
             .considerations

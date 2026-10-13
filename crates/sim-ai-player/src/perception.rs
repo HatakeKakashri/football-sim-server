@@ -11,6 +11,10 @@ use sim_math::{Vec2, goal_position_for, PITCH_LENGTH, PITCH_WIDTH};
     clippy::type_complexity,
     reason = "Bevy ParamSet/Query signatures are inherently verbose; this system is one linear snapshot-then-build pass"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "single linear snapshot-build pass; splitting would scatter related perception logic across functions"
+)]
 pub fn perception_system(
     mut commands: Commands,
     mut queries: ParamSet<(
@@ -106,6 +110,9 @@ pub fn perception_system(
         let mut nearby_teammates = smallvec::SmallVec::new();
         let mut nearby_opponents = smallvec::SmallVec::new();
         for (other_entity, other_team_id, other_pos) in &others {
+            if *other_entity == entity {
+                continue;
+            }
             let distance = player_pos.distance(*other_pos);
             if distance <= 20.0 {
                 let relative_position = *other_pos - player_pos;

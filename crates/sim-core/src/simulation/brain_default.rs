@@ -48,7 +48,13 @@ pub fn default_utility_brain() -> UtilityBrain {
             intent: Intent::Movement(MovementIntent::MoveToPosition(Vec2::zero())),
             considerations: vec![Consideration::DistanceToTarget {
                 weight: 1.0,
-                curve: lin(0.0, 30.0),
+                // Step: 0.6 when out of position (raw ≤ 28, i.e. d ≥ 2m),
+                // 0.0 when at slot (raw > 28, i.e. d < 2m). This means that
+                // when a player is already on their home slot, MoveToPosition
+                // scores 0.0 and loses to ChaseBall, PassTo, or HoldPosition.
+                // When the player is displaced (≥ 2m from slot) it scores 0.6
+                // and will pull the player back unless a stronger action wins.
+                curve: step(28.0, 0.6, 0.0),
             }],
         },
         // ChaseBall — distance_to_ball, stamina, pitch control at ball.
@@ -57,15 +63,9 @@ pub fn default_utility_brain() -> UtilityBrain {
             considerations: vec![
                 Consideration::DistanceToBall {
                     weight: 0.6,
-                    // Step: score 0.8 if within 35 m (chasable range),
-                    // 0.2 beyond. Far players still find ChaseBall
-                    // marginally attractive (so they don't lock into
-                    // HoldPosition purely because they're far from the ball).
-                    curve: ResponseCurve::Step {
-                        threshold: 35.0,
-                        below: 0.8,
-                        above: 0.2,
-                    },
+                    // Logistic: high score within ~20m (>0.6), ~0.5 at 25m,
+                    // falls off past 30m so distant players hold position.
+                    curve: log(25.0, -0.1),
                 },
                 Consideration::Stamina {
                     weight: 0.4,
@@ -73,7 +73,7 @@ pub fn default_utility_brain() -> UtilityBrain {
                 },
                 Consideration::PitchControlAtBall {
                     weight: 0.2,
-                    curve: lin(0.0, 100.0),
+                    curve: step(30.0, 0.5, 0.9),
                 },
             ],
         },
@@ -105,9 +105,9 @@ pub fn default_utility_brain() -> UtilityBrain {
             considerations: vec![
                 Consideration::DistanceToGoal {
                     weight: 0.5,
-                    // Closer is better — feed (35 - distance) so Linear gives
-                    // 1.0 inside the box, 0.0 at 35 m+.
-                    curve: lin(0.0, 35.0),
+                    // Logistic: inside the box (d < 18m, raw > 17) score is
+                    // high (>0.7), outside 25m it falls off sharply.
+                    curve: log(15.0, 0.25),
                 },
                 Consideration::GoalAngle {
                     weight: 0.3,
@@ -116,9 +116,9 @@ pub fn default_utility_brain() -> UtilityBrain {
                 Consideration::DefenderPressure {
                     weight: 0.2,
                     curve: ResponseCurve::Step {
-                        threshold: 1.0,
+                        threshold: 2.0,
                         below: 1.0,
-                        above: 0.2,
+                        above: 0.5,
                     },
                 },
             ],

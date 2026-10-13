@@ -4,7 +4,8 @@
 use bevy_ecs::prelude::*;
 use sim_ai_core::geometric_mean;
 use sim_components::{
-    Intent, MatchClock, PerceptionSnapshot, Player, RoleComponent, Skill, Stamina, TeamIdComponent,
+    ActionIntent, Ball, Intent, MatchClock, PerceptionSnapshot, Player,
+    RoleComponent, Skill, Stamina, TeamIdComponent,
 };
 use sim_physics::PitchControlGrid;
 use sim_telemetry::TraceGate;
@@ -70,6 +71,7 @@ pub fn player_decision_system(
     // which case the scratch buffer is never touched and nothing is emitted.
     gate: Option<Res<TraceGate>>,
     mut scratch: Local<DecisionTraceScratch>,
+    ball_res: Option<Res<Ball>>,
 ) {
     let tracing_decisions = gate.is_some_and(|g| g.decisions());
     // Snapshot the clock once per system run. Reading from `Res<MatchClock>`
@@ -87,6 +89,8 @@ pub fn player_decision_system(
         }
         // Player passed the guard — count this evaluation.
         eval_count.0 += 1;
+
+        let is_possessor = ball_res.as_ref().is_some_and(|b| b.possessor == Some(entity));
 
         // Evaluate each action.
         let mut best_action: Option<(Intent, f32)> = None;
@@ -110,6 +114,8 @@ pub fn player_decision_system(
                     stamina: stamina.0,
                     skill: skill.0,
                     grid: pitch_control.as_deref(),
+                    team_id: Some(team_id.0),
+                    is_possessor,
                 };
                 let raw = consideration.raw_input(&ctx);
                 let score = consideration.curve().evaluate(raw).raw();
@@ -125,18 +131,43 @@ pub fn player_decision_system(
                 }
             }
 
+            let is_kicking_action = matches!(
+                action.intent,
+                Intent::Action(ActionIntent::PassTo | ActionIntent::ShootAtGoal(_))
+            );
+
+            let action_permitted = ball_res.as_ref().is_none_or(|ball| {
+                if is_possessor {
+                    is_kicking_action
+                } else if ball.possessor.is_none() {
+                    !is_kicking_action
+                        && !matches!(
+                            action.intent,
+                            Intent::Action(
+                                ActionIntent::Tackle(_)
+                                    | ActionIntent::Press(_)
+                                    | ActionIntent::MarkOpponent(_)
+                            )
+                        )
+                } else {
+                    !is_kicking_action
+                }
+            });
+
             if consideration_scores.is_empty() {
                 // No considerations ⇒ fixed baseline.
-                let baseline = 0.6;
+                let baseline = if action_permitted { 0.6 } else { 0.0 };
                 if tracing_decisions {
                     scratch.finish_action(baseline);
                 }
-                if let Some((_, best)) = best_action {
-                    if baseline > best {
+                if baseline > 0.0 {
+                    if let Some((_, best)) = best_action {
+                        if baseline > best {
+                            best_action = Some((action.intent, baseline));
+                        }
+                    } else {
                         best_action = Some((action.intent, baseline));
                     }
-                } else {
-                    best_action = Some((action.intent, baseline));
                 }
                 continue;
             }
@@ -145,11 +176,16 @@ pub fn player_decision_system(
             // so a 0 score collapses the aggregate toward 0 but doesn't
             // produce literal 0 (preserving numerical stability for the
             // product).
-            let mut aggregate = geometric_mean(&consideration_scores);
+            let mut aggregate = if action_permitted {
+                geometric_mean(&consideration_scores)
+            } else {
+                0.0
+            };
 
             // Apply hysteresis: if this action's intent type matches the
             // player's currently-active intent, add the bonus.
-            if let Some(current) = &player.intent
+            if action_permitted
+                && let Some(current) = &player.intent
                 && intent_kind(current) == intent_kind(&action.intent)
             {
                 aggregate += utility_brain.hysteresis;
@@ -158,12 +194,14 @@ pub fn player_decision_system(
                 scratch.finish_action(aggregate);
             }
 
-            if let Some((_, best)) = best_action {
-                if aggregate > best {
+            if aggregate > 0.0 {
+                if let Some((_, best)) = best_action {
+                    if aggregate > best {
+                        best_action = Some((action.intent, aggregate));
+                    }
+                } else {
                     best_action = Some((action.intent, aggregate));
                 }
-            } else {
-                best_action = Some((action.intent, aggregate));
             }
         }
 

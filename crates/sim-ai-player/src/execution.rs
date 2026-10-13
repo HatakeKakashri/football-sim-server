@@ -49,11 +49,17 @@ fn steer(perception: &PerceptionSnapshot, intent: &Intent) -> Vec2 {
     let Some((target, speed)) = intent.steer_target(perception) else {
         return Vec2::zero();
     };
+    let decel = match intent {
+        Intent::Movement(
+            sim_components::MovementIntent::ChaseBall | sim_components::MovementIntent::Intercept,
+        ) => f32::INFINITY,
+        _ => PLAYER_ARRIVAL_DECEL,
+    };
     steer_desired_velocity(
         target,
         perception.self_position,
         speed,
-        PLAYER_ARRIVAL_DECEL,
+        decel,
     )
 }
 
@@ -282,6 +288,12 @@ pub fn kick_execution_system(
     let Some(intent) = possessor_player.intent else {
         return;
     };
+
+    // ChaseBall was used to approach the ball; once possessed, the player retains
+    // possession until a deliberate action (PassTo, ShootAtGoal, etc.) is chosen.
+    if matches!(intent, Intent::Movement(sim_components::MovementIntent::ChaseBall)) {
+        return;
+    }
 
     // Phase F (F8): the per-variant match moved to `Intent::kick` in
     // `sim_components::intent_dispatch`. The speed multiplier depends on

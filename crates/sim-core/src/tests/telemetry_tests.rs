@@ -82,7 +82,7 @@ fn each_snapshot_records_every_player_and_the_ball() {
     }
     assert!(
         !events.iter().any(|e| e["args"]["name"] == "Referee"),
-        "no Referee process when no Referee component exists"
+        "the referee emits nothing, so registers no process, until something is queued"
     );
 }
 
@@ -216,17 +216,29 @@ fn tracing_does_not_change_the_final_state_hash() {
 fn referee_events_appear_once_when_a_referee_exists() {
     let mut sim = traced_sim(TelemetryConfig::new(10, None).expect("valid"));
     let offender = sim.ball_entity();
-    sim.world_mut().spawn(Referee {
-        stoppage_events: vec![StoppageEvent {
+    // `Simulation::new` already spawned the match's single referee; load it.
+    let referee = sim
+        .world_mut()
+        .query::<(Entity, &Referee)>()
+        .iter(sim.world())
+        .map(|(entity, _)| entity)
+        .next()
+        .expect("invariant: Simulation::new spawns a referee");
+    {
+        let mut entity = sim.world_mut().entity_mut(referee);
+        let mut referee = entity
+            .get_mut::<Referee>()
+            .expect("invariant: referee entity carries a Referee component");
+        referee.stoppage_events.push(StoppageEvent {
             tick: 3,
             reason: "injury".to_string(),
-        }],
-        cards: vec![Card {
+        });
+        referee.cards.push(Card {
             player: offender,
             color: CardColor::Red,
             tick: 5,
-        }],
-    });
+        });
+    }
     let events = run(&mut sim, 35);
     let named = |n: &str| events.iter().filter(|e| e["name"] == n).collect::<Vec<_>>();
     assert_eq!(

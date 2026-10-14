@@ -10,10 +10,9 @@
 //!    canonical match over a 3-minute window.
 //! 4. Home slots are distinct and spread across the pitch while a match runs.
 //!
-//! The full PRD §14 windowed smoke test (both teams *play* the ball, ball
-//! crosses halfway, at least one shot, within 3 minutes) is `#[ignore]`d: it
-//! needs behaviour outside issues 01–03. Its ignore reason records exactly
-//! what fails and why.
+//! The PRD §14 windowed smoke test (both teams *play* the ball, ball crosses
+//! halfway, at least one shot, within 3 minutes) runs in default `cargo test`
+//! for the canonical seed and a spread of others (issue 06).
 
 use bevy_ecs::prelude::Entity;
 use sim_components::{
@@ -215,51 +214,77 @@ fn test_mirror_match_is_exact_reflection_over_three_minutes() {
     assert!(mirrored_min_x < HALFWAY_X - 1.0, "home (-x) ball must cross halfway into x < {HALFWAY_X}");
 }
 
-/// Full PRD §14 windowed smoke test: both teams *play* the ball (`Play`
-/// touches — the kickoff `Restart` placement does not count), the ball crosses
-/// halfway, and at least one shot is chosen, all within 3 minutes.
-///
-/// Measured with the 4-4-2 slots from issue 03 in place (seed 12345, 10,800
-/// ticks): the ball crosses halfway, but home never plays it, away takes it
-/// once and holds it for the rest of the window, and no player ever selects
-/// anything but `MoveToPosition(home_slot)`. Once a player stands on its slot
-/// that intent scores 1.0 and outranks `ChaseBall` and `ShootAtGoal`.
-/// Re-enable after issue 05 (free-ball retrieval) and the brain scoring it
-/// implies.
-#[test]
-fn test_windowed_smoke_test_prd_14() {
-    let mut sim = Simulation::new(12345);
+/// What a windowed smoke run saw: the three PRD §14 criteria.
+struct SmokeOutcome {
+    /// Per team: did it *play* the ball (`Play` touches only — the kickoff
+    /// `Restart` placement does not count)?
+    played: [bool; 2],
+    crossed_halfway: bool,
+    shot_occurred: bool,
+}
 
-    let mut played = [false; 2];
-    let mut crossed_halfway = false;
-    let mut shot_occurred = false;
+impl SmokeOutcome {
+    const fn complete(&self) -> bool {
+        self.played[0] && self.played[1] && self.crossed_halfway && self.shot_occurred
+    }
+}
+
+/// Run `seed` for at most the 3-minute window, stopping early once every
+/// criterion has been seen.
+fn run_windowed_smoke(seed: u64) -> SmokeOutcome {
+    let mut sim = Simulation::new(seed);
+    let mut outcome = SmokeOutcome {
+        played: [false; 2],
+        crossed_halfway: false,
+        shot_occurred: false,
+    };
 
     for _ in 0..THREE_MINUTES_TICKS {
         sim.tick();
         let state = sim.get_state().expect("get_state succeeded");
 
         if (state.ball.position[0] - HALFWAY_X).abs() > 1.0 {
-            crossed_halfway = true;
+            outcome.crossed_halfway = true;
         }
         if let Some(touch) = state.ball.last_touch
             && touch.kind == TouchKind::Play
         {
-            played[usize::from(touch.team.0)] = true;
+            outcome.played[usize::from(touch.team.0)] = true;
         }
         for player in sim.world_mut().query::<&Player>().iter(sim.world()) {
             if let Some(Intent::Action(ActionIntent::ShootAtGoal(_))) = player.intent {
-                shot_occurred = true;
+                outcome.shot_occurred = true;
             }
         }
-        if played == [true, true] && crossed_halfway && shot_occurred {
+        if outcome.complete() {
             break;
         }
     }
+    outcome
+}
 
-    assert!(crossed_halfway, "ball must cross halfway within 3 minutes");
-    assert!(played[0], "team 0 must play the ball within 3 minutes");
-    assert!(played[1], "team 1 must play the ball within 3 minutes");
-    assert!(shot_occurred, "at least one shot must occur within 3 minutes");
+fn assert_smoke_criteria(seed: u64, outcome: &SmokeOutcome) {
+    assert!(outcome.crossed_halfway, "seed {seed}: ball must cross halfway within 3 minutes");
+    assert!(outcome.played[0], "seed {seed}: team 0 must play the ball within 3 minutes");
+    assert!(outcome.played[1], "seed {seed}: team 1 must play the ball within 3 minutes");
+    assert!(outcome.shot_occurred, "seed {seed}: at least one shot must occur within 3 minutes");
+}
+
+/// Full PRD §14 windowed smoke test on the canonical seed: both teams *play*
+/// the ball, the ball crosses halfway, and at least one shot is chosen, all
+/// within 3 minutes.
+#[test]
+fn test_windowed_smoke_test_prd_14() {
+    assert_smoke_criteria(12345, &run_windowed_smoke(12345));
+}
+
+/// Issue 06: the same criteria hold for every seed in a small spread, so the
+/// goal-direction bug cannot hide behind one lucky seed.
+#[test]
+fn test_windowed_smoke_test_prd_14_multi_seed() {
+    for seed in [1001, 1002, 1003, 1004, 1005] {
+        assert_smoke_criteria(seed, &run_windowed_smoke(seed));
+    }
 }
 
 /// Issue 05: Nearest player moves toward free ball and acquires possession

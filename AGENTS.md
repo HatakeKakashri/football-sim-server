@@ -51,6 +51,7 @@ route any unsanctioned spawn to a mid-tier model — consider doing so.
 - Build everything: `cargo build --release`.
 - Run all tests: `cargo test --workspace`. Two are `#[ignore]`'d (full-match end-to-end); run with `cargo test --workspace -- --ignored` only when needed — they take minutes.
 - Run a single test: `cargo test -p sim-core --lib test_pipeline_isolation_single_tick`.
+- Phase 0 playability gate (10 full matches, prints the four gate metrics): `cargo test --release -p sim-core -- --ignored phase_0_playability_gate --nocapture`.
 - Per-PR clippy (uses git diff against `origin/main`): `bash scripts/clippy-changed.sh`. Floor: `cargo clippy --workspace --all-targets -- -D warnings`.
 
 ## Run the CLI
@@ -106,7 +107,7 @@ Per-tick frame shape (see `crates/sim-core/src/lib.rs:21-67`):
 ```
 Constants: `PITCH_LENGTH=105`, `PITCH_WIDTH=68`, `GOAL_Y=[26.68, 41.32]`, `TICKS_PER_SECOND=60`, `HALF_LENGTH_TICKS=162000`, `TOTAL_MATCH_TICKS=324018` (the loop runs +1 tick to detect `FullTime` so the file has 324,019 lines).
 
-**Trace `trace.json` (Chrome format):** array of events. PIDs: `1`=Ball, `2`=Referee (only if a `Referee` component exists; currently none), `4`=Match, `1000+i`=player `i` (so PID 1007 = player index 7). Threads: `1`=Position, `2`=Decision. Timestamps are microseconds (`ts = tick * 1_000_000 / 60 + seq`); header sets `displayTimeUnit = "us"`. Open in `https://ui.perfetto.dev`.
+**Trace `trace.json` (Chrome format):** array of events. PIDs: `1`=Ball, `2`=Referee (the match's single `Referee` is spawned at construction, but the process only appears once it emits a card or stoppage), `4`=Match, `1000+i`=player `i` (so PID 1007 = player index 7). Threads: `1`=Position, `2`=Decision. Timestamps are microseconds (`ts = tick * 1_000_000 / 60 + seq`); header sets `displayTimeUnit = "us"`. Open in `https://ui.perfetto.dev`.
 
 ## Determinism
 
@@ -238,6 +239,7 @@ Single-context: one `CONTEXT.md` at repo root, ADRs in `docs/adr/`. See `docs/ag
 - Build everything: `cargo build --release`.
 - Run all tests: `cargo test --workspace`. Two are `#[ignore]`'d (full-match end-to-end); run with `cargo test --workspace -- --ignored` only when needed — they take minutes.
 - Run a single test: `cargo test -p sim-core --lib test_pipeline_isolation_single_tick`.
+- Phase 0 playability gate (10 full matches, prints the four gate metrics): `cargo test --release -p sim-core -- --ignored phase_0_playability_gate --nocapture`.
 - Per-PR clippy (uses git diff against `origin/main`): `bash scripts/clippy-changed.sh`. Floor: `cargo clippy --workspace --all-targets -- -D warnings`.
 
 ## Run the CLI
@@ -293,7 +295,7 @@ Per-tick frame shape (see `crates/sim-core/src/lib.rs:21-67`):
 ```
 Constants: `PITCH_LENGTH=105`, `PITCH_WIDTH=68`, `GOAL_Y=[26.68, 41.32]`, `TICKS_PER_SECOND=60`, `HALF_LENGTH_TICKS=162000`, `TOTAL_MATCH_TICKS=324018` (the loop runs +1 tick to detect `FullTime` so the file has 324,019 lines).
 
-**Trace `trace.json` (Chrome format):** array of events. PIDs: `1`=Ball, `2`=Referee (only if a `Referee` component exists; currently none), `4`=Match, `1000+i`=player `i` (so PID 1007 = player index 7). Threads: `1`=Position, `2`=Decision. Timestamps are microseconds (`ts = tick * 1_000_000 / 60 + seq`); header sets `displayTimeUnit = "us"`. Open in `https://ui.perfetto.dev`.
+**Trace `trace.json` (Chrome format):** array of events. PIDs: `1`=Ball, `2`=Referee (the match's single `Referee` is spawned at construction, but the process only appears once it emits a card or stoppage), `4`=Match, `1000+i`=player `i` (so PID 1007 = player index 7). Threads: `1`=Position, `2`=Decision. Timestamps are microseconds (`ts = tick * 1_000_000 / 60 + seq`); header sets `displayTimeUnit = "us"`. Open in `https://ui.perfetto.dev`.
 
 ## Determinism
 

@@ -357,6 +357,14 @@ impl Simulation {
         world.insert_resource(initial_clock.clone());
         world.entity_mut(match_entity).insert(initial_clock);
 
+        // The referee lives for the whole match so `added_time_calculation_system`
+        // has a stoppage queue to consume. Spawned last so every other entity
+        // keeps the id it had before the referee existed.
+        world.spawn(sim_components::Referee {
+            stoppage_events: Vec::new(),
+            cards: Vec::new(),
+        });
+
         (match_entity, home_team_entity, ball_entity)
     }
 }

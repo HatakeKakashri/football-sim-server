@@ -42,7 +42,8 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     std::fs::remove_file(&path).expect("cleanup");
     let events: Vec<Value> = serde_json::from_str(&text).expect("trace is a JSON array");
 
-    // SC-005 structure: 22 player processes + Ball + Match, no Referee.
+    // SC-005 structure: 22 player processes + Ball + Match. The referee exists
+    // but has queued nothing, so it registers no trace process.
     let processes: Vec<&str> = events
         .iter()
         .filter(|e| e["name"] == "process_name")

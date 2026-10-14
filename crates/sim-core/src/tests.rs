@@ -8,6 +8,9 @@
 //! - `lifecycle_tests.rs`: clock, half-time, kickoff, pause/resume.
 //! - `integration_tests.rs`: pipeline isolation, ball motion under physics,
 //!   exported-state sync.
+//! - `referee_spawn_tests.rs`: the `Referee` entity spawned at construction.
+//! - `playability_gate_tests.rs`: Phase 0 playability metrics and the
+//!   `#[ignore]`d 10-seed gate.
 //! - `touch_drain_tests.rs`: the two per-tick `PendingBallTouches` drain
 //!   sites, including the post-schedule drain that carries the kickoff
 //!   placement onto `Ball.last_touch`.
@@ -26,6 +29,10 @@ mod determinism_tests;
 mod integration_tests;
 #[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod playability_gate_tests;
+#[cfg(test)]
+mod referee_spawn_tests;
 #[cfg(test)]
 mod smoke_tests;
 #[cfg(test)]

@@ -533,6 +533,8 @@ mod tests {
             state: sim_components::BallState::Possessed,
             possessor: Some(kicker),
             last_touch: None,
+
+            touch_history: [None, None],
             kick_velocity: None,
             spin: 0.0,
         });
@@ -605,6 +607,8 @@ mod tests {
             state: sim_components::BallState::Possessed,
             possessor: Some(kicker),
             last_touch: None,
+
+            touch_history: [None, None],
             kick_velocity: None,
             spin: 0.0,
         });

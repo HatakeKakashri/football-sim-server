@@ -41,6 +41,7 @@ pub fn ball_fixture(_pos: Vec2, state: BallState) -> Ball {
         state,
         possessor: None,
         last_touch: None,
+        touch_history: [None, None],
     }
 }
 

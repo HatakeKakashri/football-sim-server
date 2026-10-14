@@ -75,6 +75,8 @@ fn kick_execution_registers_play_touch() {
         possessor: Some(kicker),
         // Pre-condition: last_touch is None (ball just gained possession).
         last_touch: None,
+
+        touch_history: [None, None],
         kick_velocity: None,
         spin: 0.0,
     });
@@ -118,6 +120,8 @@ fn test_kick_pushes_to_buffer_and_consumer_applies() {
         state: BallState::Possessed,
         possessor: Some(kicker),
         last_touch: None,
+
+        touch_history: [None, None],
     });
 
     // Direct push (no kick system) — exercises the writer/consumer contract
@@ -160,6 +164,8 @@ fn test_two_consecutive_kicks_update_record() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+
+        touch_history: [None, None],
     });
 
     {
@@ -199,6 +205,7 @@ fn test_same_tick_double_kick_resolves_deterministically() {
         state: BallState::Possessed,
         possessor: Some(kicker),
         last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
 
@@ -255,6 +262,8 @@ fn test_possession_acquisition_pushes_play_touch() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+
+        touch_history: [None, None],
     });
 
     let player = world.spawn(()).id();
@@ -373,6 +382,7 @@ fn test_oob_restart_registers_restart_touch() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());
@@ -445,6 +455,7 @@ fn test_oob_event_carries_full_touch() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());
@@ -523,6 +534,7 @@ fn test_goal_event_carries_full_touch() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(CurrentTick(100));
@@ -613,6 +625,7 @@ fn test_own_goal_attribution_preserved() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), kicker, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());
@@ -680,6 +693,8 @@ fn test_pre_touch_oob_logs_error_and_skips() {
         possessor: None,
         // Pre-touch guard trip: last_touch is None.
         last_touch: None,
+
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());
@@ -733,6 +748,8 @@ fn test_pending_ball_touches_resource_registered() {
         state: BallState::Possessed,
         possessor: Some(possessor),
         last_touch: None,
+
+        touch_history: [None, None],
     });
 
     // No pushes to the buffer — the consumer should still run, but
@@ -809,6 +826,8 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
         state: BallState::Possessed,
         possessor: Some(kicker),
         last_touch: None,
+
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());
@@ -893,6 +912,8 @@ fn test_touch_record_survives_toucher_despawn() {
         state: sim_components::BallState::Possessed,
         possessor: Some(kicker),
         last_touch: None,
+
+        touch_history: [None, None],
         kick_velocity: None,
         spin: 0.0,
     });
@@ -977,6 +998,7 @@ fn test_oob_restart_taker_resolves_after_toucher_despawn() {
             toucher,
             TouchKind::Play,
         )),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());

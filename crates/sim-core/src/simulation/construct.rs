@@ -189,6 +189,7 @@ impl Simulation {
             state: sim_components::BallState::Free,
             possessor: None,
             last_touch: None,
+            touch_history: [None, None],
             kick_velocity: None,
         });
         world.insert_resource(PendingBallTouches::default());

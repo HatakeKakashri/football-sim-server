@@ -59,3 +59,51 @@ fn test_hash_detects_state_change() {
         "Hash failed to detect +1.0 perturbation on ball x"
     );
 }
+
+/// PRD §8.5: the two-deep touch history on `Ball` is folded into the
+/// state hash. A change to `touch_history` (a different previous touch
+/// recorded) must change the hash deterministically.
+#[test]
+fn test_hash_detects_touch_history_change() {
+    use bevy_ecs::prelude::Entity;
+    use sim_components::{Ball, LastTouch, TeamId, TouchKind};
+
+    let seed = 0xABCD_EF01_2345_6789u64;
+    let mut a = Simulation::new(seed);
+    let mut b = Simulation::new(seed);
+
+    for _ in 0..10 {
+        a.tick();
+        b.tick();
+    }
+    let hash_before_a = a.get_state_hash();
+    let hash_before_b = b.get_state_hash();
+    assert_eq!(
+        hash_before_a, hash_before_b,
+        "Identically-constructed simulations diverged before perturbation"
+    );
+
+    // Replace sim `a`'s touch history slot 0 with a concrete touch that
+    // sim `b` cannot have produced (different entity bits).
+    let a_ball = a
+        .world()
+        .resource::<Ball>()
+        .last_touch
+        .and_then(|t| t.player)
+        .unwrap_or(Entity::PLACEHOLDER);
+    {
+        let mut ball = a.world_mut().resource_mut::<Ball>();
+        ball.touch_history[0] = Some(LastTouch::by_player(
+            TeamId(0),
+            Entity::from_bits(a_ball.to_bits().wrapping_add(0xDEAD_BEEF)),
+            TouchKind::Play,
+        ));
+    }
+
+    let hash_after_a = a.get_state_hash();
+    let hash_after_b = b.get_state_hash();
+    assert_ne!(
+        hash_after_a, hash_after_b,
+        "Hash failed to detect touch_history perturbation"
+    );
+}

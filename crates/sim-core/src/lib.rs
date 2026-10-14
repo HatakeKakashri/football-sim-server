@@ -12,6 +12,9 @@ mod simulation;
 mod tests;
 
 pub use simulation::{Simulation, SimulationSet, lifecycle_system};
+pub use simulation::invariants::{
+    InvariantCounters, InvariantViolation, MAX_DEAD_BALL_WINDOW_TICKS, TICK_CAP, check_invariants,
+};
 
 pub use sim_components::time;
 

@@ -277,10 +277,47 @@ pub struct Ball {
     /// identity fields (`team`, `player_id`) are denormalised, so it
     /// stays correct after the touching entity despawns.
     pub last_touch: Option<LastTouch>,
+    /// Two-deep sliding window of recent touches (newest first).
+    ///
+    /// PRD §8.5 calls for a two-deep touch history on `Ball` so the
+    /// goal event can attribute `scorer` (current `last_touch`) and
+    /// `assister` (previous touch by the scoring team within the last
+    /// 10 s of game time) from a stable, denormalised window. The
+    /// window is updated whenever `Ball.last_touch` is set:
+    /// `[0]` is the previous touch, `[1]` is the one before that.
+    /// Index 0 is the immediately preceding touch; index 1 is the
+    /// touch before that. Empty slots stay `None`.
+    ///
+    /// The history is mixed into `Simulation::get_state_hash` so that
+    /// any change to the touch path (writer swap, new touch kind,
+    /// extra push) changes the hash deterministically — the seam
+    /// future Phase 4 work needs.
+    pub touch_history: [Option<LastTouch>; 2],
     /// Pending velocity from a kick, to be applied in the Physics set.
     /// This avoids static query conflicts between `kick_execution_system`
     /// (Execution set) and `ball_physics_system` (Physics set).
     pub kick_velocity: Option<Vec2>,
+}
+
+impl Ball {
+    /// Push `touch` onto `Ball`: store it as `last_touch` and slide the
+    /// previous `last_touch` into `touch_history[0]`, the previous
+    /// `touch_history[0]` into `touch_history[1]`.
+    ///
+    /// The sliding-window order is part of the contract: it gives
+    /// `assister` lookup a stable "previous touch by a different (or
+    /// same) team" and keeps `Simulation::get_state_hash` deterministic
+    /// when callers mix in only one of the three slots.
+    ///
+    /// This is the **only** function that should assign
+    /// `Ball.last_touch`. Other call sites must go through
+    /// [`Self::record_touch`].
+    pub const fn record_touch(&mut self, touch: LastTouch) {
+        // Slide: prev history[0] → history[1], prev last_touch → history[0].
+        self.touch_history[1] = self.touch_history[0];
+        self.touch_history[0] = self.last_touch;
+        self.last_touch = Some(touch);
+    }
 }
 
 /// Tag component on the ball entity so systems can find it via Query

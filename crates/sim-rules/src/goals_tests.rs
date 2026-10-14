@@ -364,6 +364,7 @@ fn test_missed_shot_gives_goal_kick() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());
@@ -428,6 +429,7 @@ fn test_deflected_shot_gives_corner() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());
@@ -502,6 +504,7 @@ fn test_throw_in_to_opposite_team() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());
@@ -528,6 +531,7 @@ fn test_throw_in_to_opposite_team() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world2.insert_resource(PendingBallTouches::default());
     world2.insert_resource(PendingOutOfBounds::default());
@@ -587,6 +591,7 @@ fn test_oob_restart_reads_signal_same_run_without_sync_point() {
         state: BallState::Free,
         possessor: None,
         last_touch: Some(LastTouch::by_player(TeamId(0), toucher, TouchKind::Play)),
+        touch_history: [None, None],
     });
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingOutOfBounds::default());

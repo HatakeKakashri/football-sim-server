@@ -30,9 +30,14 @@ use sim_components::{Ball, PendingBallTouches};
 /// `Simulation::tick` to drain `lifecycle_system`'s kickoff placement.
 ///
 /// If the buffer is empty, `Ball.last_touch` is unchanged.
+///
+/// The latest touch is recorded through [`Ball::record_touch`], which
+/// also slides the previous `Ball.last_touch` into `Ball.touch_history`
+/// and the previous history entry one slot deeper. The history is
+/// mixed into `Simulation::get_state_hash`; see PRD §8.5.
 pub fn apply_ball_touched_system(mut pending: ResMut<PendingBallTouches>, mut ball: ResMut<Ball>) {
     if let Some(last) = pending.0.pop() {
-        ball.last_touch = Some(last);
+        ball.record_touch(last);
     }
     // Drain any earlier entries defensively (shouldn't happen, but
     // keeps the buffer from growing unbounded across ticks if a

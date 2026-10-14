@@ -4,6 +4,7 @@ pub mod brain_default;
 mod commands;
 mod construct;
 pub mod formation;
+pub mod invariants;
 pub mod lifecycle;
 mod snapshot;
 pub mod state_hash;

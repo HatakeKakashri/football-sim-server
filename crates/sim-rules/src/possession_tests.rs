@@ -25,6 +25,8 @@ fn test_possession_resolution() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+
+        touch_history: [None, None],
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world
@@ -75,6 +77,8 @@ fn test_possession_resolved_to_real_entity() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+
+        touch_history: [None, None],
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world
@@ -134,6 +138,8 @@ fn test_possession_cleared_when_ball_free() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+
+        touch_history: [None, None],
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world
@@ -188,6 +194,8 @@ fn test_possession_change_registers_play_touch() {
         state: BallState::Free,
         possessor: None,
         last_touch: None,
+
+        touch_history: [None, None],
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world
@@ -306,6 +314,7 @@ fn test_interception_registers_play_touch_on_new_possessor() {
             player_id: None,
             kind: sim_components::TouchKind::Play,
         }),
+        touch_history: [None, None],
     });
     world.insert_resource(sim_components::PendingBallTouches::default());
     world

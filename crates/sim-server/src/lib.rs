@@ -1,3 +1,4 @@
+pub mod harness;
 pub mod simulate;
 pub mod telemetry_cli;
 pub mod trace_filter;
@@ -12,6 +13,7 @@ use sim_components::ManagerCommand;
 use sim_core::Simulation;
 use sim_telemetry::TelemetryConfig;
 
+use crate::harness::{HarnessOptions, run_harness};
 use crate::simulate::{SimulateOptions, run_simulate};
 use crate::telemetry_cli::TraceOptions;
 use crate::trace_filter::{FilterOptions, filter_file};
@@ -122,6 +124,22 @@ pub enum Commands {
         #[arg(long)]
         name: Option<String>,
     },
+
+    /// Run the multi-seed headless harness with runtime invariants
+    /// (issue 07). Plays every seed in the file to `FullTime` (or
+    /// `tick_cap`), enforces §12 invariants per tick, and writes a JSON
+    /// summary of the §13.1 metrics that don't require events.
+    Harness {
+        /// Path to a file with one seed per line. Blank lines and
+        /// lines starting with `#` are ignored.
+        #[arg(long)]
+        seeds: PathBuf,
+
+        /// Where the harness writes its JSON summary (defaults to
+        /// stdout if not set).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Dispatch a parsed [`Cli`] to the appropriate library entry point.
@@ -197,6 +215,22 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 let mut handle = stdout.lock();
                 serde_json::to_writer_pretty(&mut handle, &kept)?;
             }
+        }
+
+        Commands::Harness { seeds, output } => {
+            let opts = HarnessOptions {
+                seeds,
+                output,
+            };
+            let summary = run_harness(&opts)?;
+            tracing::info!(
+                "harness: {} seeds, {} full-time, mean_goals={:.2}, max_dead_window={}, violations={}",
+                summary.seed_count,
+                summary.matches_reached_full_time,
+                summary.mean_goals,
+                summary.max_dead_ball_window,
+                summary.violations.len(),
+            );
         }
     }
     Ok(())

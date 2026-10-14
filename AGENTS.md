@@ -65,6 +65,7 @@ Four subcommands:
 - **`simulate`** — run a match. Flags: `--seed <u64>` (default 12345), `--ticks <u64>` (default 1000), `--full-match` (324,000 ticks to `FullTime`), `-o/--output <path>`, `--trace-out <path>`, `--trace-interval-ticks <u64>` (default 600), `--trace-full-range <start>-<end>`.
 - **`replay`** — replay with manager commands. Flags: `--seed`, `--commands <path>` (JSON list of `{tick, command}`), `-o/--output`.
 - **`benchmark`** — perf baseline. Flags: `--seed`, `--ticks` (default 6000), `-o/--output` (writes JSON with `average_tick_ms`, `ticks_per_sec`).
+- **`harness`** — multi-seed headless harness (issue 07). Flags: `--seeds <path>` (file with one seed per line; blank lines and `#` comments ignored), `-o/--output` (defaults to stdout). Plays every seed to `FullTime` (or `tick_cap`), enforces the six PRD §12 invariants per tick, writes a JSON summary with per-seed reports and aggregate §13.1 metrics. Does **not** serialise per-tick snapshots. Wall time ~10 s × seed_count in release.
 - **`trace-filter`** — post-hoc filter a recorded trace. Flags: `--input <path>`, `-o/--output` (defaults to stdout), `--player <u32>`, `--from <u64>`, `--to <u64>`, `--process <Ball|Referee|Match|name>`, `--name <exact>`.
 
 ## Generate reports
@@ -120,7 +121,7 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 - **System-set order**: `SimulationSet` enum in `crates/sim-core/src/simulation.rs` — `Perception → Decision → Execution → Physics → Possession → Rules → MatchAdmin`. Add new systems to the right set in `register_systems` (`construct.rs:37`).
 - **AI**: `crates/sim-ai-player/` (per-player Utility AI, 6-tick decision cadence) and `crates/sim-ai-manager/` (weighted-table manager; effectively no-op today).
 - **Rules**: `crates/sim-rules/` — goals, OOB (law-correct throw-in / goal-kick / corner), possession, clock + added time. Offside detection and foul detection are **out of MVP scope** (PRD §2); any stubs should be removed or disabled.
-- **CLI**: `crates/sim-server/src/lib.rs` (subcommand enum + dispatch), one module per subcommand (`simulate.rs`, `trace_filter.rs`, `telemetry_cli.rs`). `main.rs` is 13 lines — keep logic in `lib` (standard §7).
+- **CLI**: `crates/sim-server/src/lib.rs` (subcommand enum + dispatch), one module per subcommand (`simulate.rs`, `trace_filter.rs`, `telemetry_cli.rs`, `harness.rs`). `main.rs` is 13 lines — keep logic in `lib` (standard §7).
 
 ## Conventions to follow
 
@@ -253,6 +254,7 @@ Four subcommands:
 - **`simulate`** — run a match. Flags: `--seed <u64>` (default 12345), `--ticks <u64>` (default 1000), `--full-match` (324,000 ticks to `FullTime`), `-o/--output <path>`, `--trace-out <path>`, `--trace-interval-ticks <u64>` (default 600), `--trace-full-range <start>-<end>`.
 - **`replay`** — replay with manager commands. Flags: `--seed`, `--commands <path>` (JSON list of `{tick, command}`), `-o/--output`.
 - **`benchmark`** — perf baseline. Flags: `--seed`, `--ticks` (default 6000), `-o/--output` (writes JSON with `average_tick_ms`, `ticks_per_sec`).
+- **`harness`** — multi-seed headless harness (issue 07). Flags: `--seeds <path>` (file with one seed per line; blank lines and `#` comments ignored), `-o/--output` (defaults to stdout). Plays every seed to `FullTime` (or `tick_cap`), enforces the six PRD §12 invariants per tick, writes a JSON summary with per-seed reports and aggregate §13.1 metrics. Does **not** serialise per-tick snapshots. Wall time ~10 s × seed_count in release.
 - **`trace-filter`** — post-hoc filter a recorded trace. Flags: `--input <path>`, `-o/--output` (defaults to stdout), `--player <u32>`, `--from <u64>`, `--to <u64>`, `--process <Ball|Referee|Match|name>`, `--name <exact>`.
 
 ## Generate reports
@@ -308,7 +310,7 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 - **System-set order**: `SimulationSet` enum in `crates/sim-core/src/simulation.rs` — `Perception → Decision → Execution → Physics → Possession → Rules → MatchAdmin`. Add new systems to the right set in `register_systems` (`construct.rs:37`).
 - **AI**: `crates/sim-ai-player/` (per-player Utility AI, 6-tick decision cadence) and `crates/sim-ai-manager/` (weighted-table manager; effectively no-op today).
 - **Rules**: `crates/sim-rules/` — goals, OOB (law-correct throw-in / goal-kick / corner), possession, clock + added time. Offside detection and foul detection are **out of MVP scope** (PRD §2); any stubs should be removed or disabled.
-- **CLI**: `crates/sim-server/src/lib.rs` (subcommand enum + dispatch), one module per subcommand (`simulate.rs`, `trace_filter.rs`, `telemetry_cli.rs`). `main.rs` is 13 lines — keep logic in `lib` (standard §7).
+- **CLI**: `crates/sim-server/src/lib.rs` (subcommand enum + dispatch), one module per subcommand (`simulate.rs`, `trace_filter.rs`, `telemetry_cli.rs`, `harness.rs`). `main.rs` is 13 lines — keep logic in `lib` (standard §7).
 
 ## Conventions to follow
 

@@ -67,6 +67,10 @@ impl Simulation {
     /// detection meaningful. RNG-state divergence still surfaces on the
     /// next tick through the downstream state it influences (positions,
     /// velocities, stamina deltas, etc.), just with one tick of latency.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "single FNV-1a mix over entities + Resources; splitting would scatter the per-arm schema"
+    )]
     pub fn get_state_hash(&self) -> u64 {
         use sim_components::{Match, Player, Position, Skill, Stamina, Team, Velocity};
 
@@ -186,6 +190,25 @@ impl Simulation {
             } else {
                 mix(&mut h, u64::MAX);
                 mix(&mut h, u64::MAX);
+            }
+            // Fold the two-deep touch history (PRD §8.5) into the hash
+            // so swaps to the touch path change the hash deterministically.
+            // The newest entry is `touch_history[0]`; the one before is
+            // `touch_history[1]`. Order matters: changing the slide order
+            // changes the hash.
+            for entry in &b.touch_history {
+                if let Some(touch) = entry.as_ref() {
+                    mix(
+                        &mut h,
+                        touch
+                            .player
+                            .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
+                    );
+                    mix(&mut h, touch_kind_discriminant(touch.kind));
+                } else {
+                    mix(&mut h, u64::MAX);
+                    mix(&mut h, u64::MAX);
+                }
             }
         }
 

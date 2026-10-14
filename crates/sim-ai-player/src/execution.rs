@@ -4,11 +4,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    ActionIntent, Ball, Intent, LastTouch, MatchClock, PendingBallTouches, PerceptionSnapshot,
-    Player, Skill, Stamina, TouchKind, Velocity,
+    ActionIntent, Ball, BallMarker, Intent, LastTouch, MatchClock, PendingBallTouches,
+    PerceptionSnapshot, Player, PlayerId, Position, Skill, Stamina, TouchKind, Velocity,
 };
 use sim_math::Vec2;
 use sim_physics::{PLAYER_ARRIVAL_DECEL, PLAYER_MAX_ACCEL_PER_TICK, SimRng};
+use sim_rules::PendingPass;
 use sim_telemetry::TelemetryConfig;
 
 /// Monotonic counter for `pass()` flow ids. Two passes share the same
@@ -268,8 +269,10 @@ pub fn player_action_execution_system(
 /// re-freeze as "possessed" by the original kicker.
 pub fn kick_execution_system(
     player_query: Query<(Entity, &Player, &PerceptionSnapshot, &Velocity)>,
+    ball_query: Query<&Position, With<BallMarker>>,
     mut ball: ResMut<Ball>,
     mut pending: ResMut<PendingBallTouches>,
+    pending_pass: Option<ResMut<PendingPass>>,
     match_clock: Option<Res<MatchClock>>,
     telemetry: Option<Res<TelemetryConfig>>,
 ) {
@@ -325,6 +328,49 @@ pub fn kick_execution_system(
             TouchKind::Play,
         ));
         ball.possessor = None;
+        // PRD §9.3: a `pass` event is emitted at resolution. The
+        // resolver (acquisition, OOB, goal) reads `PendingPass` and
+        // emits the event with `kick_tick` and `start` (kick
+        // position). Record the kick site now so the resolver
+        // doesn't have to reconstruct the kick from history.
+        //
+        // Only `PassTo` actions register a pending pass. Shots,
+        // tackles and movement-driven velocity continuations do not
+        // emit `pass` events.
+        if matches!(intent, Intent::Action(ActionIntent::PassTo)) {
+            // Ball position at the kick (`start`). The position is
+            // on the ball entity as a `Position` component; look it
+            // up directly. If the entity is missing (test fixture
+            // without a ball entity), leave `start` as zero — the
+            // event still emits with valid `from` / `to` fields.
+            let kick_pos = ball_query
+                .iter()
+                .next()
+                .map_or(Vec2::zero(), |p| p.0);
+            let kick_tick = match_clock.as_deref().map_or(0, |c| c.elapsed_ticks);
+            // `PendingPass` is taken as `Option<ResMut<_>>` so
+            // legacy test worlds that don't register the resource
+            // still work. The real match always registers it via
+            // `Simulation::create_match`.
+            if let Some(mut pending_pass) = pending_pass {
+                pending_pass.active = true;
+                pending_pass.from = PlayerId::from_entity(possessor);
+                pending_pass.from_team = possessor_player.team_id;
+                pending_pass.intended_to = perception
+                    .nearby_teammates
+                    .first()
+                    .map(|t| PlayerId::from_entity(t.entity));
+                pending_pass.kick_tick = kick_tick;
+                pending_pass.kick_position = kick_pos;
+            }
+        } else if let Some(mut pending_pass) = pending_pass {
+            // Any non-pass kick cancels a stale pending pass. This
+            // shouldn't happen in normal play (a player with the
+            // ball has only one intent at a time) but the defensive
+            // cancel keeps the resolver from emitting a `pass` for
+            // a shot.
+            let _ = pending_pass.cancel();
+        }
         // Emit a `pass` flow event when telemetry is on and this was a
         // pass. Shots / tackles don't carry identity of a "receiver", so
         // we restrict to `PassTo`. `match_clock` is taken as `Option` so
@@ -546,6 +592,7 @@ mod tests {
             is_running: true,
         });
         world.insert_resource(TelemetryConfig::new(60, None).expect("valid"));
+        world.insert_resource(sim_rules::PendingPass::default());
 
         let events: EventVec = capture_trace(|| {
             let mut schedule = Schedule::default();
@@ -613,6 +660,7 @@ mod tests {
             spin: 0.0,
         });
         world.insert_resource(PendingBallTouches::default());
+        world.insert_resource(sim_rules::PendingPass::default());
         // No MatchClock, no TelemetryConfig: telemetry fully off.
 
         let events: EventVec = capture_trace(|| {

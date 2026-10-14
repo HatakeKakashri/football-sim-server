@@ -33,7 +33,8 @@ pub use referee::{foul_detection_system, minimum_player_count_system};
 pub use touch::apply_ball_touched_system;
 
 use bevy_ecs::prelude::*;
-use sim_components::{BallOutOfBoundsType, LastTouch, RuleEvent, Team, TeamId};
+use sim_components::{BallOutOfBoundsType, LastTouch, PlayerId, RuleEvent, Team, TeamId};
+use sim_math::Vec2;
 
 /// Shared constants used by every rule system. Kept in one place so the
 /// pitch geometry has a single source of truth.
@@ -142,4 +143,105 @@ pub const fn referee_advantage_system(
 ) {
     // Phase N: real advantage window logic
     let _ = (ball_res, match_res);
+}
+
+/// In-flight pass awaiting resolution (PRD §9.3).
+///
+/// A `pass` event is emitted at the resolution tick — the ball's
+/// next acquisition, OOB, or goal. The kick site (e.g.
+/// `kick_execution_system`) writes this resource with the kicker
+/// identity, the intended receiver, the kick tick, and the
+/// ball position at the kick. The resolver (acquisition, OOB,
+/// goal) reads it, emits the `pass` event, and clears the
+/// resource. If the ball transitions out of `InFlight` (e.g. the
+/// physics system resets it) without any of those triggers
+/// firing, the resource must be cleared by `cancel_pending_pass`
+/// so stale state doesn't leak into a later event.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct PendingPass {
+    /// `true` when a pass is in flight and the resource holds
+    /// meaningful data.
+    pub active: bool,
+    /// Kicker (last `Play` touch at the kick). The receiving
+    /// `pass` event stamps this onto the `from` field.
+    pub from: PlayerId,
+    /// Team of the kicker at the kick. Used for `success` (true
+    /// when the receiver is on the same team) and `to` (the
+    /// intended receiver identity).
+    pub from_team: TeamId,
+    /// Intended receiver. `None` when the kick was directed at
+    /// "space" or a generic teammate slot, or when the
+    /// AI brain emitted `PassTo` without a real teammate to
+    /// target.
+    pub intended_to: Option<PlayerId>,
+    /// Tick at which the kick happened (PRD §9.2 `kick_tick`).
+    pub kick_tick: u64,
+    /// Ball position at the kick (PRD §9.2 `start`).
+    pub kick_position: Vec2,
+}
+
+impl PendingPass {
+    /// `true` when there is an in-flight pass awaiting resolution.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Resource default: inactive, with the inner fields zeroed
+    /// via the same primitives `Bevy` resource storage uses.
+    /// `Vec2::zero` and `TeamId(0)` and `PlayerId(0)` are valid
+    /// placeholder values for an inactive pending pass.
+    #[must_use]
+    pub const fn default_inactive() -> Self {
+        Self {
+            active: false,
+            from: PlayerId::from_bits(0),
+            from_team: TeamId(0),
+            intended_to: None,
+            kick_tick: 0,
+            kick_position: Vec2::zero(),
+        }
+    }
+
+    /// Mark the resource as having a pending pass. Writers fill
+    /// the rest of the fields directly; this method only flips
+    /// `active` so a partially-constructed value is never
+    /// reported as active.
+    pub const fn set(&mut self) {
+        self.active = true;
+    }
+
+    /// Clear the resource, leaving it inactive. Returns the
+    /// previously-active state so callers can branch on whether
+    /// a pass actually fired.
+    #[must_use]
+    pub const fn cancel(&mut self) -> bool {
+        let was_active = self.active;
+        self.active = false;
+        was_active
+    }
+
+    /// Take the pending pass (clears it). Used by resolvers that
+    /// need the value to emit a `pass` event.
+    #[must_use]
+    pub const fn take(&mut self) -> Option<Self> {
+        if self.active {
+            Some(Self {
+                active: false,
+                from: self.from,
+                from_team: self.from_team,
+                intended_to: self.intended_to,
+                kick_tick: self.kick_tick,
+                kick_position: self.kick_position,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl Default for PendingPass {
+    fn default() -> Self {
+        Self::default_inactive()
+    }
 }

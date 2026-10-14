@@ -26,6 +26,10 @@
 #[cfg(test)]
 mod determinism_tests;
 #[cfg(test)]
+mod event_emit_tests;
+#[cfg(test)]
+mod event_log_tests;
+#[cfg(test)]
 mod integration_tests;
 #[cfg(test)]
 mod lifecycle_tests;

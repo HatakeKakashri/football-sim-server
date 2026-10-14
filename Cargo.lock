@@ -581,6 +581,7 @@ dependencies = [
  "sim-components",
  "sim-math",
  "sim-physics",
+ "sim-rules",
  "sim-telemetry",
  "smallvec",
  "tracing",

@@ -12,6 +12,7 @@ bevy_ecs.workspace = true
 smallvec.workspace = true
 tracing.workspace = true
 sim-telemetry = { path = "../sim-telemetry" }
+sim-rules = { path = "../sim-rules" }
 
 [lints]
 workspace = true

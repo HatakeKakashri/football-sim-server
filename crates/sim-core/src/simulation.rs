@@ -3,6 +3,8 @@
 pub mod brain_default;
 mod commands;
 mod construct;
+pub mod event_emit;
+pub mod events;
 pub mod formation;
 pub mod invariants;
 pub mod lifecycle;

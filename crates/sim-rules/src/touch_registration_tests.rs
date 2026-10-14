@@ -22,7 +22,7 @@ use sim_math::Vec2;
 use smallvec::smallvec;
 
 use crate::{
-    CurrentTick, PendingOutOfBounds, goal_detection_system, out_of_bounds_system,
+    CurrentTick, PendingOutOfBounds, PendingPass, goal_detection_system, out_of_bounds_system,
     possession_resolution_system, restart_system, touch::apply_ball_touched_system,
 };
 
@@ -37,6 +37,7 @@ fn pos(x: f32, y: f32) -> Vec2 {
 #[test]
 fn kick_execution_registers_play_touch() {
     let mut world = World::new();
+    world.insert_resource(crate::PendingPass::default());
 
     // Kicker at (50, 34), facing a teammate 15 m away.
     let kicker = world
@@ -81,6 +82,7 @@ fn kick_execution_registers_play_touch() {
         spin: 0.0,
     });
     world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingPass::default());
 
     let mut schedule = Schedule::default();
     schedule.add_systems((kick_execution_system, apply_ball_touched_system).chain());
@@ -734,6 +736,7 @@ fn test_pre_touch_oob_logs_error_and_skips() {
 fn test_pending_ball_touches_resource_registered() {
     let mut world = World::new();
     world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingPass::default());
 
     let possessor = world.spawn(()).id();
     let ball_entity = world.spawn(()).id();
@@ -782,6 +785,7 @@ fn test_pending_ball_touches_resource_registered() {
 #[test]
 fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
     let mut world = World::new();
+    world.insert_resource(PendingPass::default());
 
     // Kicker near the center; ball at (60, 34) inside the goal
     // mouth — if the consumer is first, OOB / goal / restart see the
@@ -840,6 +844,7 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
         state: MatchState::InPlay,
         seed: 12345,
     });
+    world.insert_resource(PendingPass::default());
 
     let mut schedule = Schedule::default();
     schedule.add_systems(
@@ -875,6 +880,7 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
 #[test]
 fn test_touch_record_survives_toucher_despawn() {
     let mut world = World::new();
+    world.insert_resource(PendingPass::default());
 
     // Toucher on team 0, registered by a real kick.
     let kicker = world
@@ -918,6 +924,7 @@ fn test_touch_record_survives_toucher_despawn() {
         spin: 0.0,
     });
     world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingPass::default());
 
     let mut schedule = Schedule::default();
     schedule.add_systems((kick_execution_system, apply_ball_touched_system).chain());

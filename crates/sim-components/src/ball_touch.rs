@@ -42,6 +42,20 @@ impl PlayerId {
         Self(entity.to_bits())
     }
 
+    /// Mint a stable id directly from `u64` bits.
+    ///
+    /// Used by event writers when they have the id from a
+    /// `LastTouch.player_id` (the bit-encoded form) and need to
+    /// pass it through to a wire payload without re-wrapping
+    /// through a live `Entity`. Today `player_id` is always
+    /// minted via `from_entity`, so `bits == entity.to_bits()`;
+    /// this constructor exists as the inverse for downstream
+    /// sites that already have the bits.
+    #[must_use]
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
     /// Raw bits accessor for serialisation and hashing.
     #[must_use]
     pub const fn bits(self) -> u64 {

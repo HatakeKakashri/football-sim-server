@@ -108,6 +108,13 @@ fn register_systems(schedule: &mut Schedule) {
             .after(SimulationSet::Possession),
     );
 
+    // Event emission (issue 08). Runs in the same `Rules` set, after
+    // the rule writers have settled their signals. The order is:
+    // possession_change on OOB → possession_change on acquisition
+    // → pass-event resolution. The pass resolver reads both OOB and
+    // the live `Ball.possessor`, so it must run last.
+    super::event_emit::register_event_systems(schedule);
+
     // MatchAdmin — added time → minimum players → substitutions → mentality.
     schedule.add_systems(
         (
@@ -194,6 +201,8 @@ impl Simulation {
         });
         world.insert_resource(PendingBallTouches::default());
         world.insert_resource(sim_rules::PendingOutOfBounds::default());
+        world.insert_resource(sim_rules::PendingPass::default());
+        world.insert_resource(crate::EventLog::new());
         world.entity_mut(ball_entity).insert(BallMarker);
         world
             .entity_mut(ball_entity)

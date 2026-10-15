@@ -392,6 +392,73 @@ impl PitchDimensions {
     }
 }
 
+#[allow(
+    clippy::too_long_first_doc_paragraph,
+    reason = "the doc paragraph explains the cross-crate mirroring contract; splitting it would weaken the rationale"
+)]
+/// Number of `CurveParams` records in [`Tuning::curve_params`]: one per
+/// consumed attribute. Mirrors `sim_components::profile::ATTRIBUTE_COUNT`
+/// (30); it is defined here because `sim-math` cannot depend on
+/// `sim-components`. The cross-crate consistency is asserted by a test in
+/// `sim-components`.
+pub const CURVE_PARAM_COUNT: usize = 30;
+
+/// Logistic response-curve parameters for a single attribute consumer.
+///
+/// One `CurveParams` record per consumed attribute lives in [`Tuning`];
+/// this is the single edit surface for §13.3 calibration. `curve` is the
+/// only place that converts a raw attribute integer into a numeric
+/// mechanic parameter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveParams {
+    /// Attribute value (`0..=200`) at which the curve reaches its
+    /// midpoint, i.e. the output is halfway between `min` and `max`.
+    pub midpoint: f32,
+    /// Steepness of the logistic transition. Must be positive for a
+    /// strict monotonic response; the magnitude controls how quickly the
+    /// output moves from `min` toward `max` around the midpoint.
+    pub steepness: f32,
+    /// Mechanic parameter value at the low end of the attribute range.
+    pub min: f32,
+    /// Mechanic parameter value at the high end of the attribute range
+    /// (when `rising` is `true`).
+    pub max: f32,
+    /// `true` when the mechanic parameter rises with the attribute
+    /// (e.g. save probability vs `Reflexes`); `false` when it falls
+    /// (e.g. shot error vs `Shooting`).
+    pub rising: bool,
+}
+
+/// Evaluate the logistic response curve for a raw attribute value.
+///
+/// `attribute` is clamped to `0..=200` and normalised to `0..=1`; the
+/// logistic maps that to `0..=1`, which is then scaled to `[min, max]`
+/// (reversed when `rising` is `false`). With `steepness > 0` the output
+/// is strictly monotonic in `attribute`, rising when `rising` is true
+/// and falling otherwise.
+///
+/// This is the **only** place that converts a raw attribute integer into
+/// a numeric mechanic parameter; every mechanic consumer reads through
+/// it (PRD §6.3).
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "attribute is clamped to 0..=200 before the cast, which fits exactly in f32's 23-bit mantissa"
+)]
+#[must_use]
+pub fn curve(attribute: i32, params: &CurveParams) -> f32 {
+    // Normalise the raw attribute (0..=200) to the unit interval.
+    let x = attribute.clamp(0, 200) as f32 / 200.0;
+    let mid = params.midpoint.clamp(0.0, 200.0) / 200.0;
+    let logistic = 1.0 / (1.0 + f32::exp(-params.steepness * (x - mid)));
+    let span = params.max - params.min;
+    let output = if params.rising {
+        params.min + logistic * span
+    } else {
+        params.max - logistic * span
+    };
+    output.clamp(params.min.min(params.max), params.max.max(params.min))
+}
+
 /// Tuning configuration for match mechanics and response curves.
 ///
 /// All tunable constants live in this struct (PRD §11). It is edited
@@ -404,15 +471,60 @@ impl PitchDimensions {
 pub struct Tuning {
     /// Position-fit multipliers (PRD §6.5).
     pub fit_multipliers: FitMultipliers,
+    /// One `CurveParams` per consumed attribute, in `Attribute::ALL`
+    /// order (sim-components). Index `i` corresponds to `Attribute::ALL[i]`.
+    /// All fields live here so calibration has a single edit surface.
+    pub curve_params: [CurveParams; CURVE_PARAM_COUNT],
 }
 
 impl Tuning {
     /// Default tuning assumptions (pre-calibration).
     #[must_use]
-    #[allow(clippy::missing_const_for_fn, reason = "constructor is not const due to Resource derive")]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "constructor is not const due to Resource derive"
+    )]
     pub fn default_assumptions() -> Self {
         Self {
             fit_multipliers: FitMultipliers::default_assumptions(),
+            curve_params: [
+                // Index 0..=29 mirrors Attribute::ALL (sim-components).
+                // Outfield defence.
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Tackling
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // Marking
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // Positioning
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Heading
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Bravery
+                // Outfield attack.
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // Passing
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Dribbling
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Crossing
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // Shooting
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Finishing
+                // Physical & mental (outfield).
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // OutfieldFitness
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // OutfieldStrength
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // OutfieldAggression
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // OutfieldSpeed
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // OutfieldCreativity
+                // Goalkeeping.
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Reflexes
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Anticipation
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // RushingOut
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Throwing
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Kicking
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Punching
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // AerialReach
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Communication
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Agility
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // Concentration
+                // Goalkeeper physical & mental.
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // GoalkeeperFitness
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // GoalkeeperStrength
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // GoalkeeperAggression
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // GoalkeeperSpeed
+                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // GoalkeeperCreativity
+            ],
         }
     }
 }
@@ -931,5 +1043,105 @@ mod tests {
         assert_eq!(tuning.fit_multipliers.at_distance_0, 1.00);
         assert_eq!(tuning.fit_multipliers.at_distance_1, 0.92);
         assert_eq!(tuning.fit_multipliers.at_distance_2_or_more, 0.75);
+        assert_eq!(tuning.curve_params.len(), CURVE_PARAM_COUNT);
+    }
+
+    #[test]
+    fn test_curve_midpoint_returns_mid_range() {
+        let params = CurveParams {
+            midpoint: 100.0,
+            steepness: 6.0,
+            min: 0.0,
+            max: 1.0,
+            rising: true,
+        };
+        assert!((curve(100, &params) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_curve_clamps_attribute_to_unit_interval() {
+        let params = CurveParams {
+            midpoint: 100.0,
+            steepness: 6.0,
+            min: 0.0,
+            max: 1.0,
+            rising: true,
+        };
+        assert!((curve(-50, &params) - curve(0, &params)).abs() < 1e-6);
+        assert!((curve(250, &params) - curve(200, &params)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_curve_is_strictly_monotonic_rising() {
+        let params = CurveParams {
+            midpoint: 100.0,
+            steepness: 6.0,
+            min: 0.05,
+            max: 0.95,
+            rising: true,
+        };
+        let mut prev = curve(0, &params);
+        for attr in 1..=200 {
+            let value = curve(attr, &params);
+            assert!(value > prev, "curve not strictly rising at attribute {attr}");
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn test_curve_is_strictly_monotonic_falling() {
+        let params = CurveParams {
+            midpoint: 100.0,
+            steepness: 6.0,
+            min: 0.02,
+            max: 0.70,
+            rising: false,
+        };
+        let mut prev = curve(0, &params);
+        for attr in 1..=200 {
+            let value = curve(attr, &params);
+            assert!(value < prev, "curve not strictly falling at attribute {attr}");
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn test_curve_output_stays_within_min_max() {
+        let params = CurveParams {
+            midpoint: 100.0,
+            steepness: 6.0,
+            min: 0.02,
+            max: 0.70,
+            rising: false,
+        };
+        for attr in 0..=200 {
+            let value = curve(attr, &params);
+            assert!((0.02..=0.70).contains(&value), "attribute {attr}: {value}");
+        }
+    }
+
+    #[test]
+    fn test_curve_falling_is_reverse_of_rising() {
+        // A falling curve with the same span is the mirror of the rising one.
+        let rising = CurveParams {
+            midpoint: 100.0,
+            steepness: 6.0,
+            min: 0.05,
+            max: 0.95,
+            rising: true,
+        };
+        let falling = CurveParams {
+            midpoint: 100.0,
+            steepness: 6.0,
+            min: 0.05,
+            max: 0.95,
+            rising: false,
+        };
+        for attr in 0..=200 {
+            assert!(
+                (curve(attr, &rising) + curve(attr, &falling) - 1.0).abs() < 1e-6,
+                "attribute {attr}"
+            );
+        }
     }
 }

@@ -5,6 +5,7 @@
 //! workspace (`sim-rules` clock/referee tests, etc.).
 
 use crate::{Attribute, AttributeError, Goalkeeping, OutfieldAttack, OutfieldDefence, PhysicalMental, PlayerProfile, ProfileKind, ATTRIBUTE_COUNT};
+use sim_math::{curve, Tuning};
 
 #[test]
 fn a11_attribute_count_is_thirty() {
@@ -197,3 +198,96 @@ monotonic_tests!(
     a10_monotonic_goalkeeper_speed: GoalkeeperSpeed,
     a10_monotonic_goalkeeper_creativity: GoalkeeperCreativity,
 );
+
+/// `A10` attribute-sensitivity at the curve layer: for every consumed
+/// attribute, raising the attribute strictly and monotonically moves the
+/// mechanic parameter in the declared direction (`CurveParams.rising`).
+///
+/// This covers all 30 attributes: the 25 unit-only attributes required
+/// by PRD §13.1 `A10`, plus the five (Shooting, Finishing, Passing,
+/// Tackling, Reflexes) that additionally get full-match sweeps in ticket
+/// 29. The direction table mirrors `Tuning::default_assumptions` and is
+/// checked against it, so a reordering of `curve_params` fails this test.
+#[test]
+fn a10_curve_monotonicity_all_attributes() {
+    let tuning = Tuning::default_assumptions();
+
+    // One CurveParams record per consumed attribute, in Attribute::ALL order.
+    assert_eq!(tuning.curve_params.len(), ATTRIBUTE_COUNT);
+
+    for (index, &attribute) in Attribute::ALL.iter().enumerate() {
+        let params = &tuning.curve_params[index];
+
+        // The curve must be non-degenerate for monotonicity to be meaningful.
+        assert!(
+            params.steepness > 0.0,
+            "{attribute:?}: curve steepness must be positive"
+        );
+
+        // The declared direction must match the documented consumer semantics.
+        assert_eq!(
+            params.rising,
+            expected_curve_direction(attribute),
+            "{attribute:?}: curve direction does not match consumer semantics"
+        );
+
+        // Strict monotonicity in the declared direction across the full range.
+        let mut prev = curve(0, params);
+        for attr in 1..=200i32 {
+            let value = curve(attr, params);
+            if params.rising {
+                assert!(
+                    value > prev,
+                    "{attribute:?}: curve not strictly rising at attribute {attr}"
+                );
+            } else {
+                assert!(
+                    value < prev,
+                    "{attribute:?}: curve not strictly falling at attribute {attr}"
+                );
+            }
+            prev = value;
+        }
+    }
+}
+
+/// Declared direction of effect for each attribute's mechanic parameter
+/// (PRD §6.2 consumers). `true` = higher attribute ⇒ higher parameter.
+fn expected_curve_direction(attribute: Attribute) -> bool {
+    match attribute {
+        // Falling: higher attribute lowers the mechanic parameter
+        // (error, drain, or lapse probability).
+        Attribute::Marking
+        | Attribute::Positioning
+        | Attribute::Passing
+        | Attribute::Shooting
+        | Attribute::OutfieldFitness
+        | Attribute::Concentration
+        | Attribute::GoalkeeperFitness => false,
+        // Rising: higher attribute raises the mechanic parameter
+        // (probability, quality, speed, weight, reach, ...).
+        Attribute::Tackling
+        | Attribute::Heading
+        | Attribute::Bravery
+        | Attribute::Dribbling
+        | Attribute::Crossing
+        | Attribute::Finishing
+        | Attribute::OutfieldStrength
+        | Attribute::OutfieldAggression
+        | Attribute::OutfieldSpeed
+        | Attribute::OutfieldCreativity
+        | Attribute::Reflexes
+        | Attribute::Anticipation
+        | Attribute::RushingOut
+        | Attribute::Throwing
+        | Attribute::Kicking
+        | Attribute::Punching
+        | Attribute::AerialReach
+        | Attribute::Communication
+        | Attribute::Agility
+        | Attribute::GoalkeeperStrength
+        | Attribute::GoalkeeperAggression
+        | Attribute::GoalkeeperSpeed
+        | Attribute::GoalkeeperCreativity => true,
+    }
+}

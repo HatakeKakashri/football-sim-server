@@ -16,8 +16,8 @@ use sim_telemetry::TelemetryConfig;
 use crate::constants::{CENTER_SPOT, GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH};
 use crate::out_of_bounds::calculate_oob_restart_position;
 use crate::{
-    CurrentTick, OobRestartForEmit, OobRestartResolved, OutOfBoundsEvent, PendingOutOfBounds,
-    PendingRestart, team_attacking_goal,
+    CurrentTick, GoalForEmit, GoalResolved, KickoffForEmit, KickoffResolved, OobRestartForEmit,
+    OobRestartResolved, OutOfBoundsEvent, PendingOutOfBounds, PendingRestart, team_attacking_goal,
 };
 
 /// Buffered goal event data collected in `goal_detection_system`'s first
@@ -44,6 +44,10 @@ struct GoalEvent {
 /// half-time end swap. The full last-touch record is captured in the
 /// event payload for completeness but does **not** drive scorer
 /// attribution.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system param set: goal detection needs ball, teams, match, touch state, tick, telemetry and the emit slot; splitting would scatter Law 10 across systems"
+)]
 pub fn goal_detection_system(
     mut commands: Commands,
     ball_query: Query<(Entity, &Position), With<BallMarker>>,
@@ -52,6 +56,7 @@ pub fn goal_detection_system(
     mut ball: ResMut<Ball>,
     current_tick: Option<Res<CurrentTick>>,
     telemetry: Option<Res<TelemetryConfig>>,
+    mut goal_for_emit: Option<ResMut<GoalForEmit>>,
 ) {
     // First pass: collect goal events (avoid borrow conflicts).
     // Tuple: (ball_entity, scorer_team, final_score, last_touch).
@@ -111,6 +116,23 @@ pub fn goal_detection_system(
                 // (`Ball.last_touch` itself is preserved; M8).
                 last_touch: ball.last_touch,
             });
+            // Stash the resolved data so the `sim-core` goal emitter
+            // can write the `goal` event (with scorer / own-goal /
+            // assister attribution per PRD §8.5), resolve the
+            // in-flight pass, and emit the `possession_change` with
+            // cause `goal`. The emitter runs in the same `Rules` set
+            // after this system, then drains the resource.
+            if let Some(ref mut slot) = goal_for_emit {
+                slot.0 = Some(GoalResolved {
+                    scorer_team,
+                    score: final_score,
+                    last_touch: ball.last_touch,
+                    prev_touch: ball.touch_history[0],
+                    older_touch: ball.touch_history[1],
+                    goal_tick: current_tick.as_deref().map_or(0, |t| t.0),
+                    ball_pos: ball_pos.0,
+                });
+            }
             tracing::info!(
                 "GOAL scored by team {}! Score: {}-{}",
                 scorer_team.0,
@@ -171,7 +193,11 @@ pub fn goal_detection_system(
 /// the team that conceded the goal.
 #[allow(
     clippy::too_many_arguments,
-    reason = "Bevy system param set: 9 standard params is the project norm for restart-time systems (construct.rs:37 establishes the ceiling)"
+    reason = "Bevy system param set: 10 standard params is the project norm for restart-time systems (construct.rs:37 establishes the ceiling)"
+)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "two restart arms (goal kickoff + OOB) plus their emit-slot writes; splitting would scatter Law 8/9/10 placement across systems"
 )]
 pub fn restart_system(
     mut commands: Commands,
@@ -184,7 +210,9 @@ pub fn restart_system(
     telemetry: Option<Res<TelemetryConfig>>,
     mut pending_oob: ResMut<PendingOutOfBounds>,
     mut oob_for_emit: Option<ResMut<OobRestartForEmit>>,
+    mut kickoff_for_emit: Option<ResMut<KickoffForEmit>>,
 ) {
+    let tick = current_tick.as_deref().map_or(0, |t| t.0);
     // Handle KickoffRestart from goal (delayed by 60 ticks)
     if let Some(pr) = pending_restart
         && let Some(event) = &pr.event
@@ -223,8 +251,20 @@ pub fn restart_system(
                 conceded_team,
                 taker,
                 sim_components::TouchKind::Restart,
-            );
+            )
+            .with_tick(tick);
             pending_touches.0.push(touch);
+            // Stash the resolved kickoff so the `sim-core` emitter
+            // can write the `kickoff` event (`reason = after_goal`).
+            // The emitter runs in the same `Rules` set after this
+            // system, then drains the resource.
+            if let Some(ref mut slot) = kickoff_for_emit {
+                slot.0 = Some(KickoffResolved {
+                    taker_team: conceded_team,
+                    taker,
+                    at: Vec2::new(CENTER_SPOT.0, CENTER_SPOT.1),
+                });
+            }
             if telemetry.is_some() {
                 sim_telemetry::emit::kickoff(current_tick.as_deref().map_or(0, |t| t.0));
             }
@@ -293,7 +333,8 @@ pub fn restart_system(
             taker_team,
             taker,
             sim_components::TouchKind::Restart,
-        );
+        )
+        .with_tick(tick);
         pending_touches.0.push(touch);
         // Stash the resolved data so the event emitter
         // (sim-core) can write `out_of_bounds` and `restart`

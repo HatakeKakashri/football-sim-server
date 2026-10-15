@@ -13,8 +13,8 @@ use sim_math::Vec2;
 
 use crate::tests::ball_fixture;
 use crate::{
-    CurrentTick, PendingOutOfBounds, PendingRestart, goal_detection_system, out_of_bounds_system, restart_system,
-    touch::apply_ball_touched_system,
+    CurrentTick, GoalForEmit, PendingOutOfBounds, PendingRestart, goal_detection_system,
+    out_of_bounds_system, restart_system, touch::apply_ball_touched_system,
 };
 
 #[test]
@@ -96,6 +96,80 @@ fn test_goal_scored_home_team() {
     } else {
         panic!("expected RuleEvent::Goal, got {event:?}");
     }
+}
+
+/// Ticket 10: `goal_detection_system` stashes the resolved goal on
+/// `GoalForEmit` so the `sim-core` emitter can write the `goal`
+/// event (with scorer / assister attribution) in the same tick.
+#[test]
+fn test_goal_detection_stashes_emit_slot() {
+    let mut world = World::new();
+
+    world.insert_resource(sim_components::Match {
+        id: 1,
+        home_team: Entity::PLACEHOLDER,
+        away_team: Entity::PLACEHOLDER,
+        score: (0, 0),
+        state: sim_components::MatchState::InPlay,
+        seed: 12345,
+    });
+    let match_entity = world.spawn(()).id();
+    world.entity_mut(match_entity).insert(MatchClock {
+        elapsed_ticks: 30 * 60,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    });
+
+    // Team-1 toucher kicks the ball into the home goal (x = 105.5):
+    // credited to home by position — an own-goal shape that pins the
+    // raw touch window the emitter later attributes.
+    let toucher = world.spawn(()).id();
+    world.entity_mut(toucher).insert(Player {
+        team_id: sim_components::TeamId(1),
+        intent: None,
+    });
+    world
+        .entity_mut(toucher)
+        .insert(sim_components::TeamIdComponent(sim_components::TeamId(1)));
+
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    let mut b = ball_fixture(Vec2::new(105.5, 34.0), BallState::Free);
+    b.last_touch = Some(
+        LastTouch::by_player(sim_components::TeamId(1), toucher, TouchKind::Play)
+            .with_tick(90),
+    );
+    world.insert_resource(b);
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(Vec2::new(105.5, 34.0)));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+
+    world.insert_resource(GoalForEmit::default());
+    world.insert_resource(CurrentTick(100));
+    let mut schedule = Schedule::default();
+    schedule.add_systems(goal_detection_system);
+    schedule.run(&mut world);
+
+    let slot = world.resource::<GoalForEmit>();
+    let resolved = slot.0.expect("goal must stash emit data");
+    assert_eq!(
+        resolved.scorer_team,
+        sim_components::TeamId(0),
+        "home credited by goal position"
+    );
+    assert_eq!(resolved.score, (1, 0), "running score after the goal");
+    assert_eq!(
+        resolved.last_touch,
+        Some(
+            LastTouch::by_player(sim_components::TeamId(1), toucher, TouchKind::Play)
+                .with_tick(90)
+        ),
+        "emitter reads the scorer candidate from the stashed window"
+    );
+    assert_eq!(resolved.prev_touch, None, "no older touch in this fixture");
+    assert_eq!(resolved.goal_tick, 100);
 }
 
 #[test]
@@ -270,7 +344,10 @@ fn test_kickoff_restart_registers_restart_touch() {
     assert_eq!(ball.state, BallState::Free);
     assert_eq!(
         ball.last_touch,
-        Some(LastTouch::by_player(sim_components::TeamId(1), kicker, TouchKind::Restart)),
+        Some(
+            LastTouch::by_player(sim_components::TeamId(1), kicker, TouchKind::Restart)
+                .with_tick(60)
+        ),
         "delayed kickoff restart must register the conceded-team \
          kickoff taker (Law 10), not always the home team"
     );
@@ -560,7 +637,9 @@ fn test_throw_in_to_opposite_team() {
     let pending = world.resource::<PendingBallTouches>();
     assert_eq!(
         pending.0,
-        vec![LastTouch::by_player(TeamId(1), taker, TouchKind::Restart)],
+        vec![
+            LastTouch::by_player(TeamId(1), taker, TouchKind::Restart).with_tick(70)
+        ],
         "throw-in is awarded to the team opposite of the last toucher"
     );
 }
@@ -617,7 +696,7 @@ fn test_oob_restart_reads_signal_same_run_without_sync_point() {
     );
     assert_eq!(
         world.resource::<PendingBallTouches>().0,
-        vec![LastTouch::by_player(TeamId(1), taker, TouchKind::Restart)],
+        vec![LastTouch::by_player(TeamId(1), taker, TouchKind::Restart).with_tick(50)],
         "throw-in is taken by the team opposite the last toucher"
     );
     assert_eq!(

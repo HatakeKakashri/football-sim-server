@@ -457,3 +457,200 @@ fn test_decide_transition_terminal_states() {
         assert!(decision.new_clock.is_none());
     }
 }
+
+// =========================================================================
+// Ticket 10: `apply_transition` emits the lifecycle events (`kickoff`
+// on half starts, `half_time` at the whistle, `full_time` at the end)
+// into the `EventLog`. These run `apply_transition` directly on a
+// hand-built world so they stay fast; the ignored full-match test at
+// the bottom covers the same events over a live match.
+// =========================================================================
+
+use crate::simulation::lifecycle::{TransitionDecision, apply_transition};
+use crate::{EventLog, MatchEvent};
+
+/// Minimal world for `apply_transition`: the transition commits match
+/// state, places the ball, and appends the lifecycle event.
+fn transition_test_world(
+    score: (u8, u8),
+    half: u8,
+) -> (
+    bevy_ecs::prelude::World,
+    bevy_ecs::prelude::Entity,
+    bevy_ecs::prelude::Entity,
+) {
+    use bevy_ecs::prelude::World;
+    use sim_components::{
+        Ball, BallMarker, BallState, MatchClock, PendingBallTouches, Position, Team, TeamId,
+        Velocity,
+    };
+
+    let mut world = World::new();
+    world.insert_resource(Ball {
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: None,
+        touch_history: [None, None],
+        kick_velocity: None,
+    });
+    world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(EventLog::new());
+    let clock = MatchClock {
+        elapsed_ticks: 0,
+        half,
+        added_time_ticks: 0,
+        is_running: true,
+    };
+    world.insert_resource(clock.clone());
+    let match_entity = world.spawn(()).id();
+    world.entity_mut(match_entity).insert(clock);
+    world.insert_resource(Match {
+        id: 1,
+        home_team: match_entity,
+        away_team: match_entity,
+        score,
+        state: MatchState::PreMatch,
+        seed: 99,
+    });
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world.entity_mut(ball_entity).insert(Position(sim_math::Vec2::zero()));
+    world
+        .entity_mut(ball_entity)
+        .insert(Velocity(sim_math::Vec2::zero()));
+    // Two teams with no players: the kickoff taker collapses to
+    // `None`, and the attack directions fall back to the
+    // construction-time convention (home `+1`, away `-1`).
+    let home_players: Vec<bevy_ecs::prelude::Entity> = Vec::new();
+    world.spawn(()).insert(Team::with_attack_direction(
+        TeamId(0),
+        "Home".to_string(),
+        sim_components::Formation::FourFourTwo,
+        sim_components::Mentality::Balance,
+        sim_components::Tactic::Possession,
+        home_players,
+        Vec::new(),
+        1,
+    ));
+    world.spawn(()).insert(Team::with_attack_direction(
+        TeamId(1),
+        "Away".to_string(),
+        sim_components::Formation::FourFourTwo,
+        sim_components::Mentality::Balance,
+        sim_components::Tactic::Possession,
+        Vec::new(),
+        Vec::new(),
+        -1,
+    ));
+    (world, match_entity, ball_entity)
+}
+
+/// Entering `Kickoff` from `PreMatch` emits `kickoff` with
+/// `reason = match_start` and both attack directions.
+#[test]
+fn test_apply_transition_emits_match_start_kickoff() {
+    let (mut world, match_entity, ball_entity) = transition_test_world((0, 0), 1);
+    let decision = TransitionDecision {
+        next_state: MatchState::Kickoff,
+        new_clock: None,
+        place_ball_center: true,
+        apply_kickoff_impulse: false,
+    };
+    apply_transition(
+        &decision,
+        MatchState::PreMatch,
+        match_entity,
+        ball_entity,
+        0,
+        &mut world,
+    );
+    let log = world.resource::<EventLog>();
+    assert_eq!(log.events.len(), 1);
+    let MatchEvent::Kickoff { envelope, payload } = &log.events[0] else {
+        panic!("expected kickoff event");
+    };
+    assert_eq!(envelope.team, Some(sim_components::TeamId(0)));
+    assert_eq!(payload.reason, sim_components::KickoffReason::MatchStart);
+    assert_eq!(payload.taker, None, "no players in this world");
+    assert_eq!(
+        (payload.attack_home, payload.attack_away),
+        (Some(1), Some(-1))
+    );
+}
+
+/// Entering `HalfTime` from `InPlay` emits `half_time` with the running
+/// score.
+#[test]
+fn test_apply_transition_emits_half_time_with_score() {
+    let (mut world, match_entity, ball_entity) = transition_test_world((2, 1), 1);
+    let decision = TransitionDecision {
+        next_state: MatchState::HalfTime,
+        new_clock: Some(MatchClock {
+            elapsed_ticks: time::HALF_LENGTH_TICKS,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: false,
+        }),
+        place_ball_center: false,
+        apply_kickoff_impulse: false,
+    };
+    apply_transition(
+        &decision,
+        MatchState::InPlay,
+        match_entity,
+        ball_entity,
+        time::HALF_LENGTH_TICKS,
+        &mut world,
+    );
+    let log = world.resource::<EventLog>();
+    assert_eq!(log.events.len(), 1);
+    let MatchEvent::HalfTime { envelope, payload } = &log.events[0] else {
+        panic!("expected half_time event");
+    };
+    assert_eq!(envelope.team, None, "no team is credited");
+    assert_eq!(payload.score, (2, 1), "running score at the whistle");
+}
+
+/// Entering `FullTime` from `InPlay` emits `full_time` with the final
+/// score, an event count including itself, and the state hash.
+#[test]
+fn test_apply_transition_emits_full_time_with_count_and_hash() {
+    let (mut world, match_entity, ball_entity) = transition_test_world((3, 1), 2);
+    let decision = TransitionDecision {
+        next_state: MatchState::FullTime,
+        new_clock: Some(MatchClock {
+            elapsed_ticks: time::HALF_LENGTH_TICKS,
+            half: 2,
+            added_time_ticks: 0,
+            is_running: false,
+        }),
+        place_ball_center: false,
+        apply_kickoff_impulse: false,
+    };
+    apply_transition(
+        &decision,
+        MatchState::InPlay,
+        match_entity,
+        ball_entity,
+        2 * time::HALF_LENGTH_TICKS,
+        &mut world,
+    );
+    let log = world.resource::<EventLog>();
+    assert_eq!(log.events.len(), 1);
+    let MatchEvent::FullTime { envelope, payload } = &log.events[0] else {
+        panic!("expected full_time event");
+    };
+    assert_eq!(envelope.team, None);
+    assert_eq!(payload.score, (3, 1));
+    assert_eq!(
+        payload.event_count, 1,
+        "event count includes the full_time event itself"
+    );
+    assert_eq!(
+        payload.added_time_ticks,
+        (0, 0),
+        "no stoppages in this world, no added time"
+    );
+    assert_ne!(payload.state_hash, 0, "state hash is populated");
+}

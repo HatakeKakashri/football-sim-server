@@ -419,7 +419,10 @@ fn test_oob_restart_registers_restart_touch() {
     let pending = world.resource::<PendingBallTouches>();
     assert_eq!(
         pending.0,
-        vec![LastTouch::by_player(sim_components::TeamId(1), taker, TouchKind::Restart)],
+        vec![
+            LastTouch::by_player(sim_components::TeamId(1), taker, TouchKind::Restart)
+                .with_tick(50)
+        ],
         "restart_system must push the Restart touch to PendingBallTouches"
     );
 }
@@ -1029,11 +1032,10 @@ fn test_oob_restart_taker_resolves_after_toucher_despawn() {
     let pending = world.resource::<PendingBallTouches>();
     assert_eq!(
         pending.0,
-        vec![LastTouch::by_player(
-            sim_components::TeamId(1),
-            taker,
-            TouchKind::Restart,
-        )],
+        vec![
+            LastTouch::by_player(sim_components::TeamId(1), taker, TouchKind::Restart,)
+                .with_tick(50)
+        ],
         "restart taker is the opposite of the denormalised toucher team, \
          resolved without the despawned entity"
     );

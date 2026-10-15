@@ -2,7 +2,7 @@
 //! uses to fold enum variants into the FNV-1a mix without depending on
 //! the variants' `Debug` representation.
 
-use bevy_ecs::prelude::Entity;
+use bevy_ecs::prelude::{Entity, World};
 use sim_components::{BallState, MatchClock, MatchState, Role, RoleComponent, TouchKind};
 
 use super::Simulation;
@@ -67,119 +67,148 @@ impl Simulation {
     /// detection meaningful. RNG-state divergence still surfaces on the
     /// next tick through the downstream state it influences (positions,
     /// velocities, stamina deltas, etc.), just with one tick of latency.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "single FNV-1a mix over entities + Resources; splitting would scatter the per-arm schema"
-    )]
     pub fn get_state_hash(&self) -> u64 {
-        use sim_components::{Match, Player, Position, Skill, Stamina, Team, Velocity};
+        hash_world(&self.world, self.original_seed)
+    }
+}
 
-        fn mix(h: &mut u64, v: u64) {
-            // FNV-1a: XOR one byte at a time (little-endian) then multiply.
-            let bytes = v.to_le_bytes();
-            for b in bytes {
-                *h ^= u64::from(b);
-                *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+/// Hash a world with an explicit seed (ticket 10).
+///
+/// [`Simulation::get_state_hash`] delegates here so the lifecycle
+/// driver — which owns `&mut World` but not the `Simulation` — can
+/// stamp the same hash onto the `full_time` event.
+#[allow(
+    clippy::too_many_lines,
+    reason = "single FNV-1a mix over entities + Resources; splitting would scatter the per-arm schema"
+)]
+pub(super) fn hash_world(world: &World, seed: u64) -> u64 {
+    use sim_components::{Match, Player, Position, Skill, Stamina, Team, Velocity};
+
+    fn mix(h: &mut u64, v: u64) {
+        // FNV-1a: XOR one byte at a time (little-endian) then multiply.
+        let bytes = v.to_le_bytes();
+        for b in bytes {
+            *h ^= u64::from(b);
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+
+    // Collect entities in a deterministic order: by `to_bits()`.
+    let mut entities: Vec<Entity> = world.iter_entities().map(|e| e.id()).collect();
+    entities.sort_by_key(|e| e.to_bits());
+
+    for entity in entities {
+        let er = world.entity(entity);
+        mix(&mut h, entity.to_bits());
+
+        if let Some(p) = er.get::<Position>() {
+            mix(&mut h, u64::from(p.0.x.to_bits()));
+            mix(&mut h, u64::from(p.0.y.to_bits()));
+        }
+        if let Some(v) = er.get::<Velocity>() {
+            mix(&mut h, u64::from(v.0.x.to_bits()));
+            mix(&mut h, u64::from(v.0.y.to_bits()));
+        }
+        if let Some(s) = er.get::<Stamina>() {
+            mix(&mut h, u64::from(s.0.to_bits()));
+        }
+        if let Some(s) = er.get::<Skill>() {
+            mix(&mut h, u64::from(s.0.to_bits()));
+        }
+        if er.get::<sim_components::BallMarker>().is_some() {
+            // Phase C §4.3: ball is tagged with BallMarker. Mix
+            // position/velocity from components (still per-entity) and
+            // ball state from the Ball Resource below.
+            if let Some(pos) = er.get::<Position>() {
+                mix(&mut h, u64::from(pos.0.x.to_bits()));
+                mix(&mut h, u64::from(pos.0.y.to_bits()));
+            }
+            if let Some(vel) = er.get::<Velocity>() {
+                mix(&mut h, u64::from(vel.0.x.to_bits()));
+                mix(&mut h, u64::from(vel.0.y.to_bits()));
             }
         }
-
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-
-        // Collect entities in a deterministic order: by `to_bits()`.
-        let mut entities: Vec<Entity> = self.world.iter_entities().map(|e| e.id()).collect();
-        entities.sort_by_key(|e| e.to_bits());
-
-        for entity in entities {
-            let er = self.world.entity(entity);
-            mix(&mut h, entity.to_bits());
-
-            if let Some(p) = er.get::<Position>() {
-                mix(&mut h, u64::from(p.0.x.to_bits()));
-                mix(&mut h, u64::from(p.0.y.to_bits()));
-            }
-            if let Some(v) = er.get::<Velocity>() {
-                mix(&mut h, u64::from(v.0.x.to_bits()));
-                mix(&mut h, u64::from(v.0.y.to_bits()));
-            }
-            if let Some(s) = er.get::<Stamina>() {
-                mix(&mut h, u64::from(s.0.to_bits()));
-            }
-            if let Some(s) = er.get::<Skill>() {
-                mix(&mut h, u64::from(s.0.to_bits()));
-            }
-            if er.get::<sim_components::BallMarker>().is_some() {
-                // Phase C §4.3: ball is tagged with BallMarker. Mix
-                // position/velocity from components (still per-entity) and
-                // ball state from the Ball Resource below.
-                if let Some(pos) = er.get::<Position>() {
-                    mix(&mut h, u64::from(pos.0.x.to_bits()));
-                    mix(&mut h, u64::from(pos.0.y.to_bits()));
-                }
-                if let Some(vel) = er.get::<Velocity>() {
-                    mix(&mut h, u64::from(vel.0.x.to_bits()));
-                    mix(&mut h, u64::from(vel.0.y.to_bits()));
-                }
-            }
-            if let Some(p) = er.get::<Player>() {
-                mix(&mut h, u64::from(p.team_id.0));
-            }
-            if let Some(rc) = er.get::<RoleComponent>() {
-                mix(&mut h, role_discriminant(rc.0));
-            }
-            if let Some(st) = er.get::<Stamina>() {
-                mix(&mut h, u64::from(st.0.to_bits()));
-            }
-            if let Some(sk) = er.get::<Skill>() {
-                mix(&mut h, u64::from(sk.0.to_bits()));
-            }
-            if let Some(t) = er.get::<Team>() {
-                mix(&mut h, u64::from(t.id.0));
-                mix(&mut h, u64::from(t.attack_direction().cast_unsigned()));
-            }
-            if let Some(clock) = er.get::<MatchClock>() {
-                mix(&mut h, clock.elapsed_ticks);
-                mix(&mut h, u64::from(clock.half));
-                mix(&mut h, clock.added_time_ticks);
-            }
+        if let Some(p) = er.get::<Player>() {
+            mix(&mut h, u64::from(p.team_id.0));
         }
-
-        // Phase C §4.3: `Match` is now a Resource, not a Component. Read
-        // its state from the resource so the hash still reflects match
-        // score and state (the per-entity branch above is a no-op now
-        // since no entity inserts `Match`).
-        if let Some(m) = self.world.get_resource::<Match>() {
-            mix(&mut h, match_state_discriminant(m.state));
-            mix(&mut h, u64::from(m.score.0));
-            mix(&mut h, u64::from(m.score.1));
+        if let Some(rc) = er.get::<RoleComponent>() {
+            mix(&mut h, role_discriminant(rc.0));
         }
+        if let Some(st) = er.get::<Stamina>() {
+            mix(&mut h, u64::from(st.0.to_bits()));
+        }
+        if let Some(sk) = er.get::<Skill>() {
+            mix(&mut h, u64::from(sk.0.to_bits()));
+        }
+        if let Some(t) = er.get::<Team>() {
+            mix(&mut h, u64::from(t.id.0));
+            mix(&mut h, u64::from(t.attack_direction().cast_unsigned()));
+        }
+        if let Some(clock) = er.get::<MatchClock>() {
+            mix(&mut h, clock.elapsed_ticks);
+            mix(&mut h, u64::from(clock.half));
+            mix(&mut h, clock.added_time_ticks);
+        }
+    }
 
-        // Phase C §4.3: `Ball` is also a Resource — mix state/possessor/
-        // last_touch/spin from the resource so the hash reflects the
-        // dynamic ball state in addition to position/velocity (mixed per-
-        // entity above).
-        if let Some(b) = self.world.get_resource::<sim_components::Ball>() {
-            mix(&mut h, u64::from(b.spin.to_bits()));
-            mix(&mut h, ball_state_discriminant(b.state));
+    // Phase C §4.3: `Match` is now a Resource, not a Component. Read
+    // its state from the resource so the hash still reflects match
+    // score and state (the per-entity branch above is a no-op now
+    // since no entity inserts `Match`).
+    if let Some(m) = world.get_resource::<Match>() {
+        mix(&mut h, match_state_discriminant(m.state));
+        mix(&mut h, u64::from(m.score.0));
+        mix(&mut h, u64::from(m.score.1));
+    }
+
+    // Phase C §4.3: `Ball` is also a Resource — mix state/possessor/
+    // last_touch/spin from the resource so the hash reflects the
+    // dynamic ball state in addition to position/velocity (mixed per-
+    // entity above).
+    if let Some(b) = world.get_resource::<sim_components::Ball>() {
+        mix(&mut h, u64::from(b.spin.to_bits()));
+        mix(&mut h, ball_state_discriminant(b.state));
+        mix(
+            &mut h,
+            b.possessor
+                .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
+        );
+        if let Some(touch) = b.last_touch.as_ref() {
+            // Mix the toucher identity and the `TouchKind`.
+            //
+            // `player` and `player_id` are two encodings of the
+            // same identity (the id is minted from the entity's
+            // bits), so mixing only one keeps the hash stable
+            // across the `LastTouch` shape change and avoids
+            // hashing a derived value twice. The `u64::MAX` arm
+            // mirrors the `None` mix for `possessor` above.
+            //
+            // `team` is deliberately not mixed: it is denormalised
+            // from the same `Player` component that `player` points
+            // at, so it carries no state the identity does not
+            // already imply. Mixing it would let two diverged
+            // worlds collide.
             mix(
                 &mut h,
-                b.possessor
+                touch
+                    .player
                     .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
             );
-            if let Some(touch) = b.last_touch.as_ref() {
-                // Mix the toucher identity and the `TouchKind`.
-                //
-                // `player` and `player_id` are two encodings of the
-                // same identity (the id is minted from the entity's
-                // bits), so mixing only one keeps the hash stable
-                // across the `LastTouch` shape change and avoids
-                // hashing a derived value twice. The `u64::MAX` arm
-                // mirrors the `None` mix for `possessor` above.
-                //
-                // `team` is deliberately not mixed: it is denormalised
-                // from the same `Player` component that `player` points
-                // at, so it carries no state the identity does not
-                // already imply. Mixing it would let two diverged
-                // worlds collide.
+            mix(&mut h, touch_kind_discriminant(touch.kind));
+            mix(&mut h, touch.tick);
+        } else {
+            mix(&mut h, u64::MAX);
+            mix(&mut h, u64::MAX);
+        }
+        // Fold the two-deep touch history (PRD §8.5) into the hash
+        // so swaps to the touch path change the hash deterministically.
+        // The newest entry is `touch_history[0]`; the one before is
+        // `touch_history[1]`. Order matters: changing the slide order
+        // changes the hash.
+        for entry in &b.touch_history {
+            if let Some(touch) = entry.as_ref() {
                 mix(
                     &mut h,
                     touch
@@ -187,34 +216,16 @@ impl Simulation {
                         .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
                 );
                 mix(&mut h, touch_kind_discriminant(touch.kind));
+                mix(&mut h, touch.tick);
             } else {
                 mix(&mut h, u64::MAX);
                 mix(&mut h, u64::MAX);
             }
-            // Fold the two-deep touch history (PRD §8.5) into the hash
-            // so swaps to the touch path change the hash deterministically.
-            // The newest entry is `touch_history[0]`; the one before is
-            // `touch_history[1]`. Order matters: changing the slide order
-            // changes the hash.
-            for entry in &b.touch_history {
-                if let Some(touch) = entry.as_ref() {
-                    mix(
-                        &mut h,
-                        touch
-                            .player
-                            .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
-                    );
-                    mix(&mut h, touch_kind_discriminant(touch.kind));
-                } else {
-                    mix(&mut h, u64::MAX);
-                    mix(&mut h, u64::MAX);
-                }
-            }
         }
-
-        // Mix the original seed so same-seed simulations hash identically.
-        mix(&mut h, self.original_seed);
-
-        h
     }
+
+    // Mix the original seed so same-seed simulations hash identically.
+    mix(&mut h, seed);
+
+    h
 }

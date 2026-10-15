@@ -9,7 +9,7 @@ use sim_components::{
 };
 use sim_math::Vec2;
 use sim_physics::{PLAYER_ARRIVAL_DECEL, PLAYER_MAX_ACCEL_PER_TICK, SimRng};
-use sim_rules::PendingPass;
+use sim_rules::{CurrentTick, PendingPass, PendingShot, PendingShotState};
 use sim_telemetry::TelemetryConfig;
 
 /// Monotonic counter for `pass()` flow ids. Two passes share the same
@@ -267,12 +267,18 @@ pub fn player_action_execution_system(
 /// `ball.state == BallState::Free`. Without this, a kicked ball that
 /// decelerates to rest before another player reaches it would silently
 /// re-freeze as "possessed" by the original kicker.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system param set: kick execution needs player/ball state, touch + pass/shot signals, tick, clock and telemetry; splitting would scatter the kick write across systems"
+)]
 pub fn kick_execution_system(
     player_query: Query<(Entity, &Player, &PerceptionSnapshot, &Velocity)>,
     ball_query: Query<&Position, With<BallMarker>>,
     mut ball: ResMut<Ball>,
     mut pending: ResMut<PendingBallTouches>,
     pending_pass: Option<ResMut<PendingPass>>,
+    pending_shot: Option<ResMut<PendingShot>>,
+    current_tick: Option<Res<CurrentTick>>,
     match_clock: Option<Res<MatchClock>>,
     telemetry: Option<Res<TelemetryConfig>>,
 ) {
@@ -322,11 +328,11 @@ pub fn kick_execution_system(
         // applies it to `Ball.last_touch` at the start of the Rules set.
         // The same entity is recorded as both the kicker (during this
         // tick) and the last-toucher (after this tick).
-        pending.0.push(LastTouch::by_player(
-            possessor_player.team_id,
-            possessor,
-            TouchKind::Play,
-        ));
+        let tick = current_tick.as_deref().map_or(0, |t| t.0);
+        pending.0.push(
+            LastTouch::by_player(possessor_player.team_id, possessor, TouchKind::Play)
+                .with_tick(tick),
+        );
         ball.possessor = None;
         // PRD §9.3: a `pass` event is emitted at resolution. The
         // resolver (acquisition, OOB, goal) reads `PendingPass` and
@@ -337,7 +343,35 @@ pub fn kick_execution_system(
         // Only `PassTo` actions register a pending pass. Shots,
         // tackles and movement-driven velocity continuations do not
         // emit `pass` events.
-        if matches!(intent, Intent::Action(ActionIntent::PassTo)) {
+        //
+        // A `ShootAtGoal` kick registers a pending shot instead (ticket
+        // 10): the resolver (acquisition, OOB, goal) reads it and emits
+        // the `shot` event — plus a `save` event when a goalkeeper makes
+        // the stop — with the kick tick and position recorded here.
+        if matches!(intent, Intent::Action(ActionIntent::ShootAtGoal(_))) {
+            // Ball position at the kick. Same defensive `Vec2::zero()`
+            // fallback as the pass arm below for test fixtures without
+            // a ball entity.
+            let kick_pos = ball_query
+                .iter()
+                .next()
+                .map_or(Vec2::zero(), |p| p.0);
+            // `PendingShot` is taken as `Option<ResMut<_>>` so legacy
+            // test worlds that don't register the resource still work.
+            // The real match always registers it via
+            // `Simulation::create_match`.
+            if let Some(mut pending_shot) = pending_shot {
+                pending_shot.0 = Some(PendingShotState {
+                    shooter: possessor,
+                    shooter_team: possessor_player.team_id,
+                    kick_tick: tick,
+                    kick_pos,
+                });
+            }
+            if let Some(mut pending_pass) = pending_pass {
+                let _ = pending_pass.cancel();
+            }
+        } else if matches!(intent, Intent::Action(ActionIntent::PassTo)) {
             // Ball position at the kick (`start`). The position is
             // on the ball entity as a `Position` component; look it
             // up directly. If the entity is missing (test fixture
@@ -363,6 +397,11 @@ pub fn kick_execution_system(
                 pending_pass.kick_tick = kick_tick;
                 pending_pass.kick_position = kick_pos;
             }
+            // A pass kick supersedes any stale pending shot (defensive;
+            // the shot resolver normally drains first — see above).
+            if let Some(mut stale_shot) = pending_shot {
+                stale_shot.0 = None;
+            }
         } else if let Some(mut pending_pass) = pending_pass {
             // Any non-pass kick cancels a stale pending pass. This
             // shouldn't happen in normal play (a player with the
@@ -370,6 +409,11 @@ pub fn kick_execution_system(
             // cancel keeps the resolver from emitting a `pass` for
             // a shot.
             let _ = pending_pass.cancel();
+            // Same for a stale pending shot (defensive; the shot
+            // resolver normally drains first — see above).
+            if let Some(mut stale_shot) = pending_shot {
+                stale_shot.0 = None;
+            }
         }
         // Emit a `pass` flow event when telemetry is on and this was a
         // pass. Shots / tackles don't carry identity of a "receiver", so

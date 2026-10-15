@@ -131,6 +131,114 @@ fn event_log_is_deterministic_full_match() {
     }
 }
 
+/// Ticket 10 over a full match: every `goal` has a scorer with a
+/// running score that folds correctly (A7); the lifecycle events
+/// (`kickoff` × half starts + after goals, one `half_time`, one
+/// trailing `full_time`) are present; `full_time` carries the event
+/// count and the live state hash. `#[ignore]`d (minutes-long).
+///
+/// ```text
+/// cargo test -p sim-core --lib -- --ignored full_match_lifecycle_events_and_score_fold
+/// ```
+#[test]
+#[ignore = "full-match lifecycle-event check is minutes-long; run only when verifying end-to-end behaviour"]
+fn full_match_lifecycle_events_and_score_fold() {
+    use sim_components::{KickoffReason, TeamId};
+
+    let (sim, log, hash) = play_to_full_time(12345);
+    assert!(
+        check_gapless_seq(&log).is_none(),
+        "event log has seq gaps"
+    );
+
+    // Lifecycle shape: one match-start kickoff, one second-half
+    // kickoff, exactly one half_time, exactly one trailing full_time.
+    // After-goal kickoffs are at most one per goal (a goal inside the
+    // last 60 ticks of a half never restarts before the whistle).
+    let mut match_starts = 0_u32;
+    let mut second_halfs = 0_u32;
+    let mut after_goals = 0_u32;
+    let mut half_times = 0_u32;
+    for event in &log.events {
+        if let MatchEvent::Kickoff { payload, .. } = event {
+            match payload.reason {
+                KickoffReason::MatchStart => match_starts += 1,
+                KickoffReason::SecondHalf => second_halfs += 1,
+                KickoffReason::AfterGoal => after_goals += 1,
+            }
+        }
+        if matches!(event, MatchEvent::HalfTime { .. }) {
+            half_times += 1;
+        }
+    }
+    assert_eq!(match_starts, 1, "one match-start kickoff");
+    assert_eq!(second_halfs, 1, "one second-half kickoff");
+    assert_eq!(half_times, 1, "one half_time event");
+
+    // Goal fold (A7): every goal has a scorer, the running score in
+    // each event equals the per-team count at emission time, and the
+    // totals equal the final score.
+    let mut home = 0_u8;
+    let mut away = 0_u8;
+    let mut goals = 0_u32;
+    for event in &log.events {
+        if let MatchEvent::Goal { envelope, payload } = event {
+            goals += 1;
+            assert!(
+                payload.scorer.is_some(),
+                "every goal event has a scorer"
+            );
+            if payload.own_goal {
+                assert_eq!(
+                    payload.assister, None,
+                    "own goals carry no assister"
+                );
+            }
+            if envelope.team == Some(TeamId(0)) {
+                home += 1;
+            } else {
+                away += 1;
+            }
+            assert_eq!(
+                payload.score,
+                (home, away),
+                "goal running score must equal the per-team goal count"
+            );
+        }
+    }
+    assert!(
+        after_goals <= goals,
+        "at most one after-goal kickoff per goal"
+    );
+    let score = sim
+        .world()
+        .resource::<sim_components::Match>()
+        .score;
+    assert_eq!(
+        (home, away),
+        score,
+        "final score must equal the count of goal events per team (A7)"
+    );
+
+    // Trailing full_time: event count includes itself, state hash
+    // matches the live hash.
+    let MatchEvent::FullTime { envelope, payload } = log.events.last().expect("log is non-empty")
+    else {
+        panic!("last event must be full_time");
+    };
+    assert_eq!(envelope.team, None);
+    assert_eq!(payload.score, score);
+    assert_eq!(
+        payload.event_count,
+        u64::try_from(log.events.len()).expect("invariant: len fits u64"),
+        "event_count includes the full_time event itself"
+    );
+    assert_eq!(
+        payload.state_hash, hash,
+        "full_time state_hash matches Simulation::get_state_hash"
+    );
+}
+
 /// Every event has the envelope fields populated (PRD §9.1).
 #[test]
 fn events_have_populated_envelope() {

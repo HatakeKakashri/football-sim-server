@@ -107,3 +107,39 @@ fn test_hash_detects_touch_history_change() {
         "Hash failed to detect touch_history perturbation"
     );
 }
+
+/// Ticket 10: the touch registration tick is folded into the state
+/// hash alongside the touch window. Identical touches at different
+/// ticks hash differently, deterministically.
+#[test]
+fn test_hash_detects_touch_tick_change() {
+    use bevy_ecs::prelude::Entity;
+    use sim_components::{Ball, LastTouch, TeamId, TouchKind};
+
+    let seed = 0xABCD_EF01_2345_6789u64;
+    let mut a = Simulation::new(seed);
+    let mut b = Simulation::new(seed);
+
+    for _ in 0..10 {
+        a.tick();
+        b.tick();
+    }
+
+    // Pin both balls to the same touch at the same tick: hashes agree.
+    let fixed = LastTouch::by_player(TeamId(0), Entity::from_raw(0xAB), TouchKind::Play);
+    a.world_mut().resource_mut::<Ball>().last_touch = Some(fixed.with_tick(5));
+    b.world_mut().resource_mut::<Ball>().last_touch = Some(fixed.with_tick(5));
+    assert_eq!(
+        a.get_state_hash(),
+        b.get_state_hash(),
+        "identical touches at identical ticks must hash identically"
+    );
+
+    // Move only sim `a`'s touch one tick forward: hashes diverge.
+    a.world_mut().resource_mut::<Ball>().last_touch = Some(fixed.with_tick(6));
+    assert_ne!(
+        a.get_state_hash(),
+        b.get_state_hash(),
+        "Hash failed to detect touch-tick perturbation"
+    );
+}

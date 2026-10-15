@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sim_math::Vec2;
 
 pub mod ball_touch;
+pub mod event_kinds;
 pub mod formation_slot;
 pub mod intent_dispatch;
 pub mod time;
@@ -11,6 +12,7 @@ pub use ball_touch::{
     BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, PlayerId, RuleEvent,
     TouchKind,
 };
+pub use event_kinds::{KickoffReason, SaveKind, ShotOutcome};
 pub use formation_slot::{FormationSlot, HomeSlot};
 
 #[derive(Component, Debug, Clone)]

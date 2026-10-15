@@ -12,6 +12,7 @@ use sim_components::{
 };
 use sim_math::swept_proximity;
 
+use crate::CurrentTick;
 use crate::constants::SKILL_TOLERANCE;
 
 /// Acquisition radius in metres.
@@ -63,6 +64,7 @@ pub fn possession_resolution_system(
     player_query: Query<(Entity, &Player, &Position, &Velocity, &Skill), With<Player>>,
     mut ball: ResMut<Ball>,
     mut pending: ResMut<PendingBallTouches>,
+    current_tick: Option<Res<CurrentTick>>,
 ) {
     let Ok((ball_pos, ball_vel)) = ball_query.get_single() else {
         return;
@@ -137,9 +139,10 @@ pub fn possession_resolution_system(
         // Push to `PendingBallTouches`; the consumer
         // `apply_ball_touched_system` applies it to `Ball.last_touch`
         // at the start of the Rules set.
-        pending
-            .0
-            .push(LastTouch::by_player(team, entity, TouchKind::Play));
+        let tick = current_tick.as_deref().map_or(0, |t| t.0);
+        pending.0.push(
+            LastTouch::by_player(team, entity, TouchKind::Play).with_tick(tick),
+        );
         ball.possessor = Some(entity);
         ball.state = BallState::Possessed;
     } else {

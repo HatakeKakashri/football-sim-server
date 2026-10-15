@@ -25,6 +25,16 @@ pub struct HalfTimeEntryTick {
     pub tick: Option<u64>,
 }
 
+/// First-half added time in ticks, stashed at the half-time whistle.
+///
+/// The `MatchClock` is per-half and its `added_time_ticks` is
+/// overwritten by the second half, so the `full_time` event reads the
+/// first half's value back from here to report per-half added time
+/// (PRD §9.2). Ticket 11 owns the added-time semantics; this resource
+/// is only the carrier.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct FirstHalfAddedTime(pub u64);
+
 /// Place a single player at `target`, zero velocity, reset intent to
 /// `HoldPosition`. Mirrors the Position into Player.position so any system
 /// that reads the player component sees the same value.
@@ -218,11 +228,15 @@ fn kickoff_taker_team(world: &World) -> sim_components::TeamId {
 /// ball at the center spot if requested, apply the kickoff impulse if
 /// requested, reset the formation when entering `Kickoff`, and commit the
 /// new match state.
+///
+/// `sim_tick` is the global tick the driver is settling (used for touch
+/// timestamps and lifecycle event envelopes).
 pub fn apply_transition(
     decision: &TransitionDecision,
     current_state: MatchState,
     match_entity: Entity,
     ball_entity: Entity,
+    sim_tick: u64,
     world: &mut World,
 ) {
     // Apply clock mutation. Phase F follow-up: MatchClock is a Resource
@@ -262,7 +276,9 @@ pub fn apply_transition(
         // `pick_kickoff_taker` returns `Entity::PLACEHOLDER` when the
         // team has no players; `from_taker` collapses the placeholder
         // case to a team-only touch.
-        let touch = LastTouch::from_taker(kickoff_taker_team, taker_entity, TouchKind::Restart);
+        let touch =
+            LastTouch::from_taker(kickoff_taker_team, taker_entity, TouchKind::Restart)
+                .with_tick(sim_tick);
         world.resource_mut::<PendingBallTouches>().0.push(touch);
     }
     if decision.apply_kickoff_impulse {
@@ -311,6 +327,130 @@ pub fn apply_transition(
 
     // Commit state mutation.
     world.resource_mut::<Match>().state = decision.next_state;
+
+    // Structured lifecycle events (ticket 10): `kickoff` on half
+    // starts, `half_time` at the whistle, `full_time` at the end.
+    // Emitted after the commit so the envelopes read the
+    // post-transition clock (half 2 for the second-half kickoff).
+    emit_transition_event(world, current_state, decision.next_state, sim_tick);
+}
+
+/// Per-team attack directions as `(home, away)`.
+///
+/// Falls back to the construction-time convention (home `+1`, away
+/// `-1`) in worlds without both teams (sparse unit fixtures). A live
+/// `Simulation` always has both teams, so the fallback never fires
+/// there.
+fn attack_directions(world: &mut World) -> (i8, i8) {
+    let mut home_dir = 1;
+    let mut away_dir = -1;
+    let mut query = world.query::<&Team>();
+    for team in query.iter(world) {
+        if team.id == sim_components::TeamId(0) {
+            home_dir = team.attack_direction();
+        } else if team.id == sim_components::TeamId(1) {
+            away_dir = team.attack_direction();
+        }
+    }
+    (home_dir, away_dir)
+}
+
+/// Append the structured event for one lifecycle transition, if the
+/// transition earns one (ticket 10).
+///
+/// - entering `Kickoff`: `kickoff` with `reason = match_start`
+///   (from `PreMatch`) or `second_half` (from `HalfTime`), the taker
+///   team per Law 8, and both attack directions (ends are set for the
+///   half by now — the half-time flip runs before this call).
+/// - entering `HalfTime`: `half_time` with the running score; stashes
+///   the first half's added time for the `full_time` report.
+/// - entering `FullTime`: `full_time` with the final score, the total
+///   event count including itself, the state hash, and per-half added
+///   time.
+///
+/// Worlds without an `EventLog` resource (unit-test fixtures built by
+/// hand) skip emission: the state transition itself still commits.
+fn emit_transition_event(world: &mut World, from: MatchState, to: MatchState, sim_tick: u64) {
+    use super::events::{
+        EventLog, build_full_time_event, build_half_time_event, build_kickoff_event,
+    };
+    use sim_components::{KickoffReason, PlayerId};
+
+    // No log (hand-built test world) → transition only, no event.
+    let seq = match world.get_resource::<EventLog>() {
+        Some(log) => log.next_seq,
+        None => return,
+    };
+    let clock = world.get_resource::<MatchClock>().cloned().unwrap_or(MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: false,
+    });
+
+    // Build the event first (immutable borrows only), then append.
+    // The `full_time` hash reads the whole world, so it must run
+    // before the log's mutable borrow starts.
+    let event = match to {
+        MatchState::Kickoff => {
+            let reason = match from {
+                MatchState::HalfTime => KickoffReason::SecondHalf,
+                _ => KickoffReason::MatchStart,
+            };
+            let taker_team = kickoff_taker_team(world);
+            let taker_entity = pick_kickoff_taker(world, taker_team);
+            let taker = if taker_entity == Entity::PLACEHOLDER {
+                None
+            } else {
+                Some(PlayerId::from_entity(taker_entity))
+            };
+            let (home_dir, away_dir) = attack_directions(world);
+            Some(build_kickoff_event(
+                seq,
+                sim_tick,
+                &clock,
+                taker_team,
+                taker,
+                reason,
+                Some(home_dir),
+                Some(away_dir),
+            ))
+        }
+        MatchState::HalfTime if from == MatchState::InPlay => {
+            let score = world
+                .get_resource::<Match>()
+                .map_or((0, 0), |m| m.score);
+            world.insert_resource(FirstHalfAddedTime(clock.added_time_ticks));
+            Some(build_half_time_event(seq, sim_tick, &clock, score))
+        }
+        MatchState::FullTime if from == MatchState::InPlay => {
+            let (score, seed) = world
+                .get_resource::<Match>()
+                .map_or(((0, 0), 0), |m| (m.score, m.seed));
+            let state_hash = super::state_hash::hash_world(world, seed);
+            let first_half_added = world
+                .get_resource::<FirstHalfAddedTime>()
+                .map_or(0, |r| r.0);
+            // `seq` is the seq this event is about to take, so the
+            // total including itself is `seq + 1`.
+            Some(build_full_time_event(
+                seq,
+                sim_tick,
+                &clock,
+                score,
+                seq + 1,
+                state_hash,
+                (first_half_added, clock.added_time_ticks),
+            ))
+        }
+        _ => None,
+    };
+
+    if let Some(event) = event
+        && let Some(mut log) = world.get_resource_mut::<EventLog>()
+    {
+        log.append(event);
+    }
 }
 
 /// Match state machine driver. Runs once per tick after `schedule.run()` and
@@ -359,6 +499,13 @@ pub fn lifecycle_system(
             return;
         }
 
-        apply_transition(&decision, current_state, match_entity, ball_entity, world);
+        apply_transition(
+            &decision,
+            current_state,
+            match_entity,
+            ball_entity,
+            sim_tick,
+            world,
+        );
     }
 }

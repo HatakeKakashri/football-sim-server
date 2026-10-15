@@ -7,6 +7,7 @@
 pub(crate) mod clock;
 #[cfg(test)]
 mod clock_tests;
+pub mod emit_state;
 pub(crate) mod goals;
 #[cfg(test)]
 mod goals_tests;
@@ -26,6 +27,9 @@ pub(crate) mod touch;
 mod touch_registration_tests;
 
 pub use clock::{added_time_calculation_system, match_duration_enforcement_system};
+pub use emit_state::{
+    GoalForEmit, GoalResolved, KickoffForEmit, KickoffResolved, PendingShot, PendingShotState,
+};
 pub use goals::{goal_detection_system, restart_system};
 pub use out_of_bounds::out_of_bounds_system;
 pub use possession::possession_resolution_system;

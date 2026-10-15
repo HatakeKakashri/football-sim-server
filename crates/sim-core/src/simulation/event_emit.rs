@@ -18,27 +18,50 @@
 //! ## Writers
 //!
 //! - `resolve_pass_events`: emit `pass` events from `PendingPass`
-//!   whenever the ball is acquired (possession resolution) or
-//!   goes OOB. Goal-driven resolution lands in a follow-up
-//!   ticket (10). Clears `PendingPass` after emission.
-//! - `emit_possession_change_on_acquisition`: emit
-//!   `possession_change` whenever the team that owns possession
-//!   changes, with cause `interception` (the only acquisition
-//!   cause in scope for issue 08).
-//! - `emit_possession_change_on_oob`: emit `possession_change`
-//!   with cause `out_of_bounds` when the ball crosses the pitch
-//!   boundary. (Goal-driven `possession_change` is in ticket 10.)
+//!   whenever the ball is acquired (possession resolution), goes OOB,
+//!   or scores a goal. Clears `PendingPass` after emission, and
+//!   drains `GoalForEmit` last (it is the final reader in the chain).
+//! - `resolve_shot_events`: emit `shot` events from `PendingShot`
+//!   on the same three resolutions, plus a companion `save` event
+//!   when an opposing goalkeeper makes the stop.
+//! - `emit_goal_events`: emit `goal` (scorer / own-goal / assister
+//!   per PRD §8.5) plus `possession_change` with cause `goal`.
+//! - `emit_kickoff_restart_events`: emit `kickoff` with
+//!   `reason = after_goal` for post-goal restarts.
+//! - `emit_possession_change_on_acquisition` /
+//!   `..._on_oob`: emit `possession_change` with cause
+//!   `interception` / `out_of_bounds`.
+//! - `emit_oob_and_restart_events`: emit the `out_of_bounds` +
+//!   `restart` pair.
+//!
+//! Lifecycle transitions (`kickoff` on half starts, `half_time`,
+//! `full_time`) are emitted directly by `apply_transition`, which
+//! already owns the world.
 
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallMarker, BallState, MatchClock, Position, PlayerId, TeamId};
+use sim_components::{
+    Ball, BallMarker, BallOutOfBoundsType, BallState, KickoffReason, MatchClock, PlayerId, Position,
+    Role, RoleComponent, SaveKind, ShotOutcome, TeamId, Velocity,
+};
 use sim_math::Vec2;
-use sim_rules::{OobRestartForEmit, PendingOutOfBounds, PendingPass};
+use sim_rules::{GoalForEmit, KickoffForEmit, OobRestartForEmit, PendingOutOfBounds, PendingPass, PendingShot};
 
 use super::SimulationSet;
 use super::events::{
-    EventLog, PossessionChangeCause, RestartKind, build_out_of_bounds_event, build_pass_event,
-    build_possession_change_event, build_restart_event,
+    EventLog, PossessionChangeCause, RestartKind, attribute_goal, build_goal_event,
+    build_kickoff_event, build_out_of_bounds_event, build_pass_event,
+    build_possession_change_event, build_restart_event, build_save_event, build_shot_event,
+    opponent_of,
 };
+
+/// Ball speed at or below which a goalkeeper catches (rather than
+/// parries) a resolved shot, in m/tick.
+///
+/// Placeholder for the Phase 4 goalkeeper mechanics (ticket 20),
+/// which replace this single threshold with the Reflexes / Aerial
+/// Reach / Concentration model. Faster balls are parried; punching
+/// is reserved for cross clearances (aerial play, also Phase 4).
+const SAVE_CATCH_MAX_SPEED: f32 = 0.25;
 
 /// `pass` event resolution: whenever the ball becomes
 /// `Possessed` after a free state and a `PendingPass` is active,
@@ -68,6 +91,7 @@ pub fn resolve_pass_events(
     mut event_log: ResMut<EventLog>,
     mut pending_pass: ResMut<PendingPass>,
     pending_oob: Option<Res<PendingOutOfBounds>>,
+    mut goal_for_emit: Option<ResMut<GoalForEmit>>,
     ball: Res<Ball>,
     ball_query: Query<&Position, With<BallMarker>>,
     clock: Res<MatchClock>,
@@ -102,6 +126,36 @@ pub fn resolve_pass_events(
         event_log.append(event);
         // `PendingOutOfBounds` is drained by `restart_system` later
         // in the same set. Leaving the signal in place is fine.
+    }
+
+    // Goal arm (ticket 10): the ball crossed the line while a pass
+    // was in flight. Resolve with `to = None` and `success = false`
+    // — the pass never reached a teammate.
+    if goal_for_emit
+        .as_deref()
+        .is_some_and(|g| g.0.is_some())
+        && let Some(pass) = pending_pass.take()
+    {
+        let event = build_pass_event(
+            event_log.next_seq,
+            tick,
+            &clock,
+            pass.from_team,
+            pass.from,
+            None,
+            false,
+            pass.kick_tick,
+            pass.kick_position,
+            ball_pos,
+        );
+        event_log.append(event);
+    }
+    // Drain the goal signal. This system is the last reader in the
+    // chain (`emit_goal_events` and `resolve_shot_events` ran
+    // earlier), so clearing here keeps a stale signal from re-firing
+    // on the next tick.
+    if let Some(ref mut slot) = goal_for_emit {
+        slot.0 = None;
     }
 
     // Acquisition arm: the ball is now Possessed and a pass was
@@ -261,6 +315,253 @@ pub fn emit_possession_change_on_oob(
     event_log.possession_team = Some(to_team);
 }
 
+/// `goal` event + goal-driven `possession_change` (PRD §9.2, ticket 10).
+///
+/// Runs in the `Rules` set after `goal_detection_system` has stashed
+/// the resolved data on `GoalForEmit`. Emits the `goal` event first
+/// (scorer / own-goal / assister per PRD §8.5 via [`attribute_goal`]),
+/// then the `possession_change` with cause `goal` to the conceding
+/// team (which takes the next kickoff, Law 10). The cache update keeps
+/// the later kickoff acquisition from double-emitting.
+///
+/// Does **not** drain `GoalForEmit`: the pass and shot resolvers read
+/// the same signal later in the chain, and `resolve_pass_events`
+/// (last) owns the drain.
+pub fn emit_goal_events(
+    mut event_log: ResMut<EventLog>,
+    goal_for_emit: Option<Res<GoalForEmit>>,
+    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    clock: Res<MatchClock>,
+) {
+    let Some(slot) = goal_for_emit.as_deref() else {
+        return;
+    };
+    let Some(resolved) = slot.0 else {
+        return;
+    };
+    let tick = current_tick.map_or(0, |c| c.0);
+    let attribution = attribute_goal(
+        resolved.scorer_team,
+        [
+            resolved.last_touch,
+            resolved.prev_touch,
+            resolved.older_touch,
+        ],
+        resolved.goal_tick,
+    );
+    let goal_event = build_goal_event(
+        event_log.next_seq,
+        tick,
+        &clock,
+        resolved.scorer_team,
+        attribution,
+        resolved.score,
+    );
+    event_log.append(goal_event);
+    // The conceding team takes the next kickoff, so possession moves
+    // to them. Skip the no-op case (e.g. an own goal while the cache
+    // already credits the conceding team).
+    let to_team = opponent_of(resolved.scorer_team);
+    if event_log.possession_team != Some(to_team) {
+        let from_team = event_log.possession_team;
+        let change = build_possession_change_event(
+            event_log.next_seq,
+            tick,
+            &clock,
+            from_team,
+            to_team,
+            PossessionChangeCause::Goal,
+            resolved.last_touch,
+        );
+        event_log.append(change);
+        event_log.possession_team = Some(to_team);
+    }
+}
+
+/// `kickoff` event for post-goal kickoffs (PRD §9.2, ticket 10).
+///
+/// Runs in the `Rules` set after `restart_system` has stashed the
+/// resolved taker on `KickoffForEmit`. Emits with
+/// `reason = after_goal` and no attack directions (ends don't change
+/// after a goal). Lifecycle kickoffs (`match_start`, `second_half`)
+/// are emitted directly by `apply_transition`, which already owns the
+/// world.
+pub fn emit_kickoff_restart_events(
+    mut event_log: ResMut<EventLog>,
+    mut kickoff_for_emit: Option<ResMut<KickoffForEmit>>,
+    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    clock: Res<MatchClock>,
+) {
+    let Some(ref mut slot) = kickoff_for_emit else {
+        return;
+    };
+    let Some(resolved) = slot.0 else {
+        return;
+    };
+    let tick = current_tick.map_or(0, |c| c.0);
+    // Map the (possibly placeholder) entity to a PlayerId. Real
+    // matches always have a player on the taker team so this
+    // resolves to `Some`; sparse test worlds collapse to `None`.
+    let taker = if resolved.taker == Entity::PLACEHOLDER {
+        None
+    } else {
+        Some(PlayerId::from_entity(resolved.taker))
+    };
+    let event = build_kickoff_event(
+        event_log.next_seq,
+        tick,
+        &clock,
+        resolved.taker_team,
+        taker,
+        KickoffReason::AfterGoal,
+        None,
+        None,
+    );
+    event_log.append(event);
+    slot.0 = None;
+}
+
+/// `shot` (plus `save`) resolution (PRD §9.2, ticket 10).
+///
+/// Runs in the `Rules` set while `GoalForEmit` and
+/// `OobRestartForEmit` are still populated (before the OOB emitter
+/// drains its slot), so all three resolution arms see the same-tick
+/// signals:
+///
+/// - goal fired on this tick: the pending shot scored
+///   (`on_target`, `goal`). Sound because the ball is single: a still
+///   pending shot with no intervening acquisition means the shot went
+///   straight in.
+/// - OOB resolved on this tick: a corner means the shot was stopped on
+///   the line (`on_target`, `blocked`); a throw-in or goal kick means
+///   it missed (`off_target`).
+/// - acquisition on this tick: an opposing goalkeeper means a save
+///   (`on_target`, `saved`, plus a same-tick `save` event); anyone
+///   else means the shot was blocked or gathered (`blocked`), except
+///   the shooter's own keeper gathering it (`off_target`).
+///
+/// The mapping is a documented placeholder: Phase 4 mechanics
+/// (ticket 20) refine the `outcome` distribution and the catch/parry
+/// rule. The `post` outcome has no producer yet (no post geometry).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system param set: standard Rules-set emitters all carry similar param lists; splitting would scatter shot/save resolution across systems"
+)]
+pub fn resolve_shot_events(
+    mut event_log: ResMut<EventLog>,
+    mut pending_shot: Option<ResMut<PendingShot>>,
+    goal_for_emit: Option<Res<GoalForEmit>>,
+    oob_for_emit: Option<Res<OobRestartForEmit>>,
+    ball: Res<Ball>,
+    ball_vel: Query<&Velocity, With<BallMarker>>,
+    team_query: Query<(Entity, &sim_components::TeamIdComponent, Option<&RoleComponent>)>,
+    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    clock: Res<MatchClock>,
+) {
+    let Some(ref mut slot) = pending_shot else {
+        return;
+    };
+    let Some(shot_state) = slot.0 else {
+        return;
+    };
+    let tick = current_tick.map_or(0, |c| c.0);
+    let shooter_id = PlayerId::from_entity(shot_state.shooter);
+
+    // Goal arm: the shot went straight in.
+    if goal_for_emit
+        .as_deref()
+        .is_some_and(|g| g.0.is_some())
+    {
+        let event = build_shot_event(
+            event_log.next_seq,
+            tick,
+            &clock,
+            shot_state.shooter_team,
+            shooter_id,
+            true,
+            ShotOutcome::Goal,
+        );
+        event_log.append(event);
+        slot.0 = None;
+        return;
+    }
+
+    // OOB arm: resolved restart kind decides on-target vs off-target.
+    if let Some(resolved) = oob_for_emit.as_deref().and_then(|o| o.0) {
+        let (on_target, outcome) = match resolved.oob_type {
+            BallOutOfBoundsType::Corner => (true, ShotOutcome::Blocked),
+            BallOutOfBoundsType::ThrowIn | BallOutOfBoundsType::GoalKick => {
+                (false, ShotOutcome::OffTarget)
+            }
+        };
+        let event = build_shot_event(
+            event_log.next_seq,
+            tick,
+            &clock,
+            shot_state.shooter_team,
+            shooter_id,
+            on_target,
+            outcome,
+        );
+        event_log.append(event);
+        slot.0 = None;
+        return;
+    }
+
+    // Acquisition arm: whoever holds the ball now resolved the shot.
+    if ball.state == BallState::Possessed
+        && let Some(possessor) = ball.possessor
+        && let Some((_, team, role)) = team_query.iter().find(|(e, _, _)| *e == possessor)
+    {
+        let is_keeper = role.is_some_and(|r| r.0 == Role::Goalkeeper);
+        let (on_target, outcome) = if team.0 == shot_state.shooter_team {
+            // Own side gathered it: the shooter's keeper collecting a
+            // back-heeled effort (off target); a teammate gathering a
+            // rebound (blocked in spirit — it never reached the goal).
+            if is_keeper {
+                (false, ShotOutcome::OffTarget)
+            } else {
+                (true, ShotOutcome::Blocked)
+            }
+        } else if is_keeper {
+            (true, ShotOutcome::Saved)
+        } else {
+            (true, ShotOutcome::Blocked)
+        };
+        let shot_event = build_shot_event(
+            event_log.next_seq,
+            tick,
+            &clock,
+            shot_state.shooter_team,
+            shooter_id,
+            on_target,
+            outcome,
+        );
+        event_log.append(shot_event);
+        // A goalkeeper stop earns the companion `save` event on the
+        // next `seq` (same tick).
+        if outcome == ShotOutcome::Saved {
+            let ball_speed = ball_vel.iter().next().map_or(0.0, |v| v.0.length());
+            let kind = if ball_speed <= SAVE_CATCH_MAX_SPEED {
+                SaveKind::Catch
+            } else {
+                SaveKind::Parry
+            };
+            let save = build_save_event(
+                event_log.next_seq,
+                tick,
+                &clock,
+                team.0,
+                PlayerId::from_entity(possessor),
+                shooter_id,
+                kind,
+            );
+            event_log.append(save);
+        }
+        slot.0 = None;
+    }
+}
+
 /// Emit the `out_of_bounds` and `restart` event pair (PRD §9.2,
 /// ticket 09).
 ///
@@ -356,23 +657,32 @@ pub fn register_event_systems(schedule: &mut Schedule) {
     // their signals. The order is:
     // 1. `out_of_bounds_system` (writes `PendingOutOfBounds`)
     // 2. `possession_resolution_system` (sets `Ball.possessor`)
-    // 3. `restart_system` (consumes OOB, stashes `OobRestartForEmit`)
-    // 4. `emit_oob_and_restart_events` (reads OOB emit slot)
-    // 5. `emit_possession_change_on_oob` (reads OOB signal — already
-    //    consumed by restart, so its `get()` returns None on the
-    //    OOB tick; this only fires on the next acquisition tick).
-    // 6. `emit_possession_change_on_acquisition` (reads
-    //    `Ball.possessor`)
-    // 7. `resolve_pass_events` (reads both signals to resolve
-    //    the pending pass).
+    // 3. `restart_system` (consumes OOB, stashes `OobRestartForEmit`;
+    //    consumes post-goal kickoff, stashes `KickoffForEmit`)
+    // 4. `goal_detection_system` (credits the score, stashes
+    //    `GoalForEmit`)
+    // 5. `resolve_shot_events` (reads `GoalForEmit` +
+    //    `OobRestartForEmit` + `Ball`; emits `shot`, then `save`)
+    // 6. `emit_goal_events` (reads `GoalForEmit`; emits `goal`, then
+    //    `possession_change` with cause `goal`)
+    // 7. `emit_kickoff_restart_events` (drains `KickoffForEmit`;
+    //    emits `kickoff` with `reason = after_goal`)
+    // 8. `emit_oob_and_restart_events` (drains `OobRestartForEmit`)
+    // 9. `emit_possession_change_on_oob` / `..._on_acquisition`
+    // 10. `resolve_pass_events` (reads both signals to resolve
+    //    the pending pass; drains `GoalForEmit` last).
     //
-    // The OOB+restart pair is emitted back-to-back (steps 4
-    // produces `out_of_bounds` at seq N, then `restart` at seq N+1)
-    // to satisfy the ticket 09 ordering invariant. Possession_change
-    // follows at seq N+2 — its placement is irrelevant to the
-    // invariant, which is about OOB→restart adjacency.
+    // Shot/goal ordering is causal: the resolving `shot` (+ `save`)
+    // precedes the `goal` it produced. The OOB+restart pair is
+    // emitted back-to-back (one step produces `out_of_bounds` at seq
+    // N, then `restart` at seq N+1) to satisfy the ticket 09 ordering
+    // invariant. Possession_change follows wherever it falls — its
+    // placement is irrelevant to that invariant.
     schedule.add_systems(
         (
+            resolve_shot_events,
+            emit_goal_events,
+            emit_kickoff_restart_events,
             emit_oob_and_restart_events,
             emit_possession_change_on_oob,
             emit_possession_change_on_acquisition,

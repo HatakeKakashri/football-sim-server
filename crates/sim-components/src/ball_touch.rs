@@ -161,6 +161,13 @@ pub struct LastTouch {
     pub player: Option<Entity>,
     pub player_id: Option<PlayerId>,
     pub kind: TouchKind,
+    /// Global simulation tick at which the touch was registered.
+    ///
+    /// Writers stamp this via [`Self::with_tick`]; `0` means
+    /// "unknown" (hand-built records in tests and legacy writers).
+    /// Goal attribution treats `0` as within the assist window
+    /// rather than inventing a cutoff (PRD §8.5).
+    pub tick: u64,
 }
 
 impl LastTouch {
@@ -173,6 +180,7 @@ impl LastTouch {
             player: Some(player),
             player_id: Some(PlayerId::from_entity(player)),
             kind,
+            tick: 0,
         }
     }
 
@@ -186,7 +194,18 @@ impl LastTouch {
             player: None,
             player_id: None,
             kind,
+            tick: 0,
         }
+    }
+
+    /// Stamp the registration tick onto a touch built by one of the
+    /// constructors above. Writers call this with the live
+    /// `CurrentTick` so downstream readers (goal attribution's
+    /// 10 s assist window, PRD §8.5) can compare touch recency.
+    #[must_use]
+    pub const fn with_tick(mut self, tick: u64) -> Self {
+        self.tick = tick;
+        self
     }
 
     /// Register a touch from a (possibly placeholder) taker entity.

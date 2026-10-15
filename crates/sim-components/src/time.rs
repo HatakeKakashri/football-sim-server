@@ -15,6 +15,11 @@ pub const HALF_LENGTH_TICKS: u64 = MINUTES_PER_HALF * SECONDS_PER_MINUTE * TICKS
 /// Halftime break duration in simulation ticks.
 pub const HALFTIME_BREAK_TICKS: u64 = 18;
 
+/// Assist window for goal attribution (PRD §8.5): the previous `Play`
+/// touch on the scoring team only counts as an assist when it happened
+/// within the last 10 s of game time.
+pub const ASSIST_WINDOW_TICKS: u64 = 10 * TICKS_PER_SECOND;
+
 /// Total match length in ticks (2 halves + halftime).
 pub const TOTAL_MATCH_TICKS: u64 = 2 * HALF_LENGTH_TICKS + HALFTIME_BREAK_TICKS;
 

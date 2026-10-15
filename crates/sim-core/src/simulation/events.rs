@@ -40,8 +40,10 @@
 
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
-use sim_components::time::HALF_LENGTH_TICKS;
-use sim_components::{LastTouch, MatchClock, PlayerId, TeamId};
+use sim_components::time::{ASSIST_WINDOW_TICKS, HALF_LENGTH_TICKS};
+use sim_components::{
+    KickoffReason, LastTouch, MatchClock, PlayerId, SaveKind, ShotOutcome, TeamId, TouchKind,
+};
 use sim_math::Vec2;
 
 /// Discriminator for the small set of event types the MVP wires up.
@@ -58,6 +60,12 @@ pub enum EventType {
     /// on the payload as [`RestartKind`]; the envelope's `type`
     /// discriminator is the single `restart` field per PRD §9.1.
     Restart,
+    Goal,
+    Shot,
+    Save,
+    Kickoff,
+    HalfTime,
+    FullTime,
 }
 
 impl EventType {
@@ -69,6 +77,12 @@ impl EventType {
             Self::PossessionChange => "possession_change",
             Self::OutOfBounds => "out_of_bounds",
             Self::Restart => "restart",
+            Self::Goal => "goal",
+            Self::Shot => "shot",
+            Self::Save => "save",
+            Self::Kickoff => "kickoff",
+            Self::HalfTime => "half_time",
+            Self::FullTime => "full_time",
         }
     }
 }
@@ -245,6 +259,164 @@ pub struct RestartEventPayload {
     pub kind: RestartKind,
 }
 
+/// `goal` event payload (PRD §9.2, ticket 10).
+///
+/// The scoring team lives on the envelope (`team`); the running score
+/// after the goal lives here so a consumer can fold the table without
+/// joining the two. `scorer` is `None` only when no `Play` touch is on
+/// record at all (a wiring gap the rule engine debug-asserts against);
+/// a live match always populates it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoalEventPayload {
+    /// Last `Play` toucher (PRD §8.5).
+    pub scorer: Option<PlayerId>,
+    /// Previous `Play` toucher on the scoring team within the last
+    /// 10 s of game time, if any; always `None` for own goals.
+    pub assister: Option<PlayerId>,
+    /// `true` when the scorer plays for the conceding team.
+    pub own_goal: bool,
+    /// Running score after the goal, `(home, away)`.
+    pub score: (u8, u8),
+}
+
+/// Attribution result for one goal (PRD §8.5).
+///
+/// Computed by [`attribute_goal`] from the scoring team and the
+/// two-deep touch window the rule engine captured at the goal tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GoalAttribution {
+    /// Last `Play` toucher, if any.
+    pub scorer: Option<PlayerId>,
+    /// Previous `Play` toucher on the scoring team within
+    /// [`ASSIST_WINDOW_TICKS`], if any; `None` for own goals.
+    pub assister: Option<PlayerId>,
+    /// `true` when the scorer plays for the conceding team.
+    pub own_goal: bool,
+}
+
+/// Attribute scorer / assister / own-goal for one goal (PRD §8.5).
+///
+/// `touches` is the newest-first window `[last_touch, history[0],
+/// history[1]]` captured at the goal tick. The scorer is the most
+/// recent `Play` touch (restart placements don't shoot); when that
+/// player is on the conceding team the goal is an own goal with no
+/// assister. Otherwise the assister is the next most recent `Play`
+/// touch on the scoring team within [`ASSIST_WINDOW_TICKS`] of
+/// `goal_tick`. A touch with `tick == 0` ("unknown", from hand-built
+/// records) counts as within the window rather than inventing a
+/// cutoff.
+#[must_use]
+pub fn attribute_goal(
+    scoring_team: TeamId,
+    touches: [Option<LastTouch>; 3],
+    goal_tick: u64,
+) -> GoalAttribution {
+    let mut plays = touches.into_iter().flatten().filter(|t| t.kind == TouchKind::Play);
+    let Some(scorer_touch) = plays.next() else {
+        return GoalAttribution {
+            scorer: None,
+            assister: None,
+            own_goal: false,
+        };
+    };
+    if scorer_touch.team != scoring_team {
+        return GoalAttribution {
+            scorer: scorer_touch.player_id,
+            assister: None,
+            own_goal: true,
+        };
+    }
+    let assister = plays
+        .filter(|t| t.team == scoring_team)
+        .find(|t| t.tick == 0 || goal_tick.saturating_sub(t.tick) <= ASSIST_WINDOW_TICKS)
+        .and_then(|t| t.player_id);
+    GoalAttribution {
+        scorer: scorer_touch.player_id,
+        assister,
+        own_goal: false,
+    }
+}
+
+/// `shot` event payload (PRD §9.2, ticket 10).
+///
+/// Emitted at resolution (the ball's next acquisition, OOB, or goal),
+/// like `pass`: the envelope `tick` is the resolution tick. The
+/// envelope `team` is the shooter's team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShotEventPayload {
+    /// Player who shot.
+    pub shooter: PlayerId,
+    /// `true` when the shot was on target (would have scored without
+    /// a stop: `goal` / `saved` / `blocked` outcomes).
+    pub on_target: bool,
+    /// How the shot resolved.
+    pub outcome: ShotOutcome,
+}
+
+/// `save` event payload (PRD §9.2, ticket 10).
+///
+/// Emitted alongside the resolving `shot` event (same tick, next
+/// `seq`) whenever a goalkeeper makes the stop. The envelope `team`
+/// is the keeper's team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveEventPayload {
+    /// Goalkeeper who made the save.
+    pub keeper: PlayerId,
+    /// Player whose shot was saved.
+    pub shooter: PlayerId,
+    /// How the keeper dealt with the ball.
+    pub kind: SaveKind,
+}
+
+/// `kickoff` event payload (PRD §9.2, ticket 10).
+///
+/// The envelope `team` is the taker team (Law 8: the side kicking
+/// off). `attack_home` / `attack_away` carry the per-team attack
+/// direction (`+1` = attacking `x = PITCH_LENGTH`, `-1` = attacking
+/// `x = 0`) on half starts (`match_start`, `second_half`); they are
+/// `None` for `after_goal` kickoffs, where ends don't change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KickoffEventPayload {
+    /// Player taking the kickoff. `None` in test worlds with no
+    /// resolvable player on the taker team.
+    pub taker: Option<PlayerId>,
+    /// Why the kickoff was taken.
+    pub reason: KickoffReason,
+    /// Home team's attack direction at the kickoff, if applicable.
+    pub attack_home: Option<i8>,
+    /// Away team's attack direction at the kickoff, if applicable.
+    pub attack_away: Option<i8>,
+}
+
+/// `half_time` event payload (PRD §9.2, ticket 10).
+///
+/// The envelope `team` is `None` (no team is credited). Carries the
+/// running score at the whistle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HalfTimePayload {
+    /// Running score at half-time, `(home, away)`.
+    pub score: (u8, u8),
+}
+
+/// `full_time` event payload (PRD §9.2, ticket 10).
+///
+/// The envelope `team` is `None`. Carries the final score (which the
+/// A7 invariant checks against the count of `goal` events per team),
+/// the total event count including this event, the deterministic
+/// state hash, and per-half added time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FullTimePayload {
+    /// Final score, `(home, away)`.
+    pub score: (u8, u8),
+    /// Total events in the log including this `full_time` event.
+    pub event_count: u64,
+    /// Deterministic state hash at full time (same value as
+    /// `Simulation::get_state_hash`).
+    pub state_hash: u64,
+    /// Added time per half in ticks, `(first, second)`.
+    pub added_time_ticks: (u64, u64),
+}
+
 /// Discriminated union of every event payload in the MVP log.
 ///
 /// Internal representation: tagged enum so writers construct one
@@ -270,6 +442,30 @@ pub enum MatchEvent {
         envelope: EventEnvelope,
         payload: RestartEventPayload,
     },
+    Goal {
+        envelope: EventEnvelope,
+        payload: GoalEventPayload,
+    },
+    Shot {
+        envelope: EventEnvelope,
+        payload: ShotEventPayload,
+    },
+    Save {
+        envelope: EventEnvelope,
+        payload: SaveEventPayload,
+    },
+    Kickoff {
+        envelope: EventEnvelope,
+        payload: KickoffEventPayload,
+    },
+    HalfTime {
+        envelope: EventEnvelope,
+        payload: HalfTimePayload,
+    },
+    FullTime {
+        envelope: EventEnvelope,
+        payload: FullTimePayload,
+    },
 }
 
 impl MatchEvent {
@@ -280,7 +476,13 @@ impl MatchEvent {
             Self::Pass { envelope, .. }
             | Self::PossessionChange { envelope, .. }
             | Self::OutOfBounds { envelope, .. }
-            | Self::Restart { envelope, .. } => envelope,
+            | Self::Restart { envelope, .. }
+            | Self::Goal { envelope, .. }
+            | Self::Shot { envelope, .. }
+            | Self::Save { envelope, .. }
+            | Self::Kickoff { envelope, .. }
+            | Self::HalfTime { envelope, .. }
+            | Self::FullTime { envelope, .. } => envelope,
         }
     }
 
@@ -292,12 +494,22 @@ impl MatchEvent {
             Self::PossessionChange { .. } => EventType::PossessionChange,
             Self::OutOfBounds { .. } => EventType::OutOfBounds,
             Self::Restart { .. } => EventType::Restart,
+            Self::Goal { .. } => EventType::Goal,
+            Self::Shot { .. } => EventType::Shot,
+            Self::Save { .. } => EventType::Save,
+            Self::Kickoff { .. } => EventType::Kickoff,
+            Self::HalfTime { .. } => EventType::HalfTime,
+            Self::FullTime { .. } => EventType::FullTime,
         }
     }
 }
 
 /// Flat wire serialisation: envelope fields and payload fields
 /// at the same JSON level (PRD §9.1 + §9.2).
+#[allow(
+    clippy::too_many_lines,
+    reason = "flat-wire serialisation: one match arm per event-type with its own payload fields; splitting would scatter the field-to-wire map across helpers"
+)]
 impl Serialize for MatchEvent {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
@@ -374,6 +586,104 @@ impl Serialize for MatchEvent {
                 map.serialize_entry("kind", &payload.kind)?;
                 map.end()
             }
+            Self::Goal { envelope, payload } => {
+                // 7 envelope + 4 goal payload fields = 11. The
+                // envelope's `team` is the scoring team (PRD §9.2
+                // `team`); the running score is the payload's.
+                let mut map = ser.serialize_map(Some(11))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "goal")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("scorer", &payload.scorer)?;
+                map.serialize_entry("assister", &payload.assister)?;
+                map.serialize_entry("own_goal", &payload.own_goal)?;
+                map.serialize_entry("score", &payload.score)?;
+                map.end()
+            }
+            Self::Shot { envelope, payload } => {
+                // 7 envelope + 3 shot payload fields = 10. The
+                // envelope's `team` is the shooter's team.
+                let mut map = ser.serialize_map(Some(10))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "shot")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("shooter", &payload.shooter)?;
+                map.serialize_entry("on_target", &payload.on_target)?;
+                map.serialize_entry("outcome", &payload.outcome)?;
+                map.end()
+            }
+            Self::Save { envelope, payload } => {
+                // 7 envelope + 3 save payload fields = 10. The
+                // envelope's `team` is the keeper's team.
+                let mut map = ser.serialize_map(Some(10))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "save")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("keeper", &payload.keeper)?;
+                map.serialize_entry("shooter", &payload.shooter)?;
+                map.serialize_entry("kind", &payload.kind)?;
+                map.end()
+            }
+            Self::Kickoff { envelope, payload } => {
+                // 7 envelope + 4 kickoff payload fields = 11. The
+                // envelope's `team` is the taker team (Law 8).
+                let mut map = ser.serialize_map(Some(11))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "kickoff")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("taker", &payload.taker)?;
+                map.serialize_entry("reason", &payload.reason)?;
+                map.serialize_entry("attack_home", &payload.attack_home)?;
+                map.serialize_entry("attack_away", &payload.attack_away)?;
+                map.end()
+            }
+            Self::HalfTime { envelope, payload } => {
+                // 7 envelope + 1 half_time payload field = 8. No team
+                // is credited (`team` is null).
+                let mut map = ser.serialize_map(Some(8))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "half_time")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("score", &payload.score)?;
+                map.end()
+            }
+            Self::FullTime { envelope, payload } => {
+                // 7 envelope + 4 full_time payload fields = 11. No
+                // team is credited (`team` is null).
+                let mut map = ser.serialize_map(Some(11))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "full_time")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("score", &payload.score)?;
+                map.serialize_entry("event_count", &payload.event_count)?;
+                map.serialize_entry("state_hash", &payload.state_hash)?;
+                map.serialize_entry("added_time_ticks", &payload.added_time_ticks)?;
+                map.end()
+            }
         }
     }
 }
@@ -428,7 +738,30 @@ impl<'de> Deserialize<'de> for MatchEvent {
             // restart payload
             taker: Option<Option<PlayerId>>,
             at: Option<[f32; 2]>,
-            kind: Option<RestartKind>,
+            // `kind` is shared by `restart` (throw_in / goal_kick /
+            // corner) and `save` (catch / parry / punch), whose value
+            // domains don't overlap. It is captured raw and
+            // interpreted per event type below.
+            kind_raw: Option<String>,
+            // goal payload
+            scorer: Option<Option<PlayerId>>,
+            assister: Option<Option<PlayerId>>,
+            own_goal: Option<bool>,
+            score: Option<(u8, u8)>,
+            // shot payload
+            shooter: Option<PlayerId>,
+            on_target: Option<bool>,
+            outcome: Option<ShotOutcome>,
+            // save payload
+            keeper: Option<PlayerId>,
+            // kickoff payload
+            reason: Option<KickoffReason>,
+            attack_home: Option<Option<i8>>,
+            attack_away: Option<Option<i8>>,
+            // full_time payload
+            event_count: Option<u64>,
+            state_hash: Option<u64>,
+            added_time_ticks: Option<(u64, u64)>,
         }
 
         struct EventVisitor;
@@ -466,7 +799,21 @@ impl<'de> Deserialize<'de> for MatchEvent {
                         "restart" => sink.restart = Some(map.next_value()?),
                         "taker" => sink.taker = Some(map.next_value()?),
                         "at" => sink.at = Some(map.next_value()?),
-                        "kind" => sink.kind = Some(map.next_value()?),
+                        "kind" => sink.kind_raw = Some(map.next_value()?),
+                        "scorer" => sink.scorer = Some(map.next_value()?),
+                        "assister" => sink.assister = Some(map.next_value()?),
+                        "own_goal" => sink.own_goal = Some(map.next_value()?),
+                        "score" => sink.score = Some(map.next_value()?),
+                        "shooter" => sink.shooter = Some(map.next_value()?),
+                        "on_target" => sink.on_target = Some(map.next_value()?),
+                        "outcome" => sink.outcome = Some(map.next_value()?),
+                        "keeper" => sink.keeper = Some(map.next_value()?),
+                        "reason" => sink.reason = Some(map.next_value()?),
+                        "attack_home" => sink.attack_home = Some(map.next_value()?),
+                        "attack_away" => sink.attack_away = Some(map.next_value()?),
+                        "event_count" => sink.event_count = Some(map.next_value()?),
+                        "state_hash" => sink.state_hash = Some(map.next_value()?),
+                        "added_time_ticks" => sink.added_time_ticks = Some(map.next_value()?),
                         _ => {
                             // Unknown fields are ignored so the
                             // wire format is forward-compatible.
@@ -539,7 +886,110 @@ impl<'de> Deserialize<'de> for MatchEvent {
                         payload: RestartEventPayload {
                             taker: sink.taker.ok_or_else(|| Error::missing_field("taker"))?,
                             at: sink.at.ok_or_else(|| Error::missing_field("at"))?,
-                            kind: sink.kind.ok_or_else(|| Error::missing_field("kind"))?,
+                            kind: match sink
+                                .kind_raw
+                                .as_deref()
+                                .ok_or_else(|| Error::missing_field("kind"))?
+                            {
+                                "throw_in" => RestartKind::ThrowIn,
+                                "goal_kick" => RestartKind::GoalKick,
+                                "corner" => RestartKind::Corner,
+                                other => {
+                                    return Err(Error::unknown_variant(
+                                        other,
+                                        &["throw_in", "goal_kick", "corner"],
+                                    ));
+                                }
+                            },
+                        },
+                    }),
+                    EventType::Goal => Ok(MatchEvent::Goal {
+                        envelope,
+                        payload: GoalEventPayload {
+                            scorer: sink.scorer.ok_or_else(|| Error::missing_field("scorer"))?,
+                            assister: sink
+                                .assister
+                                .ok_or_else(|| Error::missing_field("assister"))?,
+                            own_goal: sink
+                                .own_goal
+                                .ok_or_else(|| Error::missing_field("own_goal"))?,
+                            score: sink.score.ok_or_else(|| Error::missing_field("score"))?,
+                        },
+                    }),
+                    EventType::Shot => Ok(MatchEvent::Shot {
+                        envelope,
+                        payload: ShotEventPayload {
+                            shooter: sink
+                                .shooter
+                                .ok_or_else(|| Error::missing_field("shooter"))?,
+                            on_target: sink
+                                .on_target
+                                .ok_or_else(|| Error::missing_field("on_target"))?,
+                            outcome: sink
+                                .outcome
+                                .ok_or_else(|| Error::missing_field("outcome"))?,
+                        },
+                    }),
+                    EventType::Save => Ok(MatchEvent::Save {
+                        envelope,
+                        payload: SaveEventPayload {
+                            keeper: sink
+                                .keeper
+                                .ok_or_else(|| Error::missing_field("keeper"))?,
+                            shooter: sink
+                                .shooter
+                                .ok_or_else(|| Error::missing_field("shooter"))?,
+                            kind: match sink
+                                .kind_raw
+                                .as_deref()
+                                .ok_or_else(|| Error::missing_field("kind"))?
+                            {
+                                "catch" => SaveKind::Catch,
+                                "parry" => SaveKind::Parry,
+                                "punch" => SaveKind::Punch,
+                                other => {
+                                    return Err(Error::unknown_variant(
+                                        other,
+                                        &["catch", "parry", "punch"],
+                                    ));
+                                }
+                            },
+                        },
+                    }),
+                    EventType::Kickoff => Ok(MatchEvent::Kickoff {
+                        envelope,
+                        payload: KickoffEventPayload {
+                            taker: sink.taker.ok_or_else(|| Error::missing_field("taker"))?,
+                            reason: sink
+                                .reason
+                                .ok_or_else(|| Error::missing_field("reason"))?,
+                            attack_home: sink
+                                .attack_home
+                                .ok_or_else(|| Error::missing_field("attack_home"))?,
+                            attack_away: sink
+                                .attack_away
+                                .ok_or_else(|| Error::missing_field("attack_away"))?,
+                        },
+                    }),
+                    EventType::HalfTime => Ok(MatchEvent::HalfTime {
+                        envelope,
+                        payload: HalfTimePayload {
+                            score: sink.score.ok_or_else(|| Error::missing_field("score"))?,
+                        },
+                    }),
+                    EventType::FullTime => Ok(MatchEvent::FullTime {
+                        envelope,
+                        payload: FullTimePayload {
+                            score: sink.score.ok_or_else(|| Error::missing_field("score"))?,
+                            event_count: sink
+                                .event_count
+                                .ok_or_else(|| Error::missing_field("event_count"))?,
+                            state_hash: sink
+                                .state_hash
+                                .ok_or_else(|| Error::missing_field("state_hash"))?,
+                            added_time_ticks: sink
+                                .added_time_ticks
+                                .ok_or_else(|| Error::missing_field("added_time_ticks"))?,
                         },
                     }),
                 }
@@ -596,7 +1046,13 @@ impl EventLog {
             MatchEvent::Pass { envelope, .. }
             | MatchEvent::PossessionChange { envelope, .. }
             | MatchEvent::OutOfBounds { envelope, .. }
-            | MatchEvent::Restart { envelope, .. } => {
+            | MatchEvent::Restart { envelope, .. }
+            | MatchEvent::Goal { envelope, .. }
+            | MatchEvent::Shot { envelope, .. }
+            | MatchEvent::Save { envelope, .. }
+            | MatchEvent::Kickoff { envelope, .. }
+            | MatchEvent::HalfTime { envelope, .. }
+            | MatchEvent::FullTime { envelope, .. } => {
                 envelope.seq = seq;
             }
         }
@@ -826,6 +1282,205 @@ pub fn build_restart_event(
 #[must_use]
 pub const fn opponent_of(team: TeamId) -> TeamId {
     if team.0 == 0 { TeamId(1) } else { TeamId(0) }
+}
+
+/// Convenience constructor for a `goal` event (ticket 10).
+///
+/// `scoring_team` is credited on the envelope (`team`); `attribution`
+/// comes from [`attribute_goal`] over the touch window the rule engine
+/// captured at the goal tick. `score` is the running score after the
+/// goal — the A7 invariant folds these across the match.
+#[must_use]
+pub fn build_goal_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    scoring_team: TeamId,
+    attribution: GoalAttribution,
+    score: (u8, u8),
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::Goal,
+        team: Some(scoring_team),
+    };
+    let payload = GoalEventPayload {
+        scorer: attribution.scorer,
+        assister: attribution.assister,
+        own_goal: attribution.own_goal,
+        score,
+    };
+    MatchEvent::Goal { envelope, payload }
+}
+
+/// Convenience constructor for a `shot` event (ticket 10).
+///
+/// `shooter_team` is credited on the envelope (`team`).
+#[must_use]
+pub fn build_shot_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    shooter_team: TeamId,
+    shooter: PlayerId,
+    on_target: bool,
+    outcome: ShotOutcome,
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::Shot,
+        team: Some(shooter_team),
+    };
+    let payload = ShotEventPayload {
+        shooter,
+        on_target,
+        outcome,
+    };
+    MatchEvent::Shot { envelope, payload }
+}
+
+/// Convenience constructor for a `save` event (ticket 10).
+///
+/// Emitted alongside the resolving `shot` event (same tick, next
+/// `seq`). `keeper_team` is credited on the envelope (`team`).
+#[must_use]
+pub fn build_save_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    keeper_team: TeamId,
+    keeper: PlayerId,
+    shooter: PlayerId,
+    kind: SaveKind,
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::Save,
+        team: Some(keeper_team),
+    };
+    let payload = SaveEventPayload {
+        keeper,
+        shooter,
+        kind,
+    };
+    MatchEvent::Save { envelope, payload }
+}
+
+/// Convenience constructor for a `kickoff` event (ticket 10).
+///
+/// `taker_team` is credited on the envelope (`team`). `attack_home` /
+/// `attack_away` carry the per-team attack direction on half starts
+/// (`match_start`, `second_half`); they are `None` for `after_goal`.
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "kickoff constructor mirrors PRD §9.2 payload fields; a builder would scatter the field set across two calls"
+)]
+pub fn build_kickoff_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    taker_team: TeamId,
+    taker: Option<PlayerId>,
+    reason: KickoffReason,
+    attack_home: Option<i8>,
+    attack_away: Option<i8>,
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::Kickoff,
+        team: Some(taker_team),
+    };
+    let payload = KickoffEventPayload {
+        taker,
+        reason,
+        attack_home,
+        attack_away,
+    };
+    MatchEvent::Kickoff { envelope, payload }
+}
+
+/// Convenience constructor for a `half_time` event (ticket 10).
+///
+/// No team is credited (envelope `team` is `None`). Carries the
+/// running score at the whistle.
+#[must_use]
+pub fn build_half_time_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    score: (u8, u8),
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::HalfTime,
+        team: None,
+    };
+    let payload = HalfTimePayload { score };
+    MatchEvent::HalfTime { envelope, payload }
+}
+
+/// Convenience constructor for a `full_time` event (ticket 10).
+///
+/// No team is credited (envelope `team` is `None`). `event_count` is
+/// the total log length including this event; `state_hash` matches
+/// `Simulation::get_state_hash` at full time.
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "full_time constructor mirrors PRD §9.2 payload fields plus the ticket-10 event_count/state_hash; a builder would scatter the field set across two calls"
+)]
+pub fn build_full_time_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    score: (u8, u8),
+    event_count: u64,
+    state_hash: u64,
+    added_time_ticks: (u64, u64),
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::FullTime,
+        team: None,
+    };
+    let payload = FullTimePayload {
+        score,
+        event_count,
+        state_hash,
+        added_time_ticks,
+    };
+    MatchEvent::FullTime { envelope, payload }
 }
 
 /// Assert the gapless-monotonic invariant on a finalized log.
@@ -1160,5 +1815,245 @@ mod tests {
             RestartKind::from_oob(BallOutOfBoundsType::Corner),
             RestartKind::Corner
         );
+    }
+
+    fn touch_on(team: TeamId, raw: u32, kind: sim_components::TouchKind, tick: u64) -> LastTouch {
+        LastTouch::by_player(team, Entity::from_raw(raw), kind).with_tick(tick)
+    }
+
+    /// PRD §8.5: scorer is the last `Play` toucher; assister is the
+    /// previous `Play` toucher on the scoring team within 10 s.
+    #[test]
+    fn attribute_goal_picks_scorer_and_assister() {
+        use sim_components::TouchKind;
+        let scorer = touch_on(TeamId(0), 11, TouchKind::Play, 1_000);
+        let assist = touch_on(TeamId(0), 22, TouchKind::Play, 900);
+        let attr = attribute_goal(TeamId(0), [Some(scorer), Some(assist), None], 1_000);
+        assert_eq!(attr.scorer, scorer.player_id, "scorer is the last Play touch");
+        assert_eq!(
+            attr.assister, assist.player_id,
+            "assister is the previous scoring-team Play touch within 10 s"
+        );
+        assert!(!attr.own_goal);
+    }
+
+    /// PRD §8.5: a scorer on the conceding team is an own goal with no
+    /// assister, even when a scoring-team touch sits in the window.
+    #[test]
+    fn attribute_goal_flags_own_goal_without_assister() {
+        use sim_components::TouchKind;
+        let scorer = touch_on(TeamId(1), 11, TouchKind::Play, 1_000);
+        let prior = touch_on(TeamId(0), 22, TouchKind::Play, 990);
+        let attr = attribute_goal(TeamId(0), [Some(scorer), Some(prior), None], 1_000);
+        assert_eq!(attr.scorer, scorer.player_id);
+        assert!(attr.own_goal, "conceding-team scorer is an own goal");
+        assert_eq!(attr.assister, None, "own goals carry no assister");
+    }
+
+    /// PRD §8.5: restart placements never score or assist; the window
+    /// slides past them to the older `Play` touch.
+    #[test]
+    fn attribute_goal_skips_restart_touches() {
+        use sim_components::TouchKind;
+        let restart = touch_on(TeamId(0), 11, TouchKind::Restart, 1_000);
+        let scorer = touch_on(TeamId(0), 22, TouchKind::Play, 990);
+        let assist = touch_on(TeamId(0), 33, TouchKind::Play, 900);
+        let attr = attribute_goal(
+            TeamId(0),
+            [Some(restart), Some(scorer), Some(assist)],
+            1_000,
+        );
+        assert_eq!(attr.scorer, scorer.player_id, "Restart touch cannot score");
+        assert_eq!(attr.assister, assist.player_id);
+        assert!(!attr.own_goal);
+    }
+
+    /// PRD §8.5: a previous scoring-team touch older than 10 s
+    /// (600 ticks) is not an assist.
+    #[test]
+    fn attribute_goal_rejects_stale_assister() {
+        use sim_components::TouchKind;
+        let scorer = touch_on(TeamId(0), 11, TouchKind::Play, 1_000);
+        let stale = touch_on(TeamId(0), 22, TouchKind::Play, 100);
+        let attr = attribute_goal(TeamId(0), [Some(scorer), Some(stale), None], 1_000);
+        assert_eq!(attr.scorer, scorer.player_id);
+        assert_eq!(
+            attr.assister, None,
+            "touch 900 ticks back is outside the 10 s window"
+        );
+    }
+
+    /// No `Play` touch on record: no scorer, no assister, not an own
+    /// goal (the rule engine debug-asserts against this wiring gap).
+    #[test]
+    fn attribute_goal_without_play_touch_has_no_scorer() {
+        use sim_components::TouchKind;
+        let restart = touch_on(TeamId(0), 11, TouchKind::Restart, 1_000);
+        let attr = attribute_goal(TeamId(0), [Some(restart), None, None], 1_000);
+        assert_eq!(attr.scorer, None);
+        assert_eq!(attr.assister, None);
+        assert!(!attr.own_goal);
+    }
+
+    /// `goal` events carry scorer / assister / `own_goal` / score on the
+    /// wire (PRD §9.2), with the scoring team on the envelope.
+    #[test]
+    fn goal_event_payload_round_trip() {
+        let mut log = EventLog::new();
+        let clock = sample_clock(1, 4_500, 0);
+        let scorer = touch_on(TeamId(0), 11, sim_components::TouchKind::Play, 4_500);
+        let assist = touch_on(TeamId(0), 22, sim_components::TouchKind::Play, 4_400);
+        let attribution = attribute_goal(TeamId(0), [Some(scorer), Some(assist), None], 4_500);
+        log.append(build_goal_event(
+            log.next_seq,
+            4_500,
+            &clock,
+            TeamId(0),
+            attribution,
+            (1, 0),
+        ));
+        let MatchEvent::Goal { envelope, payload } = &log.events[0] else {
+            panic!("expected goal event");
+        };
+        assert_eq!(
+            envelope.team,
+            Some(TeamId(0)),
+            "envelope team = scoring team"
+        );
+        assert_eq!(payload.scorer, scorer.player_id);
+        assert_eq!(payload.assister, assist.player_id);
+        assert!(!payload.own_goal);
+        assert_eq!(payload.score, (1, 0), "running score after the goal");
+
+        let json = serde_json::to_string(&log.events[0]).expect("serialise");
+        assert!(json.contains("\"type\":\"goal\""));
+        assert!(json.contains("\"own_goal\":false"));
+        assert!(json.contains("\"score\":[1,0]"));
+        let back: MatchEvent = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, log.events[0], "goal event must round-trip the wire");
+    }
+
+    /// `shot` events carry shooter / `on_target` / outcome (PRD §9.2).
+    #[test]
+    fn shot_event_payload_round_trip() {
+        let mut log = EventLog::new();
+        let clock = sample_clock(1, 5_000, 0);
+        log.append(build_shot_event(
+            log.next_seq,
+            5_000,
+            &clock,
+            TeamId(1),
+            PlayerId::from_bits(77),
+            true,
+            ShotOutcome::Saved,
+        ));
+        let MatchEvent::Shot { envelope, payload } = &log.events[0] else {
+            panic!("expected shot event");
+        };
+        assert_eq!(envelope.team, Some(TeamId(1)));
+        assert_eq!(payload.shooter, PlayerId::from_bits(77));
+        assert!(payload.on_target);
+        assert_eq!(payload.outcome, ShotOutcome::Saved);
+
+        let json = serde_json::to_string(&log.events[0]).expect("serialise");
+        assert!(json.contains("\"type\":\"shot\""));
+        assert!(json.contains("\"outcome\":\"saved\""));
+        let back: MatchEvent = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, log.events[0]);
+    }
+
+    /// `save` events carry keeper / shooter / kind (PRD §9.2).
+    #[test]
+    fn save_event_payload_round_trip() {
+        let mut log = EventLog::new();
+        let clock = sample_clock(2, 200_000, 0);
+        log.append(build_save_event(
+            log.next_seq,
+            200_000,
+            &clock,
+            TeamId(0),
+            PlayerId::from_bits(1),
+            PlayerId::from_bits(77),
+            SaveKind::Parry,
+        ));
+        let MatchEvent::Save { envelope, payload } = &log.events[0] else {
+            panic!("expected save event");
+        };
+        assert_eq!(envelope.team, Some(TeamId(0)), "envelope team = keeper team");
+        assert_eq!(payload.kind, SaveKind::Parry);
+
+        let json = serde_json::to_string(&log.events[0]).expect("serialise");
+        assert!(json.contains("\"type\":\"save\""));
+        assert!(json.contains("\"kind\":\"parry\""));
+        let back: MatchEvent = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, log.events[0]);
+    }
+
+    /// `kickoff` events carry taker / reason / attack directions on
+    /// half starts (PRD §9.2).
+    #[test]
+    fn kickoff_event_payload_round_trip() {
+        let mut log = EventLog::new();
+        let clock = sample_clock(1, 0, 0);
+        log.append(build_kickoff_event(
+            log.next_seq,
+            0,
+            &clock,
+            TeamId(0),
+            Some(PlayerId::from_bits(9)),
+            KickoffReason::MatchStart,
+            Some(1),
+            Some(-1),
+        ));
+        let MatchEvent::Kickoff { envelope, payload } = &log.events[0] else {
+            panic!("expected kickoff event");
+        };
+        assert_eq!(envelope.team, Some(TeamId(0)));
+        assert_eq!(payload.reason, KickoffReason::MatchStart);
+        assert_eq!((payload.attack_home, payload.attack_away), (Some(1), Some(-1)));
+
+        let json = serde_json::to_string(&log.events[0]).expect("serialise");
+        assert!(json.contains("\"type\":\"kickoff\""));
+        assert!(json.contains("\"reason\":\"match_start\""));
+        let back: MatchEvent = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, log.events[0]);
+    }
+
+    /// `half_time` carries the running score; `full_time` carries
+    /// score, event count, state hash and added time (ticket 10).
+    #[test]
+    fn half_and_full_time_events_round_trip() {
+        let mut log = EventLog::new();
+        let clock = sample_clock(1, 162_000, 0);
+        log.append(build_half_time_event(log.next_seq, 162_000, &clock, (2, 1)));
+        let clock2 = sample_clock(2, 162_000, 0);
+        // `event_count` includes the `full_time` event itself.
+        log.append(build_full_time_event(
+            log.next_seq,
+            324_018,
+            &clock2,
+            (3, 1),
+            2,
+            0xDEAD_BEEF,
+            (0, 0),
+        ));
+        assert_eq!(log.len(), 2);
+        let MatchEvent::HalfTime { payload, .. } = &log.events[0] else {
+            panic!("expected half_time event");
+        };
+        assert_eq!(payload.score, (2, 1));
+        let MatchEvent::FullTime { envelope, payload } = &log.events[1] else {
+            panic!("expected full_time event");
+        };
+        assert_eq!(envelope.team, None, "no team is credited");
+        assert_eq!(payload.score, (3, 1));
+        assert_eq!(payload.event_count, 2);
+        assert_eq!(payload.state_hash, 0xDEAD_BEEF);
+
+        for event in &log.events {
+            let json = serde_json::to_string(event).expect("serialise");
+            let back: MatchEvent = serde_json::from_str(&json).expect("deserialise");
+            assert_eq!(&back, event);
+        }
     }
 }

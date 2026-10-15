@@ -11,10 +11,13 @@
 //! - A4: share of 0–0 draws.
 //! - A6: determinism (byte-equal hashes for repeated seeds).
 //!
-//! A5 (strong-side win rate), A7 (goals vs score), A8 (event order),
-//! and A9 (tactic signatures) need fixtures the harness does not yet
-//! load; the harness records raw counts so later fixture-tiers can
-//! upgrade those metrics without re-running.
+//! A5 (strong-side win rate), A8 (event order), and A9 (tactic
+//! signatures) need fixtures the harness does not yet load; the
+//! harness records raw counts so later fixture-tiers can upgrade those
+//! metrics without re-running. A7 (goals vs score) is testable from
+//! ticket 10 onward: per-tick goal counts fold the `goal` events in
+//! the `EventLog` (PRD §9.3) and invariant 1 compares them to
+//! `Match.score`.
 //!
 //! The six PRD §12 invariants are checked per tick (via
 //! `sim_core::check_invariants`); any violation fails the match, logs
@@ -240,10 +243,13 @@ fn play_one(seed: u64) -> (SeedReport, u64) {
         seed,
         ..SeedReport::default()
     };
-    let ball_entity = sim.ball_entity();
 
     let mut reached_full_time = false;
     let mut last_violation: Option<InvariantViolation> = None;
+    // High-water mark into the `EventLog` for incremental goal
+    // counting (only events appended since the last tick are
+    // scanned, so the per-tick cost stays constant).
+    let mut events_seen = 0_usize;
 
     for _ in 0..HARNESS_TICK_CAP {
         sim.tick();
@@ -251,7 +257,6 @@ fn play_one(seed: u64) -> (SeedReport, u64) {
         let ball_state;
         let elapsed_ticks;
         let match_state;
-        let goal_event_observed;
         {
             let world = sim.world();
             ball_state = world.get_resource::<Ball>().map(|b| b.state);
@@ -259,10 +264,6 @@ fn play_one(seed: u64) -> (SeedReport, u64) {
                 .get_resource::<sim_components::MatchClock>()
                 .map(|c| c.elapsed_ticks);
             match_state = world.get_resource::<Match>().map(|m| m.state);
-            goal_event_observed = world
-                .entity(ball_entity)
-                .get::<sim_components::RuleEvent>()
-                .is_some_and(|event| matches!(event, sim_components::RuleEvent::Goal { .. }));
             reached_full_time_now = match_state == Some(MatchState::FullTime);
         }
 
@@ -277,31 +278,24 @@ fn play_one(seed: u64) -> (SeedReport, u64) {
         } else {
             counters.current_dead_window = 0;
         }
-        // Count goals: scan for `RuleEvent::Goal` on the ball entity
-        // and increment the per-team counter.
-        if goal_event_observed {
-            let scorer_team = sim
-                .world()
-                .entity(ball_entity)
-                .get::<sim_components::RuleEvent>()
-                .and_then(|event| {
-                    if let sim_components::RuleEvent::Goal { scorer_team, .. } = event {
-                        Some(*scorer_team)
-                    } else {
-                        None
+        // Count goals: fold the `goal` events in the `EventLog`
+        // (ticket 10 — the log is the source of truth for the score,
+        // PRD §9.3). Invariant 1 then checks `Match.score` against
+        // this count every tick, which is the A7 gate.
+        {
+            let world = sim.world();
+            if let Some(log) = world.get_resource::<sim_core::EventLog>() {
+                for event in log.events.iter().skip(events_seen) {
+                    if let sim_core::MatchEvent::Goal { envelope, .. } = event {
+                        if envelope.team == Some(sim_components::TeamId(0)) {
+                            counters.goals_observed.0 += 1;
+                        } else {
+                            counters.goals_observed.1 += 1;
+                        }
                     }
-                });
-            if let Some(team) = scorer_team {
-                if team == sim_components::TeamId(0) {
-                    counters.goals_observed.0 += 1;
-                } else {
-                    counters.goals_observed.1 += 1;
                 }
+                events_seen = log.events.len();
             }
-            // Drop the event so we don't double-count on the next tick.
-            sim.world_mut()
-                .entity_mut(ball_entity)
-                .remove::<sim_components::RuleEvent>();
         }
 
         // Run invariants.

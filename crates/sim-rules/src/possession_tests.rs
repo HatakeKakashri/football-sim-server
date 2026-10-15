@@ -313,6 +313,7 @@ fn test_interception_registers_play_touch_on_new_possessor() {
             player: None,
             player_id: None,
             kind: sim_components::TouchKind::Play,
+            tick: 0,
         }),
         touch_history: [None, None],
     });

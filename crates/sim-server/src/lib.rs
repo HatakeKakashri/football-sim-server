@@ -1,4 +1,5 @@
 pub mod api;
+pub mod fixtures;
 pub mod harness;
 pub mod http;
 pub mod simulate;
@@ -180,6 +181,9 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             trace_interval_ticks,
             trace_full_range,
         } => {
+            // Abort boot if any fixture fails validation (PRD §5: fixtures
+            // are loaded and validated at startup).
+            let _fixtures = fixtures::load_default()?;
             let report = run_simulate(&SimulateOptions {
                 seed,
                 ticks,
@@ -202,13 +206,19 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             seed,
             commands,
             output,
-        } => replay(seed, commands, output)?,
+        } => {
+            let _fixtures = fixtures::load_default()?;
+            replay(seed, commands, output)?;
+        }
 
         Commands::Benchmark {
             seed,
             ticks,
             output,
-        } => benchmark(seed, ticks, output)?,
+        } => {
+            let _fixtures = fixtures::load_default()?;
+            benchmark(seed, ticks, output)?;
+        },
 
         Commands::TraceFilter {
             input,
@@ -238,6 +248,7 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Commands::Harness { seeds, output } => {
+            let _fixtures = fixtures::load_default()?;
             let opts = HarnessOptions {
                 seeds,
                 output,
@@ -257,7 +268,10 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             bind,
             max_concurrent_sims,
             result_ttl_secs,
-        } => serve(bind, max_concurrent_sims, result_ttl_secs)?,
+        } => {
+            let _fixtures = fixtures::load_default()?;
+            serve(bind, max_concurrent_sims, result_ttl_secs)?;
+        }
     }
     Ok(())
 }

@@ -6,6 +6,7 @@ pub mod attribute;
 pub mod attribute_groups;
 pub mod ball_touch;
 pub mod event_kinds;
+pub mod fixture;
 pub mod formation_slot;
 pub mod intent_dispatch;
 pub mod position;
@@ -70,6 +71,30 @@ pub enum Mentality {
     Defend,
 }
 
+impl Mentality {
+    /// The serialised name used in match fixtures (PRD §5.4).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Attack => "attack",
+            Self::Balance => "balance",
+            Self::Defend => "defend",
+        }
+    }
+
+    /// Look up a mentality by its serialised name. Returns `None` for
+    /// unknown names.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "attack" => Some(Self::Attack),
+            "balance" => Some(Self::Balance),
+            "defend" => Some(Self::Defend),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Formation {
     FourFourTwo,
@@ -85,6 +110,32 @@ pub enum Tactic {
     CounterAttack,
     HighPress,
     ParkTheBus,
+}
+
+impl Tactic {
+    /// The serialised name used in match fixtures (PRD §5.4).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Possession => "possession",
+            Self::CounterAttack => "counter_attack",
+            Self::HighPress => "high_press",
+            Self::ParkTheBus => "park_the_bus",
+        }
+    }
+
+    /// Look up a tactic by its serialised name. Returns `None` for
+    /// unknown names.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "possession" => Some(Self::Possession),
+            "counter_attack" => Some(Self::CounterAttack),
+            "high_press" => Some(Self::HighPress),
+            "park_the_bus" => Some(Self::ParkTheBus),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

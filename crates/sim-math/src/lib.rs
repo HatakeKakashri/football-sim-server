@@ -1,4 +1,5 @@
 use bevy_ecs::prelude::Resource;
+use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
@@ -67,6 +68,51 @@ impl Vec2 {
 
 /// Standard pitch length in metres (along the x-axis).
 pub const PITCH_LENGTH: f32 = 105.0;
+
+/// The 14 football positions (PRD §6.5).
+///
+/// The 13 outfield positions (GK excluded from the fit grid) form a
+/// 5×3 grid:
+/// ```text
+/// row 5:            ST
+/// row 4:  AML       AMC       AMR
+/// row 3:  ML        MC        MR
+/// row 2:  DML       DMC       DMR
+/// row 1:  DL        DC        DR
+/// ```
+///
+/// `GK` is never on the grid; it accepts only goalkeeper profiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PositionSlot {
+    /// Goalkeeper.
+    GK,
+    /// Defensive left (full back).
+    DL,
+    /// Defensive center (left).
+    DC,
+    /// Defensive center (right).
+    DR,
+    /// Defensive midfield left.
+    DML,
+    /// Defensive midfield center.
+    DMC,
+    /// Defensive midfield right.
+    DMR,
+    /// Midfield left.
+    ML,
+    /// Midfield center.
+    MC,
+    /// Midfield right.
+    MR,
+    /// Attacking midfield left.
+    AML,
+    /// Attacking midfield center.
+    AMC,
+    /// Attacking midfield right.
+    AMR,
+    /// Striker.
+    ST,
+}
 /// Standard pitch width in metres (along the y-axis).
 pub const PITCH_WIDTH: f32 = 68.0;
 /// Standard goal centre y-coordinate (half of pitch width).
@@ -346,6 +392,189 @@ impl PitchDimensions {
     }
 }
 
+/// Tuning configuration for match mechanics and response curves.
+///
+/// All tunable constants live in this struct (PRD §11). It is edited
+/// only during calibration (one commit per batch of batch results).
+///
+/// The tuning struct is a singleton resource so every system reads
+/// the same parameters. It is immutable during a match (no mid-match
+/// tuning changes).
+#[derive(Debug, Clone, Resource)]
+pub struct Tuning {
+    /// Position-fit multipliers (PRD §6.5).
+    pub fit_multipliers: FitMultipliers,
+}
+
+impl Tuning {
+    /// Default tuning assumptions (pre-calibration).
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn, reason = "constructor is not const due to Resource derive")]
+    pub fn default_assumptions() -> Self {
+        Self {
+            fit_multipliers: FitMultipliers::default_assumptions(),
+        }
+    }
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self::default_assumptions()
+    }
+}
+
+/// Position-fit multiplier table (PRD §6.5).
+///
+/// Multipliers are applied to every attribute when a player occupies
+/// a slot that doesn't match any of their trained positions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FitMultipliers {
+    /// Distance 0 (trained position).
+    pub at_distance_0: f32,
+    /// Distance 1.
+    pub at_distance_1: f32,
+    /// Distance ≥ 2.
+    pub at_distance_2_or_more: f32,
+}
+
+impl FitMultipliers {
+    /// Default assumptions per PRD §6.5.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn, reason = "constructor is not const due to struct initialization")]
+    pub const fn default_assumptions() -> Self {
+        Self {
+            at_distance_0: 1.00,
+            at_distance_1: 0.92,
+            at_distance_2_or_more: 0.75,
+        }
+    }
+}
+
+impl Default for FitMultipliers {
+    fn default() -> Self {
+        Self::default_assumptions()
+    }
+}
+
+/// Chebyshev distance on the 5×3 position grid.
+///
+/// The grid (rows back to front, as in PRD §6.5):
+/// ```text
+/// row 5:            ST
+/// row 4:  AML       AMC       AMR
+/// row 3:  ML        MC        MR
+/// row 2:  DML       DMC       DMR
+/// row 1:  DL        DC        DR
+/// ```
+///
+/// Distance 0 = same slot, Distance 1 = adjacent, Distance ≥ 2 = penalty.
+#[must_use]
+pub const fn chebyshev_distance(slot_1: PositionSlot, slot_2: PositionSlot) -> u8 {
+    // Map each slot to (row, col) where rows go back-to-front (1=GK line, 5=front line)
+    // and cols go left-to-right (1=left, 2=center, 3=right).
+    // GK is handled separately (not on the 13-slot grid).
+    let (row1, col1) = slot_to_row_col(slot_1);
+    let (row2, col2) = slot_to_row_col(slot_2);
+
+    // Cast to i32 first, compute signed diff, then take unsigned abs
+    // Row and column values are 0-5 and 0-3 respectively, so the diff is always < 256
+    // and fits in u8 without truncation.
+    #[allow(clippy::cast_possible_truncation, reason = "grid coordinates 0-5 fit in u8")]
+    let row_diff = (row1 as i32 - row2 as i32).unsigned_abs() as u8;
+    #[allow(clippy::cast_possible_truncation, reason = "grid coordinates 0-5 fit in u8")]
+    let col_diff = (col1 as i32 - col2 as i32).unsigned_abs() as u8;
+
+    // Use manual max since row_diff.max(col_diff) isn't const-stable in Rust 2024
+    if row_diff >= col_diff {
+        row_diff
+    } else {
+        col_diff
+    }
+}
+
+/// Map a `PositionSlot` to (row, col) for distance calculations.
+///
+/// Rows: 1=GK line (DL/DC/DR), 2=DML/DMC/DMR, 3=ML/MC/MR, 4=AML/AMC/AMR, 5=ST.
+/// Cols: 1=left, 2=center, 3=right. GK returns (0, 0) as a sentinel.
+const fn slot_to_row_col(slot: PositionSlot) -> (u8, u8) {
+    match slot {
+        PositionSlot::GK => (0, 0),
+        PositionSlot::DL => (1, 1),
+        PositionSlot::DC => (1, 2),
+        PositionSlot::DR => (1, 3),
+        PositionSlot::DML => (2, 1),
+        PositionSlot::DMC => (2, 2),
+        PositionSlot::DMR => (2, 3),
+        PositionSlot::ML => (3, 1),
+        PositionSlot::MC => (3, 2),
+        PositionSlot::MR => (3, 3),
+        PositionSlot::AML => (4, 1),
+        PositionSlot::AMC => (4, 2),
+        PositionSlot::AMR => (4, 3),
+        PositionSlot::ST => (5, 2),
+    }
+}
+
+/// Compute the minimum Chebyshev distance from `slot` to any of the
+/// player's `trained_positions`.
+///
+/// Returns `None` if `slot` is `GK` (GK is never on the 13-slot grid),
+/// or if `trained_positions` is empty (should be impossible in practice).
+///
+/// See PRD §6.5 for the grid layout and distance rules.
+#[must_use]
+pub fn min_fit_distance(slot: PositionSlot, trained_positions: &[PositionSlot]) -> Option<u8> {
+    if trained_positions.is_empty() {
+        return None;
+    }
+    if slot == PositionSlot::GK {
+        return None;
+    }
+
+    // Filter to only outfield positions and compute min distance.
+    let mut min_dist: Option<u8> = None;
+    for &trained in trained_positions {
+        if trained == PositionSlot::GK {
+            continue;
+        }
+        let d = chebyshev_distance(slot, trained);
+        min_dist = Some(min_dist.map_or(d, |current_min| current_min.min(d)));
+    }
+    min_dist
+}
+
+/// Compute the fit multiplier for a player in a given slot, based on
+/// their trained positions.
+///
+/// Returns `1.00` for distance 0, `0.92` for distance 1, `0.75` for
+/// distance ≥ 2 (PRD §6.5).
+///
+/// This is the function that feeds both Quality-in-slot and every
+/// mechanic downstream (tackle success, pass accuracy, etc.).
+#[must_use]
+pub fn fit_multiplier(
+    slot: PositionSlot,
+    trained_positions: &[PositionSlot],
+    tuning: &FitMultipliers,
+) -> f32 {
+    let dist = min_fit_distance(slot, trained_positions).map_or(0, i32::from);
+
+    match dist {
+        0 => tuning.at_distance_0,
+        1 => tuning.at_distance_1,
+        _ => tuning.at_distance_2_or_more,
+    }
+}
+
+/// Compute the effective attribute value after applying the fit multiplier.
+///
+/// This is the single helper that every attribute consumer calls to get
+/// the player's quality-adjusted attribute for a given slot.
+#[must_use]
+pub const fn effective_attribute(raw_attribute: u8, multiplier: f32) -> f32 {
+    raw_attribute as f32 * multiplier
+}
+
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,
@@ -534,5 +763,173 @@ mod tests {
         );
         assert!(result.min_distance < 1e-5);
         assert!(result.acquired);
+    }
+
+    // === PositionSlot and fit distance tests ===
+
+    #[test]
+    fn test_position_slot_grid_coordinates() {
+        // Verify the (row, col) mapping for the 5×3 grid.
+        assert_eq!(slot_to_row_col(PositionSlot::GK), (0, 0)); // Sentinel
+
+        // Row 1 (defensive line)
+        assert_eq!(slot_to_row_col(PositionSlot::DL), (1, 1));
+        assert_eq!(slot_to_row_col(PositionSlot::DC), (1, 2));
+        assert_eq!(slot_to_row_col(PositionSlot::DR), (1, 3));
+
+        // Row 2 (defensive midfield)
+        assert_eq!(slot_to_row_col(PositionSlot::DML), (2, 1));
+        assert_eq!(slot_to_row_col(PositionSlot::DMC), (2, 2));
+        assert_eq!(slot_to_row_col(PositionSlot::DMR), (2, 3));
+
+        // Row 3 (midfield)
+        assert_eq!(slot_to_row_col(PositionSlot::ML), (3, 1));
+        assert_eq!(slot_to_row_col(PositionSlot::MC), (3, 2));
+        assert_eq!(slot_to_row_col(PositionSlot::MR), (3, 3));
+
+        // Row 4 (attacking midfield)
+        assert_eq!(slot_to_row_col(PositionSlot::AML), (4, 1));
+        assert_eq!(slot_to_row_col(PositionSlot::AMC), (4, 2));
+        assert_eq!(slot_to_row_col(PositionSlot::AMR), (4, 3));
+
+        // Row 5 (striker)
+        assert_eq!(slot_to_row_col(PositionSlot::ST), (5, 2));
+    }
+
+    #[test]
+    fn test_chebyshev_distance_same_slot() {
+        assert_eq!(chebyshev_distance(PositionSlot::MC, PositionSlot::MC), 0);
+        assert_eq!(chebyshev_distance(PositionSlot::ST, PositionSlot::ST), 0);
+    }
+
+    #[test]
+    fn test_chebyshev_distance_distance_1() {
+        // Adjacent cells horizontally
+        assert_eq!(chebyshev_distance(PositionSlot::MC, PositionSlot::ML), 1);
+        assert_eq!(chebyshev_distance(PositionSlot::MC, PositionSlot::MR), 1);
+
+        // Adjacent cells vertically
+        assert_eq!(chebyshev_distance(PositionSlot::MC, PositionSlot::DMC), 1);
+        assert_eq!(chebyshev_distance(PositionSlot::MC, PositionSlot::AMC), 1);
+
+        // Diagonal adjacency (MC at row 3 col 2)
+        assert_eq!(chebyshev_distance(PositionSlot::MC, PositionSlot::ML), 1); // same row, col diff 1
+        assert_eq!(chebyshev_distance(PositionSlot::MC, PositionSlot::MR), 1); // same row, col diff 1
+        assert_eq!(chebyshev_distance(PositionSlot::MC, PositionSlot::AMC), 1); // row diff 1, same col
+        assert_eq!(chebyshev_distance(PositionSlot::MC, PositionSlot::AMR), 1); // diagonally adjacent: MC=(3,2), AMR=(4,3), diff=(1,1), max=1
+    }
+
+    #[test]
+    fn test_chebyshev_distance_distance_2() {
+        // Two steps horizontally
+        assert_eq!(chebyshev_distance(PositionSlot::ML, PositionSlot::MR), 2);
+
+        // Two steps vertically
+        assert_eq!(chebyshev_distance(PositionSlot::DMC, PositionSlot::AMC), 2);
+
+        // Diagonal (2,2) -> (3,3) is distance 1, but (1,1) -> (3,3) is distance 2
+        assert_eq!(chebyshev_distance(PositionSlot::DL, PositionSlot::MC), 2);
+    }
+
+    #[test]
+    fn test_chebyshev_distance_gk_sentinel() {
+        // GK returns (0,0) which should give non-zero distance to any other slot
+        // This is expected behavior since GK is not on the grid.
+        assert!(chebyshev_distance(PositionSlot::GK, PositionSlot::DC) > 0);
+    }
+
+    #[test]
+    fn test_min_fit_distance_basic() {
+        let tuning = FitMultipliers::default_assumptions();
+
+        // Player trained at MC, playing at MC -> distance 0 -> multiplier 1.00
+        let trained = vec![PositionSlot::MC];
+        let dist = min_fit_distance(PositionSlot::MC, &trained);
+        assert_eq!(dist, Some(0));
+        assert_eq!(fit_multiplier(PositionSlot::MC, &trained, &tuning), 1.00);
+
+        // Player trained at MC, playing at ML -> distance 1 -> multiplier 0.92
+        let trained = vec![PositionSlot::MC];
+        let dist = min_fit_distance(PositionSlot::ML, &trained);
+        assert_eq!(dist, Some(1));
+        assert_eq!(fit_multiplier(PositionSlot::ML, &trained, &tuning), 0.92);
+
+        // Player trained at MC, playing at DL -> distance 2 -> multiplier 0.75
+        let trained = vec![PositionSlot::MC];
+        let dist = min_fit_distance(PositionSlot::DL, &trained);
+        assert_eq!(dist, Some(2));
+        assert_eq!(fit_multiplier(PositionSlot::DL, &trained, &tuning), 0.75);
+    }
+
+    #[test]
+    fn test_min_fit_distance_multiple_trained_positions() {
+        let tuning = FitMultipliers::default_assumptions();
+
+        // Player trained at both MC and MR, playing at ML (closest is MC, distance 1)
+        let trained = vec![PositionSlot::MC, PositionSlot::MR];
+        let dist = min_fit_distance(PositionSlot::ML, &trained);
+        assert_eq!(dist, Some(1));
+        assert_eq!(fit_multiplier(PositionSlot::ML, &trained, &tuning), 0.92);
+
+        // Player trained at DC and ST, playing at MC (DC is distance 2, ST is distance 3, so min is 2)
+        let trained = vec![PositionSlot::DC, PositionSlot::ST];
+        let dist = min_fit_distance(PositionSlot::MC, &trained);
+        assert_eq!(dist, Some(2));
+        assert_eq!(fit_multiplier(PositionSlot::MC, &trained, &tuning), 0.75);
+    }
+
+    #[test]
+    fn test_min_fit_distance_gk() {
+        // GK slot should return None (not on the 13-slot grid)
+        let trained = vec![PositionSlot::GK];
+        let dist = min_fit_distance(PositionSlot::GK, &trained);
+        assert_eq!(dist, None);
+
+        let trained = vec![PositionSlot::DL, PositionSlot::DC, PositionSlot::DR];
+        let dist = min_fit_distance(PositionSlot::GK, &trained);
+        assert_eq!(dist, None);
+    }
+
+    #[test]
+    fn test_min_fit_distance_empty() {
+        // Empty trained positions returns None
+        let trained: Vec<PositionSlot> = vec![];
+        let dist = min_fit_distance(PositionSlot::MC, &trained);
+        assert_eq!(dist, None);
+    }
+
+    #[test]
+    fn test_fit_multiplier_with_custom_tuning() {
+        let custom = FitMultipliers {
+            at_distance_0: 1.00,
+            at_distance_1: 0.85,  // More lenient
+            at_distance_2_or_more: 0.60, // More severe
+        };
+
+        let trained = vec![PositionSlot::MC];
+
+        assert_eq!(fit_multiplier(PositionSlot::MC, &trained, &custom), 1.00);
+        assert_eq!(fit_multiplier(PositionSlot::ML, &trained, &custom), 0.85);
+        assert_eq!(fit_multiplier(PositionSlot::DL, &trained, &custom), 0.60);
+    }
+
+    #[test]
+    fn test_effective_attribute() {
+        // Raw attribute 100 with multiplier 1.00 -> 100.0
+        assert!((effective_attribute(100, 1.00) - 100.0).abs() < f32::EPSILON);
+        // Raw attribute 100 with multiplier 0.92 -> 92.0
+        assert!((effective_attribute(100, 0.92) - 92.0).abs() < f32::EPSILON);
+        // Raw attribute 100 with multiplier 0.75 -> 75.0
+        assert!((effective_attribute(100, 0.75) - 75.0).abs() < f32::EPSILON);
+        // Raw attribute 50 with multiplier 0.75 -> 37.5
+        assert!((effective_attribute(50, 0.75) - 37.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_tuning_default() {
+        let tuning = Tuning::default();
+        assert_eq!(tuning.fit_multipliers.at_distance_0, 1.00);
+        assert_eq!(tuning.fit_multipliers.at_distance_1, 0.92);
+        assert_eq!(tuning.fit_multipliers.at_distance_2_or_more, 0.75);
     }
 }

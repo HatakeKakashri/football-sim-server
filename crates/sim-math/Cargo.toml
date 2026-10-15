@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 bevy_ecs.workspace = true
+serde = { workspace = true, features = ["derive"] }
 
 [lints]
 workspace = true

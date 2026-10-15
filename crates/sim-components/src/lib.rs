@@ -8,6 +8,7 @@ pub mod ball_touch;
 pub mod event_kinds;
 pub mod formation_slot;
 pub mod intent_dispatch;
+pub mod position;
 pub mod profile;
 pub mod time;
 
@@ -19,6 +20,8 @@ pub use attribute_groups::{Goalkeeping, OutfieldAttack, OutfieldDefence, Physica
 pub use profile::{
     AttributeError, PlayerProfile, ProfileKind, ATTRIBUTE_COUNT, ATTRIBUTE_MAX, ATTRIBUTE_MIN,
 };
+pub use position::{PosSlot, PositionError};
+pub use sim_math::{fit_multiplier, effective_attribute};
 
 pub use ball_touch::{
     BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, PlayerId, RuleEvent,

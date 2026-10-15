@@ -42,8 +42,11 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     std::fs::remove_file(&path).expect("cleanup");
     let events: Vec<Value> = serde_json::from_str(&text).expect("trace is a JSON array");
 
-    // SC-005 structure: 22 player processes + Ball + Match. The referee exists
-    // but has queued nothing, so it registers no trace process.
+    // SC-005 structure: 22 player processes + Ball + Match. The referee
+    // process registers on its first emitted event (cards/stoppages);
+    // stoppages accumulate per half (PRD §8.4), so any queued stoppage
+    // shows up with its process — assert the two stay consistent rather
+    // than assuming this seed queues nothing.
     let processes: Vec<&str> = events
         .iter()
         .filter(|e| e["name"] == "process_name")
@@ -59,7 +62,15 @@ fn traced_and_untraced_runs_agree_and_the_trace_is_complete() {
     );
     assert!(processes.contains(&"Ball"));
     assert!(processes.contains(&"Match"));
-    assert!(!processes.contains(&"Referee"));
+    let referee_events = events
+        .iter()
+        .filter(|e| e["name"] == "stoppage" || e["name"] == "card")
+        .count();
+    assert_eq!(
+        processes.contains(&"Referee"),
+        referee_events > 0,
+        "Referee process registers exactly when it emits events ({referee_events} emitted)"
+    );
 
     // FR-003/SC-003: coarse snapshots every 60 ticks (interval_ticks=60)
     // plus every tick of the full range [0, 0]. The deduped set is all

@@ -9,7 +9,7 @@
 use bevy_ecs::prelude::*;
 use sim_components::time::{HALF_LENGTH_TICKS, HALFTIME_BREAK_TICKS};
 use sim_components::{
-    LastTouch, Match, MatchClock, MatchState, PendingBallTouches, Position, Team, TouchKind,
+    LastTouch, Match, MatchClock, MatchState, PendingBallTouches, Position, Referee, Team, TouchKind,
     Velocity,
 };
 use sim_math::Vec2;
@@ -198,10 +198,14 @@ pub fn decide_transition(
             if in_halftime_for < HALFTIME_BREAK_TICKS {
                 return TransitionDecision::stable(current_state);
             }
-            let new_clock = clock.map(|c| MatchClock {
+            let new_clock = clock.map(|_| MatchClock {
                 elapsed_ticks: 0,
                 half: 2,
-                added_time_ticks: c.added_time_ticks,
+                // Added time is per-half (PRD §8.4): the first half's
+                // value is stashed in `FirstHalfAddedTime` at the
+                // whistle (see `emit_transition_event`); the second
+                // half starts from zero and accrues its own.
+                added_time_ticks: 0,
                 is_running: true,
             });
             TransitionDecision {
@@ -308,6 +312,14 @@ pub fn apply_transition(
         for mut team in team_query.iter_mut(world) {
             let flipped = -team.attack_direction();
             team.set_attack_direction(flipped);
+        }
+        // Added time is per-half (PRD §8.4): the first half's stoppage
+        // queue was stashed into `FirstHalfAddedTime` at the whistle, so
+        // clear it here for the second half's own accrual. Worlds without
+        // a referee (sparse unit fixtures) simply skip.
+        let mut referee_query = world.query::<&mut Referee>();
+        for mut referee in referee_query.iter_mut(world) {
+            referee.stoppage_events.clear();
         }
     }
 

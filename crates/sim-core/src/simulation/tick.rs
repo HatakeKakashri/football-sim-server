@@ -67,5 +67,20 @@ impl Simulation {
                 clock.elapsed_ticks = elapsed_before + 1;
             }
         }
+        // Added time is written to the Resource by
+        // `added_time_calculation_system` during the schedule run; mirror
+        // it to the Component form every tick (running or not) so the
+        // two forms never diverge.
+        let added_time_ticks = self
+            .world
+            .get_resource::<MatchClock>()
+            .map_or(0, |c| c.added_time_ticks);
+        if let Some(mut clock) = self
+            .world
+            .entity_mut(self.match_entity)
+            .get_mut::<MatchClock>()
+        {
+            clock.added_time_ticks = added_time_ticks;
+        }
     }
 }

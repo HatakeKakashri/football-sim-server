@@ -442,6 +442,10 @@ fn test_decide_transition_halftime_to_kickoff() {
     let new_clock = decision.new_clock.expect("new_clock should be set");
     assert_eq!(new_clock.elapsed_ticks, 0);
     assert_eq!(new_clock.half, 2);
+    assert_eq!(
+        new_clock.added_time_ticks, 0,
+        "added time is per-half (PRD §8.4): the second half starts from zero"
+    );
     assert!(new_clock.is_running);
 }
 
@@ -653,4 +657,115 @@ fn test_apply_transition_emits_full_time_with_count_and_hash() {
         "no stoppages in this world, no added time"
     );
     assert_ne!(payload.state_hash, 0, "state hash is populated");
+}
+
+// =========================================================================
+// Ticket 11: added time is per-half (PRD §8.4). The first half's added
+// ticks are stashed at the whistle for the `full_time` report; the
+// second half starts from zero with an empty stoppage queue.
+// =========================================================================
+
+/// Leaving `HalfTime` for the second-half `Kickoff` resets the clock's
+/// added time to zero and clears the referee's stoppage queue, while the
+/// first half's added time survives in `FirstHalfAddedTime` for the
+/// `full_time` event (PRD §9.2 `added_time_ticks: [h1, h2]`).
+#[test]
+fn test_apply_transition_to_second_half_resets_added_time() {
+    use crate::simulation::lifecycle::FirstHalfAddedTime;
+    use sim_components::{Referee, StoppageEvent};
+
+    let (mut world, match_entity, ball_entity) = transition_test_world((1, 0), 1);
+    // First half accrued 1 minute of added time (1 stoppage tick).
+    world.insert_resource(FirstHalfAddedTime(3_600));
+    world.spawn(Referee {
+        stoppage_events: vec![StoppageEvent {
+            tick: 100,
+            reason: "dead_ball".to_string(),
+        }],
+        cards: Vec::new(),
+    });
+
+    let decision = TransitionDecision {
+        next_state: MatchState::Kickoff,
+        new_clock: Some(MatchClock {
+            elapsed_ticks: 0,
+            half: 2,
+            added_time_ticks: 0,
+            is_running: true,
+        }),
+        place_ball_center: true,
+        apply_kickoff_impulse: false,
+    };
+    apply_transition(
+        &decision,
+        MatchState::HalfTime,
+        match_entity,
+        ball_entity,
+        time::HALF_LENGTH_TICKS,
+        &mut world,
+    );
+
+    let clock = world.resource::<MatchClock>();
+    assert_eq!(
+        clock.added_time_ticks, 0,
+        "second half starts with no added time"
+    );
+    assert_eq!(clock.half, 2);
+    let mut referees = world.query::<&Referee>();
+    for referee in referees.iter(&world) {
+        assert!(
+            referee.stoppage_events.is_empty(),
+            "the stoppage queue is cleared for the second half's own accrual"
+        );
+    }
+    assert_eq!(
+        world.resource::<FirstHalfAddedTime>().0,
+        3_600,
+        "the first half's added time survives for the full_time report"
+    );
+}
+
+/// The `full_time` event reports both halves' added time
+/// (`added_time_ticks: [h1, h2]`, PRD §9.2).
+#[test]
+fn test_apply_transition_full_time_reports_both_halves_added_time() {
+    use crate::simulation::lifecycle::FirstHalfAddedTime;
+
+    let (mut world, match_entity, ball_entity) = transition_test_world((2, 2), 2);
+    world.insert_resource(FirstHalfAddedTime(3_600));
+    let decision = TransitionDecision {
+        next_state: MatchState::FullTime,
+        new_clock: Some(MatchClock {
+            elapsed_ticks: time::HALF_LENGTH_TICKS + 7_200,
+            half: 2,
+            added_time_ticks: 7_200,
+            is_running: false,
+        }),
+        place_ball_center: false,
+        apply_kickoff_impulse: false,
+    };
+    apply_transition(
+        &decision,
+        MatchState::InPlay,
+        match_entity,
+        ball_entity,
+        2 * time::HALF_LENGTH_TICKS + 7_200,
+        &mut world,
+    );
+    let log = world.resource::<EventLog>();
+    assert_eq!(log.events.len(), 1);
+    let MatchEvent::FullTime { envelope, payload } = &log.events[0] else {
+        panic!("expected full_time event");
+    };
+    assert_eq!(
+        payload.added_time_ticks,
+        (3_600, 7_200),
+        "full_time reports per-half added time [h1, h2]"
+    );
+    assert_eq!(envelope.minute, 90);
+    assert_eq!(
+        envelope.added_minute,
+        Some(2),
+        "the whistle clock reads 90+2"
+    );
 }

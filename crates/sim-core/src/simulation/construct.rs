@@ -14,6 +14,7 @@ use sim_physics::{
 use sim_rules::{
     added_time_calculation_system, apply_ball_touched_system, foul_detection_system,
     goal_detection_system, minimum_player_count_system, out_of_bounds_system, possession_resolution_system, restart_system,
+    stoppage_tracking_system,
 };
 
 use super::Simulation;
@@ -115,9 +116,12 @@ fn register_systems(schedule: &mut Schedule) {
     // the live `Ball.possessor`, so it must run last.
     super::event_emit::register_event_systems(schedule);
 
-    // MatchAdmin — added time → minimum players → substitutions → mentality.
+    // MatchAdmin — stoppage tracking → added time → minimum players →
+    // substitutions → mentality. Stoppage tracking runs first so the
+    // same-tick dead-ball count feeds the added-time calculation.
     schedule.add_systems(
         (
+            stoppage_tracking_system,
             added_time_calculation_system,
             minimum_player_count_system,
             substitution_system,

@@ -1,7 +1,10 @@
 //! Match clock: added-time calculation and duration enforcement (Law 7).
 //!
-//! `added_time_calculation_system` converts the referee's stoppage-events
-//! queue into added-time minutes (capped at 10 min per half).
+//! `added_time_calculation_system` converts the referee's accumulated
+//! stoppage ticks (one [`Referee::stoppage_events`] entry per dead-ball
+//! tick, plus one per OOB restart) into whole added minutes, rounded up
+//! and capped at 10 min per half (PRD §8.4). The queue accumulates for
+//! the whole half and is cleared at the half-time transition.
 //! `match_duration_enforcement_system` transitions the match into
 //! `HalfTime` / `FullTime` when a half's ticks (regular + added) are
 //! exhausted.
@@ -12,36 +15,37 @@ use sim_telemetry::TelemetryConfig;
 
 use crate::CurrentTick;
 
-/// Added time granted per stoppage event, in seconds (0.5 min).
-const ADDED_SECS_PER_STOPPAGE_EVENT: u64 = 30;
-/// Cap on added time for one half, in seconds (10 min).
-const MAX_ADDED_SECS_PER_HALF: u64 = 600;
+/// Ticks in one whole minute at the fixed 60 Hz timestep.
+const TICKS_PER_MINUTE: u64 = time::TICKS_PER_SECOND * time::SECONDS_PER_MINUTE;
+/// Cap on added time for one half, in whole minutes (PRD §8.4).
+const MAX_ADDED_MINUTES_PER_HALF: u64 = 10;
 
 pub fn added_time_calculation_system(
-    mut referee_query: Query<&mut Referee>,
-    mut clock_query: Query<&mut MatchClock>,
+    referee_query: Query<&Referee>,
+    mut clock: ResMut<MatchClock>,
 ) {
-    for mut referee in &mut referee_query {
-        if referee.stoppage_events.is_empty() {
-            continue;
-        }
-        // 0.5 minutes (30 s) per stoppage event, capped at 10 minutes
-        let events = u64::try_from(referee.stoppage_events.len()).unwrap_or(u64::MAX);
-        let added_secs = events
-            .saturating_mul(ADDED_SECS_PER_STOPPAGE_EVENT)
-            .min(MAX_ADDED_SECS_PER_HALF);
-        let added_time_ticks = time::secs_to_ticks(added_secs);
-        let added_time_min = time::ticks_to_mins_f32(added_time_ticks);
-
-        // Apply to match clock
-        if let Ok(mut clock) = clock_query.get_single_mut() {
-            clock.added_time_ticks = added_time_ticks;
-            tracing::info!(
-                "Added time calculated: {added_time_min} minutes ({added_time_ticks} ticks)"
-            );
-        }
-
-        referee.stoppage_events.clear();
+    let Some(referee) = referee_query.iter().next() else {
+        return;
+    };
+    // One queue entry equals one stoppage tick (PRD §8.4): dead-ball
+    // ticks accrue one-by-one via `stoppage_tracking_system`, OOB
+    // restarts credit a single tick each via `restart_system`.
+    let stop_ticks = u64::try_from(referee.stoppage_events.len()).unwrap_or(u64::MAX);
+    if stop_ticks == 0 {
+        return;
+    }
+    // Round up to whole minutes, capped at the 10-minute cap.
+    let added_minutes = stop_ticks
+        .div_ceil(TICKS_PER_MINUTE)
+        .min(MAX_ADDED_MINUTES_PER_HALF);
+    let added_time_ticks = added_minutes.saturating_mul(TICKS_PER_MINUTE);
+    // Monotonic within the half: never shrink what an earlier tick
+    // granted (and hand-seeded test clocks keep their value).
+    if added_time_ticks > clock.added_time_ticks {
+        clock.added_time_ticks = added_time_ticks;
+        tracing::info!(
+            "Added time calculated: {added_minutes} minute(s) ({added_time_ticks} ticks)"
+        );
     }
 }
 

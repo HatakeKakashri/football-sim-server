@@ -1078,26 +1078,30 @@ impl EventLog {
 /// `MatchClock` (half / minute / `added_minute`) plus the
 /// global tick and the team.
 ///
-/// `added_minute` is `None` while the match is in regular time
-/// (i.e. before any `added_time_ticks` has accrued). When set,
-/// it is the integer minute in `[1, 10]`.
+/// `added_minute` is `None` while the match is in regular time — before
+/// the half's 45 minutes are done — even when stoppages have already
+/// accrued added ticks for the coming whistle (PRD §8.3: the display
+/// clock reads `45+n` / `90+n` only in added time). Once the whistle
+/// threshold is reached it is the up-rounded whole-minute count in
+/// `[1, 10]`, so the first added minute is `1`, never `0`.
 #[must_use]
 pub fn envelope_minute_fields(clock: &MatchClock) -> (u8, Option<u8>) {
     let minute = if clock.half >= 2 { 90 } else { 45 };
+    if clock.elapsed_ticks < HALF_LENGTH_TICKS {
+        return (minute, None);
+    }
     // `added_time_ticks` is per-half. Convert to whole minutes,
     // rounding up: 1 added_minute starts the moment added time
     // begins (PRD §8.3).
-    let added_minute = if clock.added_time_ticks == 0 {
-        None
-    } else {
-        // ticks / 60 = seconds; seconds / 60 = minutes; round up.
-        // Use ceiling division without f32 to stay integer-clean.
-        let total_secs = clock.added_time_ticks.div_ceil(60);
-        let mins = total_secs.div_ceil(60);
-        // Cap at u8; PRD §8.4 caps added time at 10 minutes.
-        Some(mins.min(255) as u8)
-    };
-    (minute, added_minute)
+    if clock.added_time_ticks == 0 {
+        return (minute, None);
+    }
+    // ticks / 60 = seconds; seconds / 60 = minutes; round up.
+    // Use ceiling division without f32 to stay integer-clean.
+    let total_secs = clock.added_time_ticks.div_ceil(60);
+    let mins = total_secs.div_ceil(60);
+    // Cap at u8; PRD §8.4 caps added time at 10 minutes.
+    (minute, Some(mins.min(255) as u8))
 }
 
 /// Convenience constructor for a `pass` event.
@@ -1643,6 +1647,25 @@ mod tests {
         let c = sample_clock(1, 162_000, (3 * 60 + 1) * 60);
         let (_, a) = envelope_minute_fields(&c);
         assert_eq!(a, Some(4));
+    }
+
+    #[test]
+    fn envelope_added_minute_is_none_before_the_whistle() {
+        // PRD §8.3: the display clock reads `45+n` / `90+n` only in added
+        // time. Stoppages may accrue added ticks mid-half (the whistle
+        // moves later), but regular-time events stay unmarked.
+        let c = sample_clock(1, 100, 3_600);
+        assert_eq!(envelope_minute_fields(&c), (45, None));
+
+        let c = sample_clock(2, 100, 3_600);
+        assert_eq!(envelope_minute_fields(&c), (90, None));
+
+        // At the whistle the added minute appears, starting at 1.
+        let c = sample_clock(1, 162_000, 3_600);
+        assert_eq!(envelope_minute_fields(&c), (45, Some(1)));
+
+        let c = sample_clock(2, 162_000, 7_200);
+        assert_eq!(envelope_minute_fields(&c), (90, Some(2)));
     }
 
     #[test]

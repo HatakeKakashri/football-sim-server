@@ -7,10 +7,49 @@
 //! 7 players (the minimum required to start/continue a match).
 
 use bevy_ecs::prelude::*;
-use sim_components::{Match, Player, Position, Team, Velocity};
+use sim_components::{Ball, BallState, Match, MatchState, Player, Position, Referee, StoppageEvent, Team, Velocity};
 use sim_telemetry::TelemetryConfig;
 
 use crate::CurrentTick;
+
+/// Reason recorded when the ball sits `Dead` for a tick while the match
+/// is in play (PRD §8.4: dead-ball time accrues stoppage).
+pub const DEAD_BALL_STOPPAGE_REASON: &str = "dead_ball";
+/// Reason recorded when an out-of-bounds restart is taken (PRD §8.4: the
+/// restart itself is a stoppage even though the ball is `Dead` for less
+/// than a full tick — detection and restart settle in the same tick).
+pub const OOB_RESTART_STOPPAGE_REASON: &str = "oob_restart";
+
+/// Stoppage tracking (PRD §8.4, Law 7).
+///
+/// Pushes one [`StoppageEvent`] per tick the ball spends `Dead` while
+/// the match is in play. The queue accumulates for the whole half (it is
+/// cleared at the half-time transition); `added_time_calculation_system`
+/// derives the half's added time from its length, so one entry equals one
+/// stoppage tick. Goal celebrations accrue here tick-by-tick through the
+/// 60-tick kickoff delay; OOB restarts accrue a single entry each via
+/// `restart_system` (same-tick settle, no `Dead` window to observe).
+/// The only signals are tick counts, so determinism is preserved.
+pub fn stoppage_tracking_system(
+    mut referee_query: Query<&mut Referee>,
+    ball: Res<Ball>,
+    match_res: Res<Match>,
+    current_tick: Option<Res<CurrentTick>>,
+) {
+    if match_res.state != MatchState::InPlay {
+        return;
+    }
+    if ball.state != BallState::Dead {
+        return;
+    }
+    let tick = current_tick.as_deref().map_or(0, |t| t.0);
+    for mut referee in &mut referee_query {
+        referee.stoppage_events.push(StoppageEvent {
+            tick,
+            reason: DEAD_BALL_STOPPAGE_REASON.to_string(),
+        });
+    }
+}
 
 /// Phase 3: Foul detection system (Law 12).
 ///

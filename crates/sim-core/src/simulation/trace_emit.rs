@@ -24,8 +24,9 @@ impl Simulation {
     pub fn enable_telemetry(&mut self, config: TelemetryConfig) {
         self.world.insert_resource(config);
         self.world.insert_resource(TraceGate::default());
-        // Referee stoppage events are queued by the Rules set and drained by
-        // `added_time_calculation_system`; emit after Rules, before the drain.
+        // Referee stoppage events accumulate per half for the added-time
+        // calculation; emit after Rules, before the added-time system, so
+        // the trace sees the same-tick queue state the calculation reads.
         self.schedule.add_systems(
             trace_emission_system
                 .in_set(SimulationSet::MatchAdmin)
@@ -55,8 +56,11 @@ pub struct ChangeTracker {
     /// establishes the baseline.
     ball: Option<(BallState, Option<Entity>)>,
     /// `Referee.cards` persists, so only cards past this count are new.
-    /// (`stoppage_events` needs no such counter: it is drained every tick.)
+    /// (`stoppage_events` accumulates per half, so it needs the same
+    /// running count below.)
     cards_seen: usize,
+    /// Stoppage events already reported; only newer entries are emitted.
+    stoppages_seen: usize,
 }
 
 const BALL_TRACK: Track<'static> = Track {
@@ -157,12 +161,17 @@ pub fn trace_emission_system(
             );
         }
         tracker.cards_seen = referee.cards.len();
-        // `added_time_calculation_system` drains this queue every tick and runs
-        // after this system, so everything in it was queued since the last
-        // drain and is reported exactly once. A running "already seen" count
-        // would wrongly skip new events once the queue has been emptied.
-        for event in &referee.stoppage_events {
+        // The stoppage queue accumulates for the whole half (PRD §8.4),
+        // so report only entries queued since the last recorded tick —
+        // a running "already seen" count like the cards above. The queue
+        // is cleared at half-time, which shrinks it below the count;
+        // reset then so the second half's stoppages are all reported.
+        if referee.stoppage_events.len() < tracker.stoppages_seen {
+            tracker.stoppages_seen = 0;
+        }
+        for event in referee.stoppage_events.iter().skip(tracker.stoppages_seen) {
             emit::stoppage(REFEREE_TRACK, tick, &event.reason, event.tick);
         }
+        tracker.stoppages_seen = referee.stoppage_events.len();
     }
 }

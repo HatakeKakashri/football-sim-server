@@ -7,14 +7,15 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallMarker, BallState, LastTouch, Match, PendingBallTouches, Player, Position, RuleEvent,
-    Team, TeamId, TeamIdComponent, Velocity,
+    Ball, BallMarker, BallState, LastTouch, Match, PendingBallTouches, Player, Position, Referee,
+    RuleEvent, StoppageEvent, Team, TeamId, TeamIdComponent, Velocity,
 };
 use sim_math::Vec2;
 use sim_telemetry::TelemetryConfig;
 
 use crate::constants::{CENTER_SPOT, GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH};
 use crate::out_of_bounds::calculate_oob_restart_position;
+use crate::referee::OOB_RESTART_STOPPAGE_REASON;
 use crate::{
     CurrentTick, GoalForEmit, GoalResolved, KickoffForEmit, KickoffResolved, OobRestartForEmit,
     OobRestartResolved, OutOfBoundsEvent, PendingOutOfBounds, PendingRestart, team_attacking_goal,
@@ -193,7 +194,7 @@ pub fn goal_detection_system(
 /// the team that conceded the goal.
 #[allow(
     clippy::too_many_arguments,
-    reason = "Bevy system param set: 10 standard params is the project norm for restart-time systems (construct.rs:37 establishes the ceiling)"
+    reason = "Bevy system param set: 11 standard params is the project norm for restart-time systems (construct.rs:37 establishes the ceiling)"
 )]
 #[allow(
     clippy::too_many_lines,
@@ -211,6 +212,7 @@ pub fn restart_system(
     mut pending_oob: ResMut<PendingOutOfBounds>,
     mut oob_for_emit: Option<ResMut<OobRestartForEmit>>,
     mut kickoff_for_emit: Option<ResMut<KickoffForEmit>>,
+    mut referee_query: Query<&mut Referee>,
 ) {
     let tick = current_tick.as_deref().map_or(0, |t| t.0);
     // Handle KickoffRestart from goal (delayed by 60 ticks)
@@ -349,6 +351,18 @@ pub fn restart_system(
                 taker_team,
                 taker,
                 restart_pos,
+            });
+        }
+        // PRD §8.4: the OOB restart itself counts toward stoppage. The
+        // ball is `Dead` for less than a full tick here (detection and
+        // restart settle in the same tick), so `stoppage_tracking_system`
+        // would observe nothing — credit one stoppage tick explicitly.
+        // Goal celebrations need no such credit: the ball stays `Dead`
+        // through the 60-tick kickoff delay and accrues tick-by-tick.
+        for mut referee in &mut referee_query {
+            referee.stoppage_events.push(StoppageEvent {
+                tick,
+                reason: OOB_RESTART_STOPPAGE_REASON.to_string(),
             });
         }
         let kind = match oob_type {

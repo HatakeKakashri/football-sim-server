@@ -258,9 +258,10 @@ fn referee_events_appear_once_when_a_referee_exists() {
 
 #[test]
 fn stoppages_queued_on_different_recorded_ticks_are_all_reported() {
-    // `added_time_calculation_system` drains `Referee.stoppage_events` every
-    // tick, so each recorded tick sees only what was queued since the last
-    // drain. Every one of them must reach the trace, not just the first.
+    // The stoppage queue accumulates per half (PRD §8.4); the trace keeps
+    // a running "already seen" count so each recorded tick reports only
+    // what was queued since the last one. Every entry must reach the
+    // trace, not just the first.
     let mut world = World::new();
     let referee = world
         .spawn(Referee {
@@ -291,13 +292,6 @@ fn stoppages_queued_on_different_recorded_ticks_are_all_reported() {
                     });
             }
             schedule.run(&mut world);
-            // The drain that follows the emission system in the real schedule.
-            world
-                .entity_mut(referee)
-                .get_mut::<Referee>()
-                .expect("invariant: referee entity exists")
-                .stoppage_events
-                .clear();
         }
     });
     let reasons: Vec<&str> = events

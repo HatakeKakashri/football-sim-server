@@ -33,7 +33,7 @@ pub use emit_state::{
 pub use goals::{goal_detection_system, restart_system};
 pub use out_of_bounds::out_of_bounds_system;
 pub use possession::possession_resolution_system;
-pub use referee::{foul_detection_system, minimum_player_count_system};
+pub use referee::{foul_detection_system, minimum_player_count_system, stoppage_tracking_system};
 pub use touch::apply_ball_touched_system;
 
 use bevy_ecs::prelude::*;

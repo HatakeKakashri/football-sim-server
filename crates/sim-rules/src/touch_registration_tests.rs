@@ -14,8 +14,8 @@ use bevy_ecs::prelude::*;
 use sim_ai_player::kick_execution_system;
 use sim_components::{
     ActionIntent, Ball, BallMarker, BallState, Intent, LastTouch, Match, MatchClock, MatchState,
-    NearbyEntity, PendingBallTouches, PerceptionSnapshot, PitchBounds, Player, Position, RuleEvent,
-    TeamIdComponent, TouchKind, Velocity,
+    NearbyEntity, PendingBallTouches, PerceptionSnapshot, PitchBounds, Player, Position, Referee,
+    RuleEvent, TeamIdComponent, TouchKind, Velocity,
 };
 use sim_core::Simulation;
 use sim_math::Vec2;
@@ -424,6 +424,86 @@ fn test_oob_restart_registers_restart_touch() {
                 .with_tick(50)
         ],
         "restart_system must push the Restart touch to PendingBallTouches"
+    );
+}
+
+/// `restart_system` credits one stoppage tick per OOB restart (PRD §8.4).
+/// Detection and restart settle in the same tick, so the ball has no
+/// observable `Dead` window for `stoppage_tracking_system` — without this
+/// credit an OOB restart would accrue nothing.
+#[test]
+fn test_oob_restart_credits_one_stoppage_tick() {
+    let mut world = World::new();
+
+    // Touchline OOB: ball at (20.0, 0.0), settled.
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world
+        .entity_mut(ball_entity)
+        .insert(Position(pos(20.0, 0.0)));
+    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
+
+    // Last toucher on team 0; taker on team 1.
+    let toucher = world.spawn(()).id();
+    world.entity_mut(toucher).insert(Player {
+        team_id: sim_components::TeamId(0),
+        intent: None,
+    });
+    world
+        .entity_mut(toucher)
+        .insert(TeamIdComponent(sim_components::TeamId(0)));
+    let taker = world.spawn(()).id();
+    world.entity_mut(taker).insert(Player {
+        team_id: sim_components::TeamId(1),
+        intent: None,
+    });
+    world
+        .entity_mut(taker)
+        .insert(TeamIdComponent(sim_components::TeamId(1)));
+
+    world.insert_resource(Ball {
+        kick_velocity: None,
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: Some(LastTouch::by_player(sim_components::TeamId(0), toucher, TouchKind::Play)),
+        touch_history: [None, None],
+    });
+    world.insert_resource(PendingBallTouches::default());
+    world.insert_resource(PendingOutOfBounds::default());
+    world.insert_resource(CurrentTick(50));
+    let referee = world
+        .spawn(Referee {
+            stoppage_events: Vec::new(),
+            cards: Vec::new(),
+        })
+        .id();
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(
+        (
+            apply_ball_touched_system,
+            out_of_bounds_system,
+            restart_system,
+        )
+            .chain(),
+    );
+    schedule.run(&mut world);
+
+    let queue = &world
+        .entity(referee)
+        .get::<Referee>()
+        .expect("invariant: referee entity exists")
+        .stoppage_events;
+    assert_eq!(
+        queue.len(),
+        1,
+        "one OOB restart credits exactly one stoppage tick"
+    );
+    assert_eq!(queue[0].tick, 50);
+    assert_eq!(
+        queue[0].reason, "oob_restart",
+        "the credit is labelled so it stays distinguishable from dead-ball ticks"
     );
 }
 

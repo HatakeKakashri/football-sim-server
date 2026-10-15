@@ -7,7 +7,7 @@ use sim_ai_player::{
     kick_execution_system, perception_system, player_action_execution_system,
     player_decision_system,
 };
-use sim_components::{PerceptionSnapshot, PitchBounds, RoleComponent, Skill, Stamina};
+use sim_components::{PerceptionSnapshot, PitchBounds, PlayerProfile, RoleComponent, Skill, Stamina};
 use sim_physics::{
     apply_kick_velocity_system, ball_physics_system, pitch_control_system, player_movement_system,
 };
@@ -268,6 +268,17 @@ impl Simulation {
             world.entity_mut(player_entity).insert(slot);
             world.entity_mut(player_entity).insert(HomeSlot::new(pos));
             world.entity_mut(player_entity).insert(Skill(0.7));
+            // Ticket 13: every player carries a `PlayerProfile`; the GK
+            // slot (index 0 in `ALL_442`) gets the goalkeeper profile.
+            if i == 0 {
+                world
+                    .entity_mut(player_entity)
+                    .insert(PlayerProfile::default_goalkeeper());
+            } else {
+                world
+                    .entity_mut(player_entity)
+                    .insert(PlayerProfile::default_outfield());
+            }
             // Insert PerceptionSnapshot as a Component (Phase B)
             world.entity_mut(player_entity).insert(default_snapshot);
             world
@@ -332,6 +343,16 @@ impl Simulation {
             world.entity_mut(player_entity).insert(slot);
             world.entity_mut(player_entity).insert(HomeSlot::new(pos));
             world.entity_mut(player_entity).insert(Skill(0.7));
+            // Ticket 13: see the home-squad loop above.
+            if i == 0 {
+                world
+                    .entity_mut(player_entity)
+                    .insert(PlayerProfile::default_goalkeeper());
+            } else {
+                world
+                    .entity_mut(player_entity)
+                    .insert(PlayerProfile::default_outfield());
+            }
             world.entity_mut(player_entity).insert(default_snapshot);
             world
                 .entity_mut(player_entity)

@@ -2,11 +2,23 @@ use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 use sim_math::Vec2;
 
+pub mod attribute;
+pub mod attribute_groups;
 pub mod ball_touch;
 pub mod event_kinds;
 pub mod formation_slot;
 pub mod intent_dispatch;
+pub mod profile;
 pub mod time;
+
+#[cfg(test)]
+mod attribute_tests;
+
+pub use attribute::Attribute;
+pub use attribute_groups::{Goalkeeping, OutfieldAttack, OutfieldDefence, PhysicalMental};
+pub use profile::{
+    AttributeError, PlayerProfile, ProfileKind, ATTRIBUTE_COUNT, ATTRIBUTE_MAX, ATTRIBUTE_MIN,
+};
 
 pub use ball_touch::{
     BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, PlayerId, RuleEvent,

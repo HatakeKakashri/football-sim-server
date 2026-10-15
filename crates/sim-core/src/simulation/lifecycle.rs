@@ -14,7 +14,7 @@ use sim_components::{
 };
 use sim_math::Vec2;
 
-use super::formation::reset_formation_to_4_4_2;
+use super::formation::reset_formation;
 
 /// Tracks the simulation tick at which the match entered the `HalfTime`
 /// state. `None` means we are not currently in `HalfTime`. Used to time out
@@ -67,7 +67,7 @@ pub fn apply_player_slot(world: &mut World, player_entity: Entity, target: Vec2)
 /// Pick the kickoff-taker entity for `team_id`:
 /// - prefer a player with `RoleComponent(Role::Striker)`,
 /// - fall back to the last player on the team by entity bits (which after
-///   `reset_formation_to_4_4_2` lands on a forward slot),
+///   `reset_formation` lands on a forward slot),
 /// - fall back to `Entity::PLACEHOLDER` if the team is empty.
 ///
 /// This helper is deterministic and tolerates the current state where
@@ -300,7 +300,7 @@ pub fn apply_transition(
     // Clear the HalfTime entry-tick resource once we've left HalfTime.
     // Also flip every team's attack_direction so they attack the opposite
     // end in the second half (Law 8: teams switch ends at half-time).
-    // This MUST run before `reset_formation_to_4_4_2` so the formation reset
+    // This MUST run before `reset_formation` so the formation reset
     // uses the second half's slot tables.
     if current_state == MatchState::HalfTime && decision.next_state != MatchState::HalfTime {
         world.insert_resource(HalfTimeEntryTick { tick: None });
@@ -323,9 +323,9 @@ pub fn apply_transition(
         }
     }
 
-    // Reset 4-4-2 formation whenever we enter Kickoff.
+    // Reset formation whenever we enter Kickoff.
     if decision.next_state == MatchState::Kickoff && current_state != MatchState::Kickoff {
-        reset_formation_to_4_4_2(world);
+        reset_formation(world);
         if world
             .get_resource::<sim_telemetry::TelemetryConfig>()
             .is_some()

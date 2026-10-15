@@ -22,6 +22,7 @@ use sim_components::{
 use sim_math::{PITCH_LENGTH, PITCH_WIDTH, Vec2, goal_position_for};
 
 use crate::Simulation;
+use crate::simulation::formation::reset_formation;
 use crate::simulation::lifecycle::HalfTimeEntryTick;
 
 /// Halfway line along the pitch length.
@@ -189,7 +190,7 @@ fn test_mirror_match_is_exact_reflection_over_three_minutes() {
             .expect("invariant: team entity has a Team component")
             .set_attack_direction(direction);
     }
-    crate::simulation::formation::reset_formation_to_4_4_2(mirrored.world_mut());
+    reset_formation(mirrored.world_mut());
 
     let (mut canonical_max_x, mut mirrored_min_x) = (f32::NEG_INFINITY, f32::INFINITY);
     for tick in 0..THREE_MINUTES_TICKS {

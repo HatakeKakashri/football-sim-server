@@ -46,7 +46,7 @@ use crate::profile::PlayerProfile;
 ///
 /// Note: This is distinct from the `Position(pub Vec2)` component which
 /// stores a player's current location on the pitch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PosSlot {
     /// Goalkeeper.
     GK,

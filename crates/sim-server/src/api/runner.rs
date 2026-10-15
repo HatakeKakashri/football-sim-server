@@ -188,10 +188,9 @@ pub(crate) fn build_roster(sim: &Simulation) -> Roster {
     let mut players: Vec<(u64, sim_components::TeamId, String)> = Vec::new();
     for entity in sim.world().iter_entities() {
         if let Some(player) = entity.get::<Player>() {
-            let slot = entity.get::<FormationSlot>().map_or_else(
-                || "UNK".to_string(),
-                |slot| format!("{slot:?}"),
-            );
+            let slot = entity
+                .get::<FormationSlot>()
+                .map_or_else(|| "UNK".to_string(), |slot| format!("{}", slot.position));
             players.push((entity.id().to_bits(), player.team_id, slot));
         }
     }

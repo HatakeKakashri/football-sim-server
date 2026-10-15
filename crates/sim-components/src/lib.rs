@@ -408,7 +408,7 @@ impl Team {
         self.attack_direction = dir;
     }
 
-    /// Aggregate `slot_qualities` (one per slot, in [`FormationSlot::ALL_442`]
+    /// Aggregate `slot_qualities` (one per slot, in formation table
     /// order) into a team strength.
     ///
     /// # Parameters

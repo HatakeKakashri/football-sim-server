@@ -217,7 +217,7 @@ pub struct RosterEntry {
     pub name: String,
     /// Squad number 1–11.
     pub number: u8,
-    /// Formation slot (`GK`, `DC1`, …).
+    /// Formation slot (`GK`, `DC`, …).
     pub position: String,
 }
 

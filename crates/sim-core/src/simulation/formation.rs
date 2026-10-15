@@ -1,4 +1,8 @@
-//! Formation reset (4-4-2 placeholder).
+//! Formation reset: every player is placed at their formation slot's
+//! coordinate for the team's current `attack_direction`. One slot
+//! table serves both halves and both teams — at half-time only the
+//! direction flips, so each player's slot mirrors ends through the
+//! same code path (ticket 02 / ticket 17).
 
 use bevy_ecs::prelude::*;
 use sim_components::{FormationSlot, Player, Team, TeamId};
@@ -6,13 +10,10 @@ use sim_math::Vec2;
 
 use super::lifecycle::apply_player_slot;
 
-/// Phase 1 hardcoded 4-4-2 formation reset. Every player carries a
-/// [`FormationSlot`]; each is placed at [`FormationSlot::position_for`] the
-/// team's current `attack_direction`. Teams attacking right
-/// (`attack_direction = +1`) place their goalkeeper near x=5; teams attacking
-/// left (`attack_direction = -1`) place it near x=100. One slot table serves
-/// both halves through the direction field, with no home/away distinction.
-pub fn reset_formation_to_4_4_2(world: &mut World) {
+/// Reset every player to their formation slot for their team's current
+/// attack direction. Called when entering `Kickoff` (match start and
+/// second-half kickoff), after the half-time `attack_direction` flip.
+pub fn reset_formation(world: &mut World) {
     let directions: Vec<(TeamId, i8)> = world
         .query::<&Team>()
         .iter(world)

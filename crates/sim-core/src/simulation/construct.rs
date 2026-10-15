@@ -183,7 +183,7 @@ impl Simulation {
     )]
     pub fn create_match(world: &mut World, seed: u64) -> (Entity, Entity, Entity) {
         use sim_components::{
-            Ball, BallMarker, FormationSlot, HomeSlot, Match, MatchClock, MatchState,
+            Ball, BallMarker, HomeSlot, Match, MatchClock, MatchState,
             PendingBallTouches, Player, Position, Team, TeamId, Velocity,
         };
         use sim_math::Vec2;
@@ -223,9 +223,11 @@ impl Simulation {
         let home_team_entity = world.spawn(()).id();
         let mut home_players = Vec::new();
 
-        // Create 11 home players
+        // Create 11 home players, one per slot of the team's formation table.
+        let formation = sim_components::Formation::FourFourTwo;
+        let slots = formation.table().slots;
         for i in 0_u8..11 {
-            let slot = FormationSlot::ALL_442[i as usize];
+            let slot = slots[i as usize];
             let pos = slot.position_for(1);
             let player_entity = world.spawn(()).id();
             // Phase 1: seed each player with a default empty PerceptionSnapshot
@@ -269,7 +271,7 @@ impl Simulation {
             world.entity_mut(player_entity).insert(HomeSlot::new(pos));
             world.entity_mut(player_entity).insert(Skill(0.7));
             // Ticket 13: every player carries a `PlayerProfile`; the GK
-            // slot (index 0 in `ALL_442`) gets the goalkeeper profile.
+            // slot (index 0 of the formation table) gets the goalkeeper profile.
             if i == 0 {
                 world
                     .entity_mut(player_entity)
@@ -303,9 +305,10 @@ impl Simulation {
         let away_team_entity = world.spawn(()).id();
         let mut away_players = Vec::new();
 
-        // Create 11 away players
+        // Create 11 away players, one per slot of the team's formation table.
+        let away_slots = sim_components::Formation::FourFourTwo.table().slots;
         for i in 0_u8..11 {
-            let slot = FormationSlot::ALL_442[i as usize];
+            let slot = away_slots[i as usize];
             let pos = slot.position_for(-1);
             let player_entity = world.spawn(()).id();
             let default_snapshot = PerceptionSnapshot {

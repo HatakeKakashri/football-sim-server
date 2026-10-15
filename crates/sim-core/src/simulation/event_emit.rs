@@ -30,13 +30,14 @@
 //!   boundary. (Goal-driven `possession_change` is in ticket 10.)
 
 use bevy_ecs::prelude::*;
-use sim_components::{Ball, BallMarker, BallState, MatchClock, Position, TeamId};
+use sim_components::{Ball, BallMarker, BallState, MatchClock, Position, PlayerId, TeamId};
 use sim_math::Vec2;
-use sim_rules::{PendingOutOfBounds, PendingPass};
+use sim_rules::{OobRestartForEmit, PendingOutOfBounds, PendingPass};
 
 use super::SimulationSet;
 use super::events::{
-    EventLog, PossessionChangeCause, build_pass_event, build_possession_change_event,
+    EventLog, PossessionChangeCause, RestartKind, build_out_of_bounds_event, build_pass_event,
+    build_possession_change_event, build_restart_event,
 };
 
 /// `pass` event resolution: whenever the ball becomes
@@ -260,6 +261,93 @@ pub fn emit_possession_change_on_oob(
     event_log.possession_team = Some(to_team);
 }
 
+/// Emit the `out_of_bounds` and `restart` event pair (PRD §9.2,
+/// ticket 09).
+///
+/// Runs in the `Rules` set after `restart_system` has resolved the
+/// taker and computed the restart placement. Both events share the
+/// same tick (PRD §9.3 / ticket 09 ordering invariant), and the
+/// `out_of_bounds` event precedes its restart event by exactly one
+/// `seq`.
+///
+/// Data flow:
+///
+/// 1. `out_of_bounds_system` writes `PendingOutOfBounds` with
+///    `oob_type` + `last_touch`.
+/// 2. `restart_system` reads the signal, picks the taker team via
+///    Law 9 (opposite of last-touch team), computes `restart_pos`,
+///    places the ball, and stashes the resolved data on
+///    `OobRestartForEmit`.
+/// 3. THIS system reads `OobRestartForEmit`, emits the
+///    `out_of_bounds` event, then the `restart` event, then clears
+///    the resource. Two `event_log.append` calls in immediate
+///    succession guarantee the seq-adjacency invariant.
+///
+/// The `taker` `PlayerId` is `None` when `restart_system` found no
+/// resolvable player on the taker team (`Entity::PLACEHOLDER`
+/// collapse). The wire payload accepts the `null` per PRD §9.2's
+/// "nullable where it doesn't apply" rule (pass events already
+/// follow this convention).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system param set: standard Rules-set emitters all carry similar param lists; splitting would scatter OOB+restart emission across systems"
+)]
+pub fn emit_oob_and_restart_events(
+    mut event_log: ResMut<EventLog>,
+    mut oob_for_emit: Option<ResMut<OobRestartForEmit>>,
+    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    clock: Res<MatchClock>,
+) {
+    let Some(ref mut slot) = oob_for_emit else {
+        return;
+    };
+    let Some(resolved) = slot.0 else {
+        return;
+    };
+    let tick = current_tick.map_or(0, |c| c.0);
+    let kind = RestartKind::from_oob(resolved.oob_type);
+    // The OOB event's `team` is the last-touch team (the team whose
+    // touch sent the ball out). `last_touch` carries the full record
+    // including `team`, so the duplication is consistent with the
+    // possession_change envelope convention.
+    let last_touch_team = resolved
+        .last_touch
+        .as_ref()
+        .map_or(resolved.taker_team, |lt| lt.team);
+    let oob_event = build_out_of_bounds_event(
+        event_log.next_seq,
+        tick,
+        &clock,
+        last_touch_team,
+        resolved.last_touch,
+        resolved.exit_point,
+        kind,
+    );
+    event_log.append(oob_event);
+    // Map the (possibly placeholder) entity to a PlayerId. Real
+    // matches always have a player on the taker team so this
+    // resolves to `Some`; sparse test worlds collapse to `None`.
+    let taker_player_id = if resolved.taker == bevy_ecs::prelude::Entity::PLACEHOLDER {
+        None
+    } else {
+        Some(PlayerId::from_entity(resolved.taker))
+    };
+    let restart_event = build_restart_event(
+        event_log.next_seq,
+        tick,
+        &clock,
+        resolved.taker_team,
+        taker_player_id,
+        resolved.restart_pos,
+        kind,
+    );
+    event_log.append(restart_event);
+    // Clear so the next emitter run is a no-op until the next OOB
+    // restart. Defensive: leave the resource cleared if the run
+    // was somehow re-entered (Bevy schedules a single run per tick).
+    slot.0 = None;
+}
+
 /// Register the event-emission systems into the simulation
 /// schedule. Called from `construct::register_systems`.
 pub fn register_event_systems(schedule: &mut Schedule) {
@@ -268,13 +356,24 @@ pub fn register_event_systems(schedule: &mut Schedule) {
     // their signals. The order is:
     // 1. `out_of_bounds_system` (writes `PendingOutOfBounds`)
     // 2. `possession_resolution_system` (sets `Ball.possessor`)
-    // 3. `emit_possession_change_on_oob` (reads OOB signal)
-    // 4. `emit_possession_change_on_acquisition` (reads
+    // 3. `restart_system` (consumes OOB, stashes `OobRestartForEmit`)
+    // 4. `emit_oob_and_restart_events` (reads OOB emit slot)
+    // 5. `emit_possession_change_on_oob` (reads OOB signal — already
+    //    consumed by restart, so its `get()` returns None on the
+    //    OOB tick; this only fires on the next acquisition tick).
+    // 6. `emit_possession_change_on_acquisition` (reads
     //    `Ball.possessor`)
-    // 5. `resolve_pass_events` (reads both signals to resolve
+    // 7. `resolve_pass_events` (reads both signals to resolve
     //    the pending pass).
+    //
+    // The OOB+restart pair is emitted back-to-back (steps 4
+    // produces `out_of_bounds` at seq N, then `restart` at seq N+1)
+    // to satisfy the ticket 09 ordering invariant. Possession_change
+    // follows at seq N+2 — its placement is irrelevant to the
+    // invariant, which is about OOB→restart adjacency.
     schedule.add_systems(
         (
+            emit_oob_and_restart_events,
             emit_possession_change_on_oob,
             emit_possession_change_on_acquisition,
             resolve_pass_events,

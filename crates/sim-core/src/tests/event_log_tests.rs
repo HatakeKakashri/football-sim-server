@@ -444,3 +444,331 @@ fn event_wire_shape_matches_prd() {
     let type_count = json.matches("\"type\"").count();
     assert_eq!(type_count, 1, "exactly one `type` key expected: {json}");
 }
+
+/// Build a tiny hand-crafted scenario that drives the OOB→restart
+/// event pipeline end to end: out-of-bounds ball, OOB detector
+/// fires, `restart_system` resolves the taker and the placement,
+/// the event emitter writes `out_of_bounds` and `restart` back-to-back.
+///
+/// The pipeline runs inside a real `Bevy` `Schedule` and uses the
+/// rule systems + event emitters in the same order the production
+/// schedule uses (see `sim-core/src/simulation/construct.rs`).
+#[allow(clippy::too_many_lines, reason = "end-to-end OOB→restart scenario setup")]
+fn run_oob_scenario(
+    ball_pos: Vec2,
+    ball_vel: Vec2,
+    oob_type: sim_components::BallOutOfBoundsType,
+    last_touch: LastTouch,
+) -> EventLog {
+    use crate::simulation::SimulationSet;
+
+    let mut world = World::new();
+
+    // Ball entity + position / velocity / marker.
+    let ball_entity = world.spawn(()).id();
+    world.entity_mut(ball_entity).insert(BallMarker);
+    world.entity_mut(ball_entity).insert(Position(ball_pos));
+    world.entity_mut(ball_entity).insert(Velocity(ball_vel));
+
+    // Toucher entity (for the OOB detector's last-touch assertion
+    // and the restart's taker-team computation).
+    let toucher = world.spawn(()).id();
+    world.entity_mut(toucher).insert(Player {
+        team_id: last_touch.team,
+        intent: None,
+    });
+    world
+        .entity_mut(toucher)
+        .insert(sim_components::TeamIdComponent(last_touch.team));
+
+    // Taker-team entity (the team opposite the toucher's team).
+    let taker_team = if last_touch.team == sim_components::TeamId(0) {
+        sim_components::TeamId(1)
+    } else {
+        sim_components::TeamId(0)
+    };
+    let taker_player = world.spawn(()).id();
+    world.entity_mut(taker_player).insert(Player {
+        team_id: taker_team,
+        intent: None,
+    });
+    world
+        .entity_mut(taker_player)
+        .insert(sim_components::TeamIdComponent(taker_team));
+
+    // Ball resource with the touch recorded.
+    world.insert_resource(Ball {
+        state: BallState::Free,
+        possessor: None,
+        last_touch: Some(last_touch),
+        spin: 0.0,
+        touch_history: [None, None],
+        kick_velocity: None,
+    });
+
+    world.insert_resource(sim_components::MatchClock {
+        elapsed_ticks: 1_234,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    });
+    world.insert_resource(sim_rules::CurrentTick(1_234));
+    world.insert_resource(sim_rules::PendingOutOfBounds::default());
+    world.insert_resource(sim_rules::OobRestartForEmit::default());
+    world.insert_resource(sim_rules::PendingPass::default());
+    world.insert_resource(sim_components::PendingBallTouches::default());
+    world.insert_resource(sim_components::Match {
+        id: 1,
+        home_team: Entity::PLACEHOLDER,
+        away_team: Entity::PLACEHOLDER,
+        score: (0, 0),
+        state: sim_components::MatchState::InPlay,
+        seed: 12345,
+    });
+    world.insert_resource(EventLog::new());
+
+    // Pre-seed the OOB signal the way `out_of_bounds_system` would.
+    world.resource_mut::<sim_rules::PendingOutOfBounds>().set(
+        sim_rules::OutOfBoundsEvent {
+            oob_type,
+            last_touch: Some(last_touch),
+        },
+    );
+
+    // Force the ball into the `Dead` state so `restart_system`
+    // takes the OOB arm.
+    world.resource_mut::<Ball>().state = BallState::Dead;
+
+    let mut schedule = Schedule::default();
+    schedule.configure_sets(
+        (
+            SimulationSet::Perception,
+            SimulationSet::Decision,
+            SimulationSet::Execution,
+            SimulationSet::Physics,
+            SimulationSet::Possession,
+            SimulationSet::Rules,
+            SimulationSet::MatchAdmin,
+        )
+            .chain(),
+    );
+    // Register only the systems relevant to the OOB→restart chain
+    // (skip the upstream sets — the test isn't driving perception
+    // or physics).
+    schedule.add_systems(
+        (
+            sim_rules::apply_ball_touched_system,
+            sim_rules::out_of_bounds_system,
+            sim_rules::goal_detection_system,
+            sim_rules::foul_detection_system,
+            sim_rules::restart_system,
+            crate::simulation::event_emit::emit_oob_and_restart_events,
+            crate::simulation::event_emit::emit_possession_change_on_oob,
+            crate::simulation::event_emit::emit_possession_change_on_acquisition,
+            crate::simulation::event_emit::resolve_pass_events,
+        )
+            .chain()
+            .in_set(SimulationSet::Rules),
+    );
+
+    schedule.run(&mut world);
+    world.remove_resource::<EventLog>().expect("EventLog is set")
+}
+
+/// OOB fires on this tick → `out_of_bounds` is emitted first, then
+/// the matching `restart` event (PRD §9.2, ticket 09). The pair
+/// shares the same tick and the `restart.seq == out_of_bounds.seq +
+/// 1` invariant holds.
+#[test]
+fn oob_emits_out_of_bounds_and_restart_pair() {
+    use sim_components::BallOutOfBoundsType;
+    let toucher = Entity::from_raw(11);
+    let last_touch = LastTouch::by_player(
+        sim_components::TeamId(0),
+        toucher,
+        TouchKind::Play,
+    );
+    let log = run_oob_scenario(
+        pos(20.0, 0.0), // touchline OOB
+        Vec2::zero(),
+        BallOutOfBoundsType::ThrowIn,
+        last_touch,
+    );
+
+    // Find the OOB event and the restart event among any
+    // possession_change / pass events the pipeline also emits.
+    let mut oob_event: Option<&crate::OutOfBoundsEventPayload> = None;
+    let mut restart_event: Option<&crate::RestartEventPayload> = None;
+    for event in &log.events {
+        match event {
+            crate::MatchEvent::OutOfBounds { payload, envelope } => {
+                assert_eq!(envelope.tick, 1_234, "OOB event tick = current");
+                oob_event = Some(payload);
+            }
+            crate::MatchEvent::Restart { payload, envelope } => {
+                assert_eq!(envelope.tick, 1_234, "restart event tick = current");
+                restart_event = Some(payload);
+            }
+            _ => {}
+        }
+    }
+    let oob = oob_event.expect("out_of_bounds event was emitted");
+    let restart = restart_event.expect("restart event was emitted");
+
+    // The pair must be adjacent in the log (no other event
+    // interleaved between them).
+    let oob_idx = log
+        .events
+        .iter()
+        .position(|e| matches!(e, crate::MatchEvent::OutOfBounds { .. }))
+        .expect("OOB event present");
+    let restart_idx = log
+        .events
+        .iter()
+        .position(|e| matches!(e, crate::MatchEvent::Restart { .. }))
+        .expect("restart event present");
+    assert_eq!(
+        restart_idx,
+        oob_idx + 1,
+        "restart must immediately follow out_of_bounds (ticket 09 ordering)"
+    );
+
+    // PRD §9.2 payload checks.
+    assert_eq!(oob.restart, crate::RestartKind::ThrowIn);
+    assert!(oob.last_touch.is_some(), "last_touch must be carried");
+    assert_eq!(oob.exit_point[0], 20.0, "exit_point carries the ball pos at detection");
+    assert_eq!(restart.kind, crate::RestartKind::ThrowIn, "kind matches OOB restart");
+    // Throw-in at touchline y=0 → restart at (20, 0).
+    assert_eq!(restart.at[0], 20.0);
+    assert_eq!(restart.at[1], 0.0);
+    // `taker` is on the team opposite the last toucher (Law 9).
+    // last_touch.team = 0 → taker_team = 1; the taker player_id
+    // resolves to the entity bits minted by `PlayerId::from_entity`.
+    let expected_taker_team = if last_touch.team == sim_components::TeamId(0) {
+        sim_components::TeamId(1)
+    } else {
+        sim_components::TeamId(0)
+    };
+    let restart_envelope_team = log
+        .events
+        .iter()
+        .find_map(|e| match e {
+            crate::MatchEvent::Restart { envelope, .. } => Some(envelope.team),
+            _ => None,
+        })
+        .expect("restart envelope team present");
+    assert_eq!(
+        restart_envelope_team,
+        Some(expected_taker_team),
+        "restart envelope.team = taker team (Law 9)"
+    );
+    assert!(
+        restart.taker.is_some(),
+        "restart event must carry a taker PlayerId when a player exists on the taker team"
+    );
+
+    // Seq invariant: restart.seq == out_of_bounds.seq + 1.
+    let oob_seq = log
+        .events
+        .iter()
+        .find(|e| matches!(e, crate::MatchEvent::OutOfBounds { .. }))
+        .map(|e| e.envelope().seq)
+        .expect("OOB event has a seq");
+    let restart_seq = log
+        .events
+        .iter()
+        .find(|e| matches!(e, crate::MatchEvent::Restart { .. }))
+        .map(|e| e.envelope().seq)
+        .expect("restart event has a seq");
+    assert_eq!(
+        restart_seq,
+        oob_seq + 1,
+        "restart.seq == out_of_bounds.seq + 1"
+    );
+}
+
+/// The `restart` taker is on the team OPPOSITE the last toucher
+/// for every restart type (PRD §8.2 Law 9).
+#[test]
+fn restart_taker_is_on_team_opposite_last_toucher() {
+    use sim_components::BallOutOfBoundsType;
+    let last_touch_team = sim_components::TeamId(0);
+
+    // Spawn a fixture per scenario so each test gets its own world.
+    let run = |oob_type| {
+        let last_touch = LastTouch::by_player(
+            last_touch_team,
+            Entity::from_raw(99),
+            TouchKind::Play,
+        );
+        let log = run_oob_scenario(
+            match oob_type {
+                BallOutOfBoundsType::ThrowIn => pos(20.0, 0.0),
+                BallOutOfBoundsType::GoalKick => pos(105.0, 34.0),
+                BallOutOfBoundsType::Corner => pos(105.0, 1.0),
+            },
+            Vec2::zero(),
+            oob_type,
+            last_touch,
+        );
+        log.events
+            .iter()
+            .find_map(|e| match e {
+                crate::MatchEvent::Restart { envelope, .. } => Some(envelope.team),
+                _ => None,
+            })
+            .expect("restart event emitted")
+    };
+
+    assert_eq!(
+        run(BallOutOfBoundsType::ThrowIn),
+        Some(sim_components::TeamId(1)),
+        "last_touch.team = 0 → restart envelope.team = 1 (opposite)"
+    );
+    assert_eq!(
+        run(BallOutOfBoundsType::GoalKick),
+        Some(sim_components::TeamId(1)),
+        "last_touch.team = 0 → restart envelope.team = 1 (opposite)"
+    );
+    assert_eq!(
+        run(BallOutOfBoundsType::Corner),
+        Some(sim_components::TeamId(1)),
+        "last_touch.team = 0 → restart envelope.team = 1 (opposite)"
+    );
+}
+
+/// Across all restart scenarios (throw-in / goal-kick / corner)
+/// the event log's `seq` is still gapless and monotonic — the
+/// OOB→restart pair fits into the existing invariant.
+#[test]
+fn oob_and_restart_events_keep_seq_gapless() {
+    use sim_components::BallOutOfBoundsType;
+    let last_touch = LastTouch::by_player(
+        sim_components::TeamId(1),
+        Entity::from_raw(13),
+        TouchKind::Play,
+    );
+    let log = run_oob_scenario(
+        pos(0.0, 1.0), // corner
+        Vec2::zero(),
+        BallOutOfBoundsType::Corner,
+        last_touch,
+    );
+    assert!(
+        check_gapless_seq(&log).is_none(),
+        "OOB+restart emissions must not break the gapless seq invariant"
+    );
+    // The log must contain at least one OOB and one restart event.
+    assert!(
+        log.events
+            .iter()
+            .any(|e| matches!(e, crate::MatchEvent::OutOfBounds { .. })),
+        "at least one out_of_bounds event"
+    );
+    assert!(
+        log.events
+            .iter()
+            .any(|e| matches!(e, crate::MatchEvent::Restart { .. })),
+        "at least one restart event"
+    );
+}

@@ -13,9 +13,10 @@ mod tests;
 
 pub use simulation::{Simulation, SimulationSet, lifecycle_system};
 pub use simulation::events::{
-    EventEnvelope, EventLog, EventType, MatchEvent, PassEvent, PossessionChangeCause,
-    PossessionChangeEvent, build_pass_event, build_possession_change_event,
-    check_gapless_seq, envelope_minute_fields, opponent_of,
+    EventEnvelope, EventLog, EventType, MatchEvent, OutOfBoundsEventPayload, PassEvent,
+    PossessionChangeCause, PossessionChangeEvent, RestartEventPayload, RestartKind,
+    build_out_of_bounds_event, build_pass_event, build_possession_change_event,
+    build_restart_event, check_gapless_seq, envelope_minute_fields, opponent_of,
 };
 pub use simulation::invariants::{
     InvariantCounters, InvariantViolation, MAX_DEAD_BALL_WINDOW_TICKS, TICK_CAP, check_invariants,

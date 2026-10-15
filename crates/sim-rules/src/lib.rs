@@ -116,6 +116,54 @@ impl PendingOutOfBounds {
     }
 }
 
+/// Resolved OOB restart data, written by `restart_system` after it
+/// has placed the ball and selected a taker (PRD §8.2 / ticket 09).
+///
+/// Consumed by the `emit_oob_and_restart_events` system in `sim-core`
+/// to emit the `out_of_bounds` and `restart` events back-to-back
+/// (the OOB event carries the field-restart kind; the restart event
+/// follows with the placement). The pair shares the same tick; the
+/// invariant `out_of_bounds.seq + 1 == restart.seq` (issue 09) is
+/// preserved by emitting them in a single call from one emitter.
+///
+/// `None` means no OOB restart is awaiting emission on this tick.
+/// `restart_system` clears the resource after writing so the next
+/// emitter run sees `None` until the next OOB.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct OobRestartForEmit(pub Option<OobRestartResolved>);
+
+/// Snapshot of an OOB restart's resolved data.
+///
+/// Holds enough information to emit both the `out_of_bounds` and
+/// `restart` events without re-querying the world (the ball has
+/// already been moved to its restart position by `restart_system`).
+#[derive(Debug, Clone, Copy)]
+pub struct OobRestartResolved {
+    /// Concrete restart kind (positional: throw-in / goal-kick /
+    /// corner). The `out_of_bounds` event's `restart` field and the
+    /// matching `restart` event's `kind` field both come from here.
+    pub oob_type: sim_components::BallOutOfBoundsType,
+    /// Ball position when the OOB detector fired. The OOB detector
+    /// reads the position *after* physics has clamped the ball to the
+    /// boundary; this is the clamped position (the "exit point" on
+    /// the wire).
+    pub exit_point: sim_math::Vec2,
+    /// Full `LastTouch` at the moment of the OOB. `None` only in the
+    /// desync case the rule engine flags with `tracing::error!`.
+    pub last_touch: Option<sim_components::LastTouch>,
+    /// Team that takes the restart (Law 9: opposite of the last
+    /// toucher). Carries through to the `restart` event's envelope
+    /// `team`.
+    pub taker_team: sim_components::TeamId,
+    /// Player who takes the restart. `Entity::PLACEHOLDER` for test
+    /// worlds without players on the taker team.
+    pub taker: bevy_ecs::prelude::Entity,
+    /// Restart placement position, computed by
+    /// `out_of_bounds::calculate_oob_restart_position` using
+    /// `exit_point` and `oob_type`.
+    pub restart_pos: sim_math::Vec2,
+}
+
 /// Team that attacks the goal at the given end of the pitch in the
 /// current half, read from each team's per-half `attack_direction`
 /// (`+1` attacks `x = PITCH_LENGTH`, `-1` attacks `x = 0`).

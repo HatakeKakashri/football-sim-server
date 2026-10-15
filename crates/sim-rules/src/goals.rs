@@ -16,7 +16,8 @@ use sim_telemetry::TelemetryConfig;
 use crate::constants::{CENTER_SPOT, GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH};
 use crate::out_of_bounds::calculate_oob_restart_position;
 use crate::{
-    CurrentTick, OutOfBoundsEvent, PendingOutOfBounds, PendingRestart, team_attacking_goal,
+    CurrentTick, OobRestartForEmit, OobRestartResolved, OutOfBoundsEvent, PendingOutOfBounds,
+    PendingRestart, team_attacking_goal,
 };
 
 /// Buffered goal event data collected in `goal_detection_system`'s first
@@ -182,6 +183,7 @@ pub fn restart_system(
     mut pending_touches: ResMut<PendingBallTouches>,
     telemetry: Option<Res<TelemetryConfig>>,
     mut pending_oob: ResMut<PendingOutOfBounds>,
+    mut oob_for_emit: Option<ResMut<OobRestartForEmit>>,
 ) {
     // Handle KickoffRestart from goal (delayed by 60 ticks)
     if let Some(pr) = pending_restart
@@ -240,6 +242,11 @@ pub fn restart_system(
         }) = pending_oob.take()
         && let Ok((mut pos, mut vel)) = ball_query.get_single_mut()
     {
+        // The ball's current position IS the exit point: the OOB
+        // detector fired after physics clamped the ball to the
+        // boundary, so `pos.0` is the clamped "where the ball
+        // crossed" coordinate. Capture it before moving the ball.
+        let exit_point = pos.0;
         // Determine restart position based on OOB type and ball position
         let restart_pos = calculate_oob_restart_position(pos.0, oob_type);
         pos.0 = restart_pos;
@@ -288,6 +295,21 @@ pub fn restart_system(
             sim_components::TouchKind::Restart,
         );
         pending_touches.0.push(touch);
+        // Stash the resolved data so the event emitter
+        // (sim-core) can write `out_of_bounds` and `restart`
+        // back-to-back with the correct fields (PRD §9.2, ticket
+        // 09). The emitter runs in the same `Rules` set after this
+        // system, then clears the resource.
+        if let Some(ref mut emit) = oob_for_emit {
+            emit.0 = Some(OobRestartResolved {
+                oob_type,
+                exit_point,
+                last_touch,
+                taker_team,
+                taker,
+                restart_pos,
+            });
+        }
         let kind = match oob_type {
             sim_components::BallOutOfBoundsType::ThrowIn => "throw_in",
             sim_components::BallOutOfBoundsType::GoalKick => "goal_kick",

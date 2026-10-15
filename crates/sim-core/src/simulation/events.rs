@@ -53,6 +53,11 @@ use sim_math::Vec2;
 pub enum EventType {
     Pass,
     PossessionChange,
+    OutOfBounds,
+    /// Throw-in / goal-kick / corner restart. The concrete kind lives
+    /// on the payload as [`RestartKind`]; the envelope's `type`
+    /// discriminator is the single `restart` field per PRD §9.1.
+    Restart,
 }
 
 impl EventType {
@@ -62,6 +67,8 @@ impl EventType {
         match self {
             Self::Pass => "pass",
             Self::PossessionChange => "possession_change",
+            Self::OutOfBounds => "out_of_bounds",
+            Self::Restart => "restart",
         }
     }
 }
@@ -89,6 +96,44 @@ impl PossessionChangeCause {
             Self::Save => "save",
             Self::LooseBall => "loose_ball",
             Self::Goal => "goal",
+        }
+    }
+}
+
+/// Kind of restart that follows an out-of-bounds event (PRD §9.2).
+///
+/// The wire shape collapses `throw_in` / `goal_kick` / `corner` into
+/// one envelope type (`restart`) with a per-payload `kind` field; the
+/// `out_of_bounds` event's `restart` field carries the same kind so a
+/// consumer can pair them up without consulting the following event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestartKind {
+    ThrowIn,
+    GoalKick,
+    Corner,
+}
+
+impl RestartKind {
+    /// Stable string form for the wire shape (`kind` / `restart` fields).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ThrowIn => "throw_in",
+            Self::GoalKick => "goal_kick",
+            Self::Corner => "corner",
+        }
+    }
+
+    /// Convert from the rule-side `BallOutOfBoundsType` discriminator
+    /// the OOB detector already classifies. The names match
+    /// (`ThrowIn` / `GoalKick` / `Corner`).
+    #[must_use]
+    pub const fn from_oob(oob: sim_components::BallOutOfBoundsType) -> Self {
+        match oob {
+            sim_components::BallOutOfBoundsType::ThrowIn => Self::ThrowIn,
+            sim_components::BallOutOfBoundsType::GoalKick => Self::GoalKick,
+            sim_components::BallOutOfBoundsType::Corner => Self::Corner,
         }
     }
 }
@@ -159,6 +204,47 @@ pub struct PossessionChangeEvent {
     pub last_touch: Option<LastTouch>,
 }
 
+/// `out_of_bounds` event payload (PRD §9.2, ticket 09).
+///
+/// Emitted on the tick the OOB detector fires, before the matching
+/// restart event (PRD §9.3 / ticket 09 ordering invariant:
+/// `out_of_bounds.seq + 1 == restart.seq`). The restart event shares
+/// the same tick and carries the placement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OutOfBoundsEventPayload {
+    /// Last `Play` touch on the ball (the player whose touch sent it
+    /// out). `None` only when the OOB detector fires without a touch
+    /// on record — the rule engine debug-asserts against this case,
+    /// so a real match always populates it.
+    pub last_touch: Option<LastTouch>,
+    /// Position the ball settled at when the boundary was crossed.
+    /// Physics clamps the ball to the boundary line; this is the
+    /// clamped position (i.e. the closest in-bounds point).
+    pub exit_point: [f32; 2],
+    /// Which restart the OOB earns (positional, per Law 9). The
+    /// matching `restart` event follows with the same `kind`.
+    pub restart: RestartKind,
+}
+
+/// `restart` event payload (PRD §9.2, ticket 09).
+///
+/// Covers `throw_in` / `goal_kick` / `corner`. The envelope type is
+/// `restart`; the `kind` field on the payload distinguishes the three.
+/// Emitted immediately after the matching `out_of_bounds` event
+/// (seq N+1) on the same tick.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RestartEventPayload {
+    /// Player who takes the restart (Law 9: opposite team of the last
+    /// toucher). `None` in test worlds with no resolvable player on
+    /// the taker team (placeholder collapse in `LastTouch::from_taker`).
+    pub taker: Option<PlayerId>,
+    /// Restart placement position, computed by
+    /// `sim_rules::out_of_bounds::calculate_oob_restart_position`.
+    pub at: [f32; 2],
+    /// Concrete restart kind (`throw_in` / `goal_kick` / `corner`).
+    pub kind: RestartKind,
+}
+
 /// Discriminated union of every event payload in the MVP log.
 ///
 /// Internal representation: tagged enum so writers construct one
@@ -176,6 +262,14 @@ pub enum MatchEvent {
         envelope: EventEnvelope,
         payload: PossessionChangeEvent,
     },
+    OutOfBounds {
+        envelope: EventEnvelope,
+        payload: OutOfBoundsEventPayload,
+    },
+    Restart {
+        envelope: EventEnvelope,
+        payload: RestartEventPayload,
+    },
 }
 
 impl MatchEvent {
@@ -183,7 +277,10 @@ impl MatchEvent {
     #[must_use]
     pub const fn envelope(&self) -> &EventEnvelope {
         match self {
-            Self::Pass { envelope, .. } | Self::PossessionChange { envelope, .. } => envelope,
+            Self::Pass { envelope, .. }
+            | Self::PossessionChange { envelope, .. }
+            | Self::OutOfBounds { envelope, .. }
+            | Self::Restart { envelope, .. } => envelope,
         }
     }
 
@@ -193,6 +290,8 @@ impl MatchEvent {
         match self {
             Self::Pass { .. } => EventType::Pass,
             Self::PossessionChange { .. } => EventType::PossessionChange,
+            Self::OutOfBounds { .. } => EventType::OutOfBounds,
+            Self::Restart { .. } => EventType::Restart,
         }
     }
 }
@@ -235,6 +334,44 @@ impl Serialize for MatchEvent {
                 map.serialize_entry("to_team", &payload.to_team)?;
                 map.serialize_entry("cause", &payload.cause)?;
                 map.serialize_entry("last_touch", &payload.last_touch)?;
+                map.end()
+            }
+            Self::OutOfBounds { envelope, payload } => {
+                // 7 envelope + 3 out_of_bounds payload fields = 10.
+                // The envelope's `team` field is the last-touch team
+                // (the one whose touch sent the ball OOB); consumers
+                // also get it via `last_touch.team` on the payload, so
+                // the duplication is intentional and matches the
+                // possession_change precedent (PRD §9.1).
+                let mut map = ser.serialize_map(Some(10))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "out_of_bounds")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("last_touch", &payload.last_touch)?;
+                map.serialize_entry("exit_point", &payload.exit_point)?;
+                map.serialize_entry("restart", &payload.restart)?;
+                map.end()
+            }
+            Self::Restart { envelope, payload } => {
+                // 7 envelope + 3 restart payload fields = 10.
+                // The envelope's `team` is the restart-taker team
+                // (the one that takes the throw-in / goal-kick /
+                // corner), matching the §9.1 convention.
+                let mut map = ser.serialize_map(Some(10))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "restart")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("taker", &payload.taker)?;
+                map.serialize_entry("at", &payload.at)?;
+                map.serialize_entry("kind", &payload.kind)?;
                 map.end()
             }
         }
@@ -285,6 +422,13 @@ impl<'de> Deserialize<'de> for MatchEvent {
             to_team: Option<TeamId>,
             cause: Option<PossessionChangeCause>,
             last_touch: Option<Option<LastTouch>>,
+            // out_of_bounds payload
+            exit_point: Option<[f32; 2]>,
+            restart: Option<RestartKind>,
+            // restart payload
+            taker: Option<Option<PlayerId>>,
+            at: Option<[f32; 2]>,
+            kind: Option<RestartKind>,
         }
 
         struct EventVisitor;
@@ -318,6 +462,11 @@ impl<'de> Deserialize<'de> for MatchEvent {
                         "to_team" => sink.to_team = Some(map.next_value()?),
                         "cause" => sink.cause = Some(map.next_value()?),
                         "last_touch" => sink.last_touch = Some(map.next_value()?),
+                        "exit_point" => sink.exit_point = Some(map.next_value()?),
+                        "restart" => sink.restart = Some(map.next_value()?),
+                        "taker" => sink.taker = Some(map.next_value()?),
+                        "at" => sink.at = Some(map.next_value()?),
+                        "kind" => sink.kind = Some(map.next_value()?),
                         _ => {
                             // Unknown fields are ignored so the
                             // wire format is forward-compatible.
@@ -369,6 +518,28 @@ impl<'de> Deserialize<'de> for MatchEvent {
                             last_touch: sink
                                 .last_touch
                                 .ok_or_else(|| Error::missing_field("last_touch"))?,
+                        },
+                    }),
+                    EventType::OutOfBounds => Ok(MatchEvent::OutOfBounds {
+                        envelope,
+                        payload: OutOfBoundsEventPayload {
+                            last_touch: sink
+                                .last_touch
+                                .ok_or_else(|| Error::missing_field("last_touch"))?,
+                            exit_point: sink
+                                .exit_point
+                                .ok_or_else(|| Error::missing_field("exit_point"))?,
+                            restart: sink
+                                .restart
+                                .ok_or_else(|| Error::missing_field("restart"))?,
+                        },
+                    }),
+                    EventType::Restart => Ok(MatchEvent::Restart {
+                        envelope,
+                        payload: RestartEventPayload {
+                            taker: sink.taker.ok_or_else(|| Error::missing_field("taker"))?,
+                            at: sink.at.ok_or_else(|| Error::missing_field("at"))?,
+                            kind: sink.kind.ok_or_else(|| Error::missing_field("kind"))?,
                         },
                     }),
                 }
@@ -423,7 +594,9 @@ impl EventLog {
         let seq = self.next_seq;
         match &mut event {
             MatchEvent::Pass { envelope, .. }
-            | MatchEvent::PossessionChange { envelope, .. } => {
+            | MatchEvent::PossessionChange { envelope, .. }
+            | MatchEvent::OutOfBounds { envelope, .. }
+            | MatchEvent::Restart { envelope, .. } => {
                 envelope.seq = seq;
             }
         }
@@ -562,6 +735,90 @@ pub fn build_possession_change_event(
         last_touch,
     };
     MatchEvent::PossessionChange { envelope, payload }
+}
+
+/// Convenience constructor for an `out_of_bounds` event (ticket 09).
+///
+/// `last_touch` is the `LastTouch` at the moment the ball crossed
+/// the boundary. `exit_point` is the ball position the OOB detector
+/// observed (physics clamps to the boundary line; this is the
+/// clamped coord). `kind` selects which restart follows
+/// (`throw_in` / `goal_kick` / `corner`).
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "out_of_bounds constructor mirrors PRD §9.2 payload fields; a builder would scatter the field set across two calls"
+)]
+pub fn build_out_of_bounds_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    team: TeamId,
+    last_touch: Option<LastTouch>,
+    exit_point: Vec2,
+    kind: RestartKind,
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    // The envelope's `team` is the last-touch team (the team whose
+    // touch sent the ball OOB). Consumers can read either `envelope.team`
+    // or `payload.last_touch.team`; the duplication matches the
+    // §9.1 envelope convention and the existing `possession_change`
+    // pattern.
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::OutOfBounds,
+        team: Some(team),
+    };
+    let payload = OutOfBoundsEventPayload {
+        last_touch,
+        exit_point: [exit_point.x, exit_point.y],
+        restart: kind,
+    };
+    MatchEvent::OutOfBounds { envelope, payload }
+}
+
+/// Convenience constructor for a `restart` event (ticket 09).
+///
+/// `taker_team` is the team that takes the throw-in / goal-kick /
+/// corner (Law 9: opposite of the last-toucher). `taker` is the
+/// `PlayerId` of the specific player chosen by `first_player_on_team`
+/// (None in test worlds with no resolvable player on the taker team).
+/// `at` is the restart placement position, computed by
+/// `sim_rules::out_of_bounds::calculate_oob_restart_position`.
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "restart constructor mirrors PRD §9.2 payload fields; a builder would scatter the field set across two calls"
+)]
+pub fn build_restart_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    taker_team: TeamId,
+    taker: Option<PlayerId>,
+    at: Vec2,
+    kind: RestartKind,
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::Restart,
+        team: Some(taker_team),
+    };
+    let payload = RestartEventPayload {
+        taker,
+        at: [at.x, at.y],
+        kind,
+    };
+    MatchEvent::Restart { envelope, payload }
 }
 
 /// Opponent of `team` in a two-team world. Returns `TeamId(0)`
@@ -783,5 +1040,125 @@ mod tests {
     fn opponent_of_swaps_zero_and_one() {
         assert_eq!(opponent_of(TeamId(0)), TeamId(1));
         assert_eq!(opponent_of(TeamId(1)), TeamId(0));
+    }
+
+    /// `out_of_bounds` events carry the right payload fields.
+    #[test]
+    fn out_of_bounds_event_payload_round_trip() {
+        let mut log = EventLog::new();
+        let clock = sample_clock(1, 4_500, 0);
+        let event = build_out_of_bounds_event(
+            log.next_seq,
+            4_500,
+            &clock,
+            TeamId(0),
+            Some(LastTouch::by_player(
+                TeamId(0),
+                Entity::from_raw(7),
+                sim_components::TouchKind::Play,
+            )),
+            Vec2::new(20.0, 0.0),
+            RestartKind::ThrowIn,
+        );
+        log.append(event);
+        let MatchEvent::OutOfBounds { envelope, payload } = &log.events[0] else {
+            panic!("expected out_of_bounds event");
+        };
+        assert_eq!(envelope.tick, 4_500);
+        assert_eq!(envelope.half, 1);
+        assert_eq!(envelope.team, Some(TeamId(0)));
+        assert_eq!(payload.exit_point, [20.0, 0.0]);
+        assert_eq!(payload.restart, RestartKind::ThrowIn);
+        assert!(payload.last_touch.is_some());
+
+        // Wire shape matches PRD §9.2: `type`, `restart`, `exit_point`,
+        // `last_touch` at the top level.
+        let json = serde_json::to_string(&log.events[0]).expect("serialise");
+        assert!(json.contains("\"type\":\"out_of_bounds\""));
+        assert!(json.contains("\"restart\":\"throw_in\""));
+        assert!(json.contains("\"exit_point\":[20.0,0.0]"));
+        assert!(json.contains("\"last_touch\":{"));
+    }
+
+    /// `restart` events carry the right payload fields.
+    #[test]
+    fn restart_event_payload_round_trip() {
+        let mut log = EventLog::new();
+        let clock = sample_clock(1, 4_500, 0);
+        let event = build_restart_event(
+            log.next_seq,
+            4_500,
+            &clock,
+            TeamId(1),
+            Some(PlayerId::from_bits(11)),
+            Vec2::new(20.0, 0.0),
+            RestartKind::ThrowIn,
+        );
+        log.append(event);
+        let MatchEvent::Restart { envelope, payload } = &log.events[0] else {
+            panic!("expected restart event");
+        };
+        assert_eq!(envelope.tick, 4_500);
+        assert_eq!(envelope.team, Some(TeamId(1)), "envelope team = taker team");
+        assert_eq!(payload.taker, Some(PlayerId::from_bits(11)));
+        assert_eq!(payload.at, [20.0, 0.0]);
+        assert_eq!(payload.kind, RestartKind::ThrowIn);
+
+        let json = serde_json::to_string(&log.events[0]).expect("serialise");
+        assert!(json.contains("\"type\":\"restart\""));
+        assert!(json.contains("\"kind\":\"throw_in\""));
+        assert!(json.contains("\"at\":[20.0,0.0]"));
+        assert!(json.contains("\"taker\":11"));
+    }
+
+    /// `out_of_bounds` immediately followed by `restart` carries
+    /// consecutive seqs and the same tick (ticket 09 ordering
+    /// invariant: `out_of_bounds.seq + 1 == restart.seq`).
+    #[test]
+    fn oob_then_restart_have_consecutive_seqs_and_same_tick() {
+        let mut log = EventLog::new();
+        let clock = sample_clock(1, 8_000, 0);
+        log.append(build_out_of_bounds_event(
+            log.next_seq,
+            8_000,
+            &clock,
+            TeamId(0),
+            None,
+            Vec2::new(52.5, 0.0),
+            RestartKind::Corner,
+        ));
+        log.append(build_restart_event(
+            log.next_seq,
+            8_000,
+            &clock,
+            TeamId(1),
+            None,
+            Vec2::new(104.0, 1.0),
+            RestartKind::Corner,
+        ));
+        assert_eq!(log.len(), 2);
+        assert_eq!(log.next_seq, 2);
+        assert_eq!(log.events[0].envelope().seq, 0);
+        assert_eq!(log.events[1].envelope().seq, 1);
+        assert_eq!(log.events[0].envelope().tick, log.events[1].envelope().tick);
+    }
+
+    /// `RestartKind::from_oob` maps the rule-side enum to the event
+    /// enum 1:1.
+    #[test]
+    fn restart_kind_from_oob_is_identity_mapping() {
+        use sim_components::BallOutOfBoundsType;
+        assert_eq!(
+            RestartKind::from_oob(BallOutOfBoundsType::ThrowIn),
+            RestartKind::ThrowIn
+        );
+        assert_eq!(
+            RestartKind::from_oob(BallOutOfBoundsType::GoalKick),
+            RestartKind::GoalKick
+        );
+        assert_eq!(
+            RestartKind::from_oob(BallOutOfBoundsType::Corner),
+            RestartKind::Corner
+        );
     }
 }

@@ -201,6 +201,7 @@ impl Simulation {
         });
         world.insert_resource(PendingBallTouches::default());
         world.insert_resource(sim_rules::PendingOutOfBounds::default());
+        world.insert_resource(sim_rules::OobRestartForEmit::default());
         world.insert_resource(sim_rules::PendingPass::default());
         world.insert_resource(crate::EventLog::new());
         world.entity_mut(ball_entity).insert(BallMarker);

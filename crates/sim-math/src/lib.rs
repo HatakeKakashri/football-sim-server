@@ -459,6 +459,124 @@ pub fn curve(attribute: i32, params: &CurveParams) -> f32 {
     output.clamp(params.min.min(params.max), params.max.max(params.min))
 }
 
+/// Which position group a slot belongs to for quality weighting
+/// (PRD §6.4). The 14 slots collapse to six groups, each with its own
+/// attribute weight table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum QualityGroup {
+    /// Defensive slots: `DL`, `DC`, `DR`.
+    Defence,
+    /// Wide slots: `ML`, `MR`.
+    Wide,
+    /// Midfield slots: `DML`, `DMC`, `DMR`, `MC`.
+    Midfield,
+    /// Attacking-midfield slots: `AML`, `AMC`, `AMR`.
+    Attacking,
+    /// Striker slot: `ST`.
+    Striker,
+    /// Goalkeeper slot: `GK`.
+    Goalkeeper,
+}
+
+/// Number of position groups for quality weighting (PRD §6.4).
+pub const QUALITY_GROUP_COUNT: usize = 6;
+
+/// Per-position-group quality weights.
+///
+/// One row per [`QualityGroup`] (in declaration order); each row is
+/// `[f32; CURVE_PARAM_COUNT]` of attribute weights in `sim_components`
+/// `Attribute::ALL` order. Attributes irrelevant to a group carry `0.0`.
+/// The weighted mean divides by the row's weight sum, so rows need not
+/// sum to exactly one, though the defaults do.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QualityWeights {
+    /// `table[group as usize]` is the weight row for that group.
+    pub table: [[f32; CURVE_PARAM_COUNT]; QUALITY_GROUP_COUNT],
+}
+
+impl QualityWeights {
+    /// Default quality-weight assumptions (pre-calibration).
+    ///
+    /// Each row weights the attributes most relevant to its group and
+    /// sums to `1.0` so the weighted mean is directly interpretable on
+    /// the `1..=200` attribute scale.
+    #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "default assumptions are f32 literals; a const fn is possible but the table is clearer as a runtime initializer"
+    )]
+    pub fn default_assumptions() -> Self {
+        let w = |values: [f32; CURVE_PARAM_COUNT]| values;
+        Self {
+            table: [
+                // Defence: DL, DC, DR — tackling, marking, positioning, heading.
+                w([
+                    0.18, 0.16, 0.14, 0.10, 0.06, // Tackling, Marking, Positioning, Heading, Bravery
+                    0.04, 0.03, 0.02, 0.01, 0.01, // Passing, Dribbling, Crossing, Shooting, Finishing
+                    0.08, 0.07, 0.05, 0.03, 0.02, // Outfield fitness/strength/aggression/speed/creativity
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeping block
+                    0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeper physical & mental
+                ]),
+                // Wide: ML, MR — crossing, dribbling, passing, speed.
+                w([
+                    0.06, 0.04, 0.04, 0.0, 0.0, // Tackling, Marking, Positioning, Heading, Bravery
+                    0.12, 0.14, 0.14, 0.0, 0.0, // Passing, Dribbling, Crossing, Shooting, Finishing
+                    0.10, 0.04, 0.08, 0.12, 0.12, // Outfield fitness/strength/aggression/speed/creativity
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeping block
+                    0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeper physical & mental
+                ]),
+                // Midfield: DML, DMC, DMR, MC — passing, tackling, positioning, creativity.
+                w([
+                    0.10, 0.06, 0.08, 0.0, 0.0, // Tackling, Marking, Positioning, Heading, Bravery
+                    0.16, 0.10, 0.04, 0.04, 0.02, // Passing, Dribbling, Crossing, Shooting, Finishing
+                    0.10, 0.04, 0.06, 0.08, 0.12, // Outfield fitness/strength/aggression/speed/creativity
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeping block
+                    0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeper physical & mental
+                ]),
+                // Attacking: AML, AMC, AMR — finishing, shooting, passing, creativity.
+                w([
+                    0.02, 0.02, 0.04, 0.0, 0.0, // Tackling, Marking, Positioning, Heading, Bravery
+                    0.14, 0.12, 0.10, 0.12, 0.14, // Passing, Dribbling, Crossing, Shooting, Finishing
+                    0.06, 0.0, 0.08, 0.06, 0.10, // Outfield fitness/strength/aggression/speed/creativity
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeping block
+                    0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeper physical & mental
+                ]),
+                // Striker: ST — finishing, shooting, heading, strength.
+                w([
+                    0.02, 0.02, 0.04, 0.10, 0.0, // Tackling, Marking, Positioning, Heading, Bravery
+                    0.06, 0.08, 0.02, 0.18, 0.20, // Passing, Dribbling, Crossing, Shooting, Finishing
+                    0.06, 0.08, 0.06, 0.08, 0.0, // Outfield fitness/strength/aggression/speed/creativity
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeping block
+                    0.0, 0.0, 0.0, 0.0, 0.0, // Goalkeeper physical & mental
+                ]),
+                // Goalkeeper: GK — reflexes, agility, anticipation, handling,
+                // and the goalkeeper physical & mental block only. Outfield
+                // attributes carry `0.0` and are never read for a GK profile.
+                w([
+                    0.0, 0.0, 0.0, 0.0, 0.0, // Outfield defence block
+                    0.0, 0.0, 0.0, 0.0, 0.0, // Outfield attack block
+                    0.0, 0.0, 0.0, 0.0, 0.0, // Outfield physical & mental block
+                    0.15, 0.12, 0.05, 0.06, 0.06, // Reflexes, Anticipation, RushingOut, Throwing, Kicking
+                    0.05, 0.08, 0.06, 0.14, 0.07, // Punching, AerialReach, Communication, Agility, Concentration
+                    0.05, 0.04, 0.03, 0.03, 0.01, // Goalkeeper fitness/strength/aggression/speed/creativity
+                ]),
+            ],
+        }
+    }
+
+    /// The weight row for `group`, indexed by `Attribute::ALL` order.
+    #[must_use]
+    pub const fn row(self, group: QualityGroup) -> [f32; CURVE_PARAM_COUNT] {
+        self.table[group as usize]
+    }
+}
+
+impl Default for QualityWeights {
+    fn default() -> Self {
+        Self::default_assumptions()
+    }
+}
+
 /// Tuning configuration for match mechanics and response curves.
 ///
 /// All tunable constants live in this struct (PRD §11). It is edited
@@ -475,6 +593,9 @@ pub struct Tuning {
     /// order (sim-components). Index `i` corresponds to `Attribute::ALL[i]`.
     /// All fields live here so calibration has a single edit surface.
     pub curve_params: [CurveParams; CURVE_PARAM_COUNT],
+    /// Per-position-group quality weights (PRD §6.4). Used only by
+    /// reporting / display code; the match simulation never reads them.
+    pub quality_weights: QualityWeights,
 }
 
 impl Tuning {
@@ -525,6 +646,7 @@ impl Tuning {
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // GoalkeeperSpeed
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // GoalkeeperCreativity
             ],
+            quality_weights: QualityWeights::default_assumptions(),
         }
     }
 }

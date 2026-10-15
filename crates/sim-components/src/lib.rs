@@ -10,6 +10,7 @@ pub mod formation_slot;
 pub mod intent_dispatch;
 pub mod position;
 pub mod profile;
+pub mod quality;
 pub mod time;
 
 #[cfg(test)]
@@ -21,7 +22,8 @@ pub use profile::{
     AttributeError, PlayerProfile, ProfileKind, ATTRIBUTE_COUNT, ATTRIBUTE_MAX, ATTRIBUTE_MIN,
 };
 pub use position::{PosSlot, PositionError};
-pub use sim_math::{fit_multiplier, effective_attribute};
+pub use quality::quality;
+pub use sim_math::{effective_attribute, fit_multiplier, QualityGroup, QualityWeights};
 
 pub use ball_touch::{
     BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, PlayerId, RuleEvent,
@@ -380,6 +382,15 @@ pub struct Team {
     attack_direction: i8,
 }
 
+/// How the eleven slot Qualities aggregate into a team strength
+/// (PRD §6.4). `Sum` returns the total; `Mean` returns the average.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrengthMode {
+    #[default]
+    Sum,
+    Mean,
+}
+
 impl Team {
     /// Per-half attack direction. `+1` = attacking right (`PITCH_LENGTH`),
     /// `-1` = attacking left (0.0).
@@ -395,6 +406,28 @@ impl Team {
     /// doc comment is the load-bearing guard, not the visibility.
     pub const fn set_attack_direction(&mut self, dir: i8) {
         self.attack_direction = dir;
+    }
+
+    /// Aggregate `slot_qualities` (one per slot, in [`FormationSlot::ALL_442`]
+    /// order) into a team strength.
+    ///
+    /// # Parameters
+    ///
+    /// - `slot_qualities` — the per-slot [`quality`] values, one per
+    ///   slot in canonical formation order.
+    /// - `mode` — `StrengthMode::Sum` for the total, `StrengthMode::Mean`
+    ///   for the average.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "slot counts are tiny (<= 11), so the usize -> f32 cast is exact"
+    )]
+    #[must_use]
+    pub fn strength(slot_qualities: &[f32], mode: StrengthMode) -> f32 {
+        let total: f32 = slot_qualities.iter().sum();
+        match mode {
+            StrengthMode::Sum => total,
+            StrengthMode::Mean => total / slot_qualities.len().max(1) as f32,
+        }
     }
 
     /// Constructor. Migrate struct-literal sites to this method so

@@ -1,0 +1,17 @@
+# fixtures/matches/m-0002.toml
+# Strength fixture: strong t-delta vs weak t-echo (tiers ~130 vs ~70).
+[match]
+id = "m-0002"
+seed = 20240202
+home = "t-delta"
+away = "t-echo"
+
+[match.home_setup]
+formation = "4-4-2"
+mentality = "defend"
+tactic = "park_the_bus"
+
+[match.away_setup]
+formation = "4-4-2"
+mentality = "attack"
+tactic = "counter_attack"

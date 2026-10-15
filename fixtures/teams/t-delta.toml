@@ -1,0 +1,264 @@
+# fixtures/teams/t-delta.toml
+# Tier: Strong (target team strength ~130).
+# Attributes about N(130, 25) clipped to 30-180; real spread so the
+# better team measurably outperforms the weak tier. Players are listed in
+# 4-4-2 slot order (GK, DL, DC, DC, DR, ML, MC, MC, MR, ST, ST). Two
+# starters are deliberately out of position:
+#   p-delta-04 (listed 5th) starts at ML, trained [DC, DL] (fit distance 2 -> 0.75)
+#   p-delta-06 (listed 4th) starts at DC, trained [ML, AML] (fit distance 2 -> 0.75)
+[team]
+id = "t-delta"
+name = "Delta City"
+
+[[players]]
+id = "p-delta-01"
+name = "D. Gloves"
+number = 1
+kind = "goalkeeper"
+trained_positions = ["GK"]
+[players.attrs]
+reflexes = 150
+anticipation = 145
+rushing_out = 130
+throwing = 140
+kicking = 145
+punching = 135
+aerial_reach = 150
+communication = 140
+agility = 145
+concentration = 135
+fitness = 130
+strength = 125
+aggression = 120
+speed = 115
+creativity = 105
+
+[[players]]
+id = "p-delta-02"
+name = "D. Full"
+number = 2
+kind = "outfield"
+trained_positions = ["DL"]
+[players.attrs]
+tackling = 140
+marking = 135
+positioning = 140
+heading = 135
+bravery = 130
+passing = 110
+dribbling = 100
+crossing = 105
+shooting = 80
+finishing = 70
+fitness = 125
+strength = 135
+aggression = 125
+speed = 115
+creativity = 90
+
+[[players]]
+id = "p-delta-03"
+name = "D. Centre"
+number = 3
+kind = "outfield"
+trained_positions = ["DC"]
+[players.attrs]
+tackling = 150
+marking = 145
+positioning = 150
+heading = 145
+bravery = 140
+passing = 95
+dribbling = 85
+crossing = 75
+shooting = 65
+finishing = 55
+fitness = 120
+strength = 145
+aggression = 135
+speed = 105
+creativity = 70
+
+[[players]]
+id = "p-delta-06"
+name = "D. Wing"
+number = 6
+kind = "outfield"
+trained_positions = ["ML", "AML"]
+[players.attrs]
+tackling = 115
+marking = 120
+positioning = 125
+heading = 115
+bravery = 115
+passing = 140
+dribbling = 135
+crossing = 145
+shooting = 90
+finishing = 75
+fitness = 140
+strength = 115
+aggression = 110
+speed = 135
+creativity = 130
+
+[[players]]
+id = "p-delta-05"
+name = "D. Right"
+number = 5
+kind = "outfield"
+trained_positions = ["DR"]
+[players.attrs]
+tackling = 145
+marking = 140
+positioning = 145
+heading = 140
+bravery = 135
+passing = 105
+dribbling = 95
+crossing = 100
+shooting = 75
+finishing = 65
+fitness = 125
+strength = 140
+aggression = 130
+speed = 115
+creativity = 80
+
+[[players]]
+id = "p-delta-04"
+name = "D. Cover"
+number = 4
+kind = "outfield"
+trained_positions = ["DC", "DL"]
+[players.attrs]
+tackling = 135
+marking = 130
+positioning = 135
+heading = 130
+bravery = 125
+passing = 115
+dribbling = 105
+crossing = 110
+shooting = 85
+finishing = 75
+fitness = 130
+strength = 130
+aggression = 120
+speed = 120
+creativity = 95
+
+[[players]]
+id = "p-delta-07"
+name = "D. Pivot"
+number = 7
+kind = "outfield"
+trained_positions = ["MC", "AML"]
+[players.attrs]
+tackling = 130
+marking = 125
+positioning = 135
+heading = 120
+bravery = 125
+passing = 155
+dribbling = 130
+crossing = 120
+shooting = 95
+finishing = 80
+fitness = 135
+strength = 130
+aggression = 125
+speed = 120
+creativity = 145
+
+[[players]]
+id = "p-delta-08"
+name = "D. Mid"
+number = 8
+kind = "outfield"
+trained_positions = ["MC", "AMR"]
+[players.attrs]
+tackling = 140
+marking = 125
+positioning = 135
+heading = 125
+bravery = 135
+passing = 150
+dribbling = 125
+crossing = 115
+shooting = 100
+finishing = 85
+fitness = 145
+strength = 140
+aggression = 130
+speed = 125
+creativity = 140
+
+[[players]]
+id = "p-delta-09"
+name = "D. Winger"
+number = 9
+kind = "outfield"
+trained_positions = ["MR", "AMR"]
+[players.attrs]
+tackling = 110
+marking = 115
+positioning = 120
+heading = 110
+bravery = 115
+passing = 135
+dribbling = 145
+crossing = 155
+shooting = 95
+finishing = 80
+fitness = 140
+strength = 120
+aggression = 120
+speed = 140
+creativity = 145
+
+[[players]]
+id = "p-delta-10"
+name = "D. Target"
+number = 10
+kind = "outfield"
+trained_positions = ["ST"]
+[players.attrs]
+tackling = 85
+marking = 95
+positioning = 105
+heading = 140
+bravery = 110
+passing = 100
+dribbling = 120
+crossing = 90
+shooting = 145
+finishing = 150
+fitness = 130
+strength = 145
+aggression = 125
+speed = 120
+creativity = 100
+
+[[players]]
+id = "p-delta-11"
+name = "D. Poacher"
+number = 11
+kind = "outfield"
+trained_positions = ["ST", "MC"]
+[players.attrs]
+tackling = 80
+marking = 90
+positioning = 100
+heading = 135
+bravery = 105
+passing = 95
+dribbling = 130
+crossing = 85
+shooting = 155
+finishing = 160
+fitness = 135
+strength = 135
+aggression = 120
+speed = 125
+creativity = 105

@@ -1,0 +1,263 @@
+# fixtures/teams/t-alpha.toml
+# Tier: Near-equal A (target team strength ~100).
+# Within-team attribute spread about N(100, 25), clipped to 30-180.
+# Players are listed in 4-4-2 slot order (GK, DL, DC, DC, DR, ML, MC,
+# MC, MR, ST, ST). Two starters are deliberately out of position:
+#   p-alpha-04 (listed 5th) starts at ML, trained [DC, DL] (fit distance 2 -> 0.75)
+#   p-alpha-06 (listed 4th) starts at DC, trained [ML] (fit distance 2 -> 0.75)
+[team]
+id = "t-alpha"
+name = "Alpha FC"
+
+[[players]]
+id = "p-alpha-01"
+name = "R. Gloves"
+number = 1
+kind = "goalkeeper"
+trained_positions = ["GK"]
+[players.attrs]
+reflexes = 110
+anticipation = 105
+rushing_out = 90
+throwing = 103
+kicking = 97
+punching = 95
+aerial_reach = 110
+communication = 100
+agility = 105
+concentration = 95
+fitness = 105
+strength = 95
+aggression = 90
+speed = 85
+creativity = 75
+
+[[players]]
+id = "p-alpha-02"
+name = "D. Left"
+number = 2
+kind = "outfield"
+trained_positions = ["DL"]
+[players.attrs]
+tackling = 110
+marking = 105
+positioning = 110
+heading = 105
+bravery = 100
+passing = 85
+dribbling = 75
+crossing = 80
+shooting = 55
+finishing = 45
+fitness = 100
+strength = 105
+aggression = 95
+speed = 90
+creativity = 65
+
+[[players]]
+id = "p-alpha-03"
+name = "D. Centre"
+number = 3
+kind = "outfield"
+trained_positions = ["DC"]
+[players.attrs]
+tackling = 115
+marking = 110
+positioning = 115
+heading = 110
+bravery = 105
+passing = 75
+dribbling = 65
+crossing = 55
+shooting = 50
+finishing = 40
+fitness = 95
+strength = 110
+aggression = 100
+speed = 80
+creativity = 55
+
+[[players]]
+id = "p-alpha-06"
+name = "M. Wing"
+number = 6
+kind = "outfield"
+trained_positions = ["ML"]
+[players.attrs]
+tackling = 90
+marking = 95
+positioning = 100
+heading = 90
+bravery = 90
+passing = 105
+dribbling = 100
+crossing = 110
+shooting = 65
+finishing = 50
+fitness = 110
+strength = 90
+aggression = 85
+speed = 105
+creativity = 95
+
+[[players]]
+id = "p-alpha-05"
+name = "D. Right"
+number = 5
+kind = "outfield"
+trained_positions = ["DR"]
+[players.attrs]
+tackling = 110
+marking = 105
+positioning = 105
+heading = 100
+bravery = 100
+passing = 80
+dribbling = 70
+crossing = 75
+shooting = 53
+finishing = 43
+fitness = 100
+strength = 105
+aggression = 95
+speed = 90
+creativity = 60
+
+[[players]]
+id = "p-alpha-04"
+name = "D. Cover"
+number = 4
+kind = "outfield"
+trained_positions = ["DC", "DL"]
+[players.attrs]
+tackling = 105
+marking = 100
+positioning = 105
+heading = 100
+bravery = 95
+passing = 90
+dribbling = 80
+crossing = 85
+shooting = 60
+finishing = 50
+fitness = 105
+strength = 100
+aggression = 90
+speed = 95
+creativity = 75
+
+[[players]]
+id = "p-alpha-07"
+name = "M. Pivot"
+number = 7
+kind = "outfield"
+trained_positions = ["MC"]
+[players.attrs]
+tackling = 100
+marking = 95
+positioning = 105
+heading = 90
+bravery = 95
+passing = 115
+dribbling = 95
+crossing = 85
+shooting = 70
+finishing = 55
+fitness = 105
+strength = 100
+aggression = 95
+speed = 90
+creativity = 105
+
+[[players]]
+id = "p-alpha-08"
+name = "M. Box"
+number = 8
+kind = "outfield"
+trained_positions = ["MC"]
+[players.attrs]
+tackling = 105
+marking = 90
+positioning = 100
+heading = 95
+bravery = 100
+passing = 110
+dribbling = 90
+crossing = 80
+shooting = 75
+finishing = 60
+fitness = 110
+strength = 105
+aggression = 100
+speed = 95
+creativity = 100
+
+[[players]]
+id = "p-alpha-09"
+name = "W. Right"
+number = 9
+kind = "outfield"
+trained_positions = ["MR"]
+[players.attrs]
+tackling = 85
+marking = 90
+positioning = 95
+heading = 85
+bravery = 90
+passing = 100
+dribbling = 105
+crossing = 115
+shooting = 70
+finishing = 55
+fitness = 105
+strength = 90
+aggression = 90
+speed = 110
+creativity = 100
+
+[[players]]
+id = "p-alpha-10"
+name = "S. Target"
+number = 10
+kind = "outfield"
+trained_positions = ["ST"]
+[players.attrs]
+tackling = 65
+marking = 75
+positioning = 85
+heading = 110
+bravery = 85
+passing = 75
+dribbling = 90
+crossing = 65
+shooting = 105
+finishing = 110
+fitness = 100
+strength = 110
+aggression = 95
+speed = 90
+creativity = 75
+
+[[players]]
+id = "p-alpha-11"
+name = "S. Poacher"
+number = 11
+kind = "outfield"
+trained_positions = ["ST"]
+[players.attrs]
+tackling = 60
+marking = 70
+positioning = 80
+heading = 105
+bravery = 80
+passing = 70
+dribbling = 95
+crossing = 60
+shooting = 110
+finishing = 115
+fitness = 105
+strength = 105
+aggression = 90
+speed = 95
+creativity = 80

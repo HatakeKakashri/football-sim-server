@@ -1,0 +1,264 @@
+# fixtures/teams/t-echo.toml
+# Tier: Weak (target team strength ~70).
+# Attributes about N(70, 25) clipped to 30-180; several players sit at
+# the bottom of the scale so the gap to the strong tier is real.
+# Players are listed in 4-4-2 slot order (GK, DL, DC, DC, DR, ML, MC,
+# MC, MR, ST, ST). Two starters are deliberately out of position:
+#   p-echo-04 (listed 5th) starts at ML, trained [DC, DL] (fit distance 2 -> 0.75)
+#   p-echo-06 (listed 4th) starts at DC, trained [ML, AML] (fit distance 2 -> 0.75)
+[team]
+id = "t-echo"
+name = "Echo Athletic"
+
+[[players]]
+id = "p-echo-01"
+name = "E. Gloves"
+number = 1
+kind = "goalkeeper"
+trained_positions = ["GK"]
+[players.attrs]
+reflexes = 80
+anticipation = 75
+rushing_out = 60
+throwing = 70
+kicking = 75
+punching = 65
+aerial_reach = 80
+communication = 75
+agility = 75
+concentration = 65
+fitness = 70
+strength = 65
+aggression = 60
+speed = 55
+creativity = 50
+
+[[players]]
+id = "p-echo-02"
+name = "E. Full"
+number = 2
+kind = "outfield"
+trained_positions = ["DL"]
+[players.attrs]
+tackling = 75
+marking = 70
+positioning = 75
+heading = 70
+bravery = 65
+passing = 55
+dribbling = 50
+crossing = 55
+shooting = 40
+finishing = 35
+fitness = 70
+strength = 70
+aggression = 65
+speed = 60
+creativity = 45
+
+[[players]]
+id = "p-echo-03"
+name = "E. Centre"
+number = 3
+kind = "outfield"
+trained_positions = ["DC"]
+[players.attrs]
+tackling = 80
+marking = 75
+positioning = 80
+heading = 75
+bravery = 70
+passing = 50
+dribbling = 45
+crossing = 40
+shooting = 35
+finishing = 30
+fitness = 65
+strength = 75
+aggression = 70
+speed = 55
+creativity = 40
+
+[[players]]
+id = "p-echo-06"
+name = "E. Wing"
+number = 6
+kind = "outfield"
+trained_positions = ["ML", "AML"]
+[players.attrs]
+tackling = 60
+marking = 65
+positioning = 70
+heading = 60
+bravery = 60
+passing = 75
+dribbling = 70
+crossing = 80
+shooting = 50
+finishing = 40
+fitness = 75
+strength = 60
+aggression = 55
+speed = 70
+creativity = 65
+
+[[players]]
+id = "p-echo-05"
+name = "E. Right"
+number = 5
+kind = "outfield"
+trained_positions = ["DR"]
+[players.attrs]
+tackling = 75
+marking = 70
+positioning = 75
+heading = 70
+bravery = 65
+passing = 55
+dribbling = 50
+crossing = 50
+shooting = 40
+finishing = 35
+fitness = 70
+strength = 70
+aggression = 65
+speed = 60
+creativity = 45
+
+[[players]]
+id = "p-echo-04"
+name = "E. Cover"
+number = 4
+kind = "outfield"
+trained_positions = ["DC", "DL"]
+[players.attrs]
+tackling = 70
+marking = 65
+positioning = 70
+heading = 65
+bravery = 60
+passing = 60
+dribbling = 55
+crossing = 60
+shooting = 45
+finishing = 40
+fitness = 70
+strength = 65
+aggression = 60
+speed = 65
+creativity = 50
+
+[[players]]
+id = "p-echo-07"
+name = "E. Pivot"
+number = 7
+kind = "outfield"
+trained_positions = ["MC", "AML"]
+[players.attrs]
+tackling = 65
+marking = 65
+positioning = 70
+heading = 60
+bravery = 65
+passing = 80
+dribbling = 70
+crossing = 65
+shooting = 50
+finishing = 40
+fitness = 70
+strength = 65
+aggression = 60
+speed = 65
+creativity = 70
+
+[[players]]
+id = "p-echo-08"
+name = "E. Mid"
+number = 8
+kind = "outfield"
+trained_positions = ["MC", "AMR"]
+[players.attrs]
+tackling = 70
+marking = 65
+positioning = 70
+heading = 65
+bravery = 70
+passing = 75
+dribbling = 65
+crossing = 60
+shooting = 55
+finishing = 45
+fitness = 75
+strength = 70
+aggression = 65
+speed = 70
+creativity = 65
+
+[[players]]
+id = "p-echo-09"
+name = "E. Winger"
+number = 9
+kind = "outfield"
+trained_positions = ["MR", "AMR"]
+[players.attrs]
+tackling = 60
+marking = 65
+positioning = 65
+heading = 60
+bravery = 60
+passing = 70
+dribbling = 75
+crossing = 80
+shooting = 55
+finishing = 45
+fitness = 70
+strength = 65
+aggression = 60
+speed = 75
+creativity = 70
+
+[[players]]
+id = "p-echo-10"
+name = "E. Target"
+number = 10
+kind = "outfield"
+trained_positions = ["ST"]
+[players.attrs]
+tackling = 45
+marking = 50
+positioning = 55
+heading = 70
+bravery = 55
+passing = 50
+dribbling = 60
+crossing = 45
+shooting = 75
+finishing = 80
+fitness = 65
+strength = 70
+aggression = 60
+speed = 60
+creativity = 50
+
+[[players]]
+id = "p-echo-11"
+name = "E. Fox"
+number = 11
+kind = "outfield"
+trained_positions = ["ST", "MC"]
+[players.attrs]
+tackling = 40
+marking = 45
+positioning = 50
+heading = 65
+bravery = 50
+passing = 45
+dribbling = 65
+crossing = 40
+shooting = 80
+finishing = 85
+fitness = 70
+strength = 65
+aggression = 55
+speed = 65
+creativity = 55

@@ -1,0 +1,18 @@
+# fixtures/matches/m-0003.toml
+# Mirror match: the same roster (t-alpha) on both sides. Any strength
+# advantage cancels, so results measure variance rather than quality.
+[match]
+id = "m-0003"
+seed = 20240303
+home = "t-alpha"
+away = "t-alpha"
+
+[match.home_setup]
+formation = "4-4-2"
+mentality = "balance"
+tactic = "possession"
+
+[match.away_setup]
+formation = "4-4-2"
+mentality = "balance"
+tactic = "possession"

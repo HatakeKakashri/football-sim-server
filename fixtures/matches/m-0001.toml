@@ -1,0 +1,19 @@
+# fixtures/matches/m-0001.toml
+# Near-equal fixture: t-alpha vs t-bravo (both tier ~100).
+# Setup spellings match the PRD §5.4 example. Away side runs 4-3-3, which
+# t-bravo's multi-trained squad fills exactly once.
+[match]
+id = "m-0001"
+seed = 20240101
+home = "t-alpha"
+away = "t-bravo"
+
+[match.home_setup]
+formation = "4-4-2"
+mentality = "balance"
+tactic = "possession"
+
+[match.away_setup]
+formation = "4-3-3"
+mentality = "attack"
+tactic = "counter_attack"

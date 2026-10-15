@@ -133,6 +133,7 @@ mod tests {
     use std::io::Write;
 
     use sim_components::ProfileKind;
+    use sim_math::Tuning;
 
     /// Write a TOML string to `<root>/<name>` and return its path.
     fn temp_toml(root: &Path, name: &str, contents: &str) -> PathBuf {
@@ -579,4 +580,108 @@ tactic = "counter_attack"
         assert!(message.contains("tackling = 201"));
     }
 
+    /// Directory holding the committed fixtures (PRD default `./fixtures`),
+    /// resolved from this crate's manifest dir so the test is independent of
+    /// the current working directory.
+    fn committed_fixtures_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn test_committed_fixtures_pass_ticket_18_validator() {
+        let dir = committed_fixtures_dir();
+        let set =
+            load(&dir).expect("committed fixtures must pass the ticket 18 validator");
+
+        for id in ["t-alpha", "t-bravo", "t-delta", "t-echo"] {
+            let team = set.teams.get(id).expect("committed team fixture missing");
+            assert_eq!(team.players.len(), 11, "{id} must carry 11 players");
+            assert_eq!(
+                team.players
+                    .iter()
+                    .filter(|player| player.kind == ProfileKind::Goalkeeper)
+                    .count(),
+                1,
+                "{id} must carry exactly one goalkeeper"
+            );
+        }
+        assert_eq!(set.teams.len(), 4, "expected four committed teams");
+
+        for id in ["m-0001", "m-0002", "m-0003"] {
+            assert!(
+                set.matches.contains_key(id),
+                "committed match fixture {id} missing"
+            );
+        }
+        let mirror = set
+            .matches
+            .get("m-0003")
+            .expect("committed mirror match fixture missing");
+        assert_eq!(
+            mirror.home, mirror.away,
+            "mirror match fields the same team on both sides"
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "strength tolerance comparison on f32 values computed from integer attributes"
+    )]
+    fn test_team_strength_within_tier_targets() {
+        use sim_components::{Formation, PosSlot, StrengthMode, Team};
+        use sim_components::position::fit_multiplier;
+        use sim_components::quality;
+
+        let dir = committed_fixtures_dir();
+        let tuning = Tuning::default();
+        let slots: [PosSlot; 11] = Formation::FourFourTwo.table().slots.map(|slot| slot.position);
+        // Canonical 4-4-2 order: GK, DL, DC, DC, DR, ML, MC, MC, MR, ST, ST.
+
+        let targets = [
+            ("t-alpha", 100.0f32),
+            ("t-bravo", 100.0f32),
+            ("t-delta", 130.0f32),
+            ("t-echo", 70.0f32),
+        ];
+        for (team_id, target) in targets {
+            let path = dir.join("teams").join(format!("{team_id}.toml"));
+            let contents = std::fs::read_to_string(&path)
+                .expect("committed team fixture must be readable");
+            let raw: TeamRaw =
+                toml::from_str(&contents).expect("committed team fixture must parse");
+            let team = validate_team(&path, &raw)
+                .expect("committed team fixture must pass the ticket 18 validator");
+            assert_eq!(team.players.len(), 11, "{team_id} must carry 11 players");
+
+            let mut qualities = Vec::with_capacity(11);
+            let mut out_of_position = 0usize;
+            for (player, &slot) in team.players.iter().zip(&slots) {
+                let multiplier =
+                    fit_multiplier(slot, &player.trained_positions, &tuning);
+                if multiplier < 1.0 {
+                    // The slot is not one of the player's trained positions,
+                    // so the §6.5 fit penalty bites on this starter.
+                    out_of_position += 1;
+                }
+                qualities.push(quality(
+                    &player.profile,
+                    slot,
+                    &player.trained_positions,
+                    &tuning,
+                ));
+            }
+            assert!(
+                out_of_position >= 2,
+                "{team_id}: {out_of_position} out-of-position starters, expected at least 2"
+            );
+
+            let strength = Team::strength(&qualities, StrengthMode::Mean);
+            let tolerance = 0.10 * target;
+            assert!(
+                (strength - target).abs() <= tolerance,
+                "{team_id}: team strength {strength:.2} is not within +/-10% of target {target}"
+            );
+        }
+    }
 }

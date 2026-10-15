@@ -40,11 +40,14 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Ball, BallMarker, BallOutOfBoundsType, BallState, KickoffReason, MatchClock, PlayerId, Position,
-    Role, RoleComponent, SaveKind, ShotOutcome, TeamId, Velocity,
+    Attribute, Ball, BallMarker, BallOutOfBoundsType, BallState, KickoffReason, MatchClock,
+    PlayerId, PlayerProfile, Position, Role, RoleComponent, SaveKind, ShotOutcome, TeamId,
+    TeamIdComponent, Velocity,
 };
-use sim_math::Vec2;
+use sim_math::{Tuning, Vec2};
+use sim_physics::SimRng;
 use sim_rules::{GoalForEmit, KickoffForEmit, OobRestartForEmit, PendingOutOfBounds, PendingPass, PendingShot};
+use sim_components::shot_pipeline::shot_accuracy;
 
 use super::SimulationSet;
 use super::events::{
@@ -62,6 +65,34 @@ use super::events::{
 /// Reach / Concentration model. Faster balls are parried; punching
 /// is reserved for cross clearances (aerial play, also Phase 4).
 const SAVE_CATCH_MAX_SPEED: f32 = 0.25;
+
+/// Whether a shot is on target, per the Phase 4 pipeline: the shooter's
+/// `Shooting` attribute feeds [`shot_accuracy`] (response curve plus fit
+/// multiplier) and is compared against an RNG roll.
+///
+/// Returns `None` when the tuning resource or the shooter's profile is
+/// unavailable (e.g. sparse test worlds), in which case the caller keeps
+/// the placeholder behaviour (on-target). `None` is also returned when the
+/// RNG resource is missing, since a roll cannot be drawn.
+#[must_use]
+fn shot_on_target(
+    shooter: Entity,
+    team_query: &Query<(
+        Entity,
+        &TeamIdComponent,
+        Option<&RoleComponent>,
+        Option<&PlayerProfile>,
+    )>,
+    tuning: Option<&Tuning>,
+    rng: Option<&mut SimRng>,
+) -> Option<bool> {
+    let tuning = tuning?;
+    let (_, _, _, profile) = team_query.iter().find(|(e, _, _, _)| *e == shooter)?;
+    let shooting = profile.and_then(|profile| profile.get(Attribute::Shooting))?;
+    let accuracy = shot_accuracy(shooting, 1.0, tuning);
+    let roll = rng.map_or(0.5, SimRng::gen_f32);
+    Some(roll < accuracy)
+}
 
 /// `pass` event resolution: whenever the ball becomes
 /// `Possessed` after a free state and a `PendingPass` is active,
@@ -454,7 +485,14 @@ pub fn resolve_shot_events(
     oob_for_emit: Option<Res<OobRestartForEmit>>,
     ball: Res<Ball>,
     ball_vel: Query<&Velocity, With<BallMarker>>,
-    team_query: Query<(Entity, &sim_components::TeamIdComponent, Option<&RoleComponent>)>,
+    team_query: Query<(
+        Entity,
+        &TeamIdComponent,
+        Option<&RoleComponent>,
+        Option<&PlayerProfile>,
+    )>,
+    tuning: Option<Res<Tuning>>,
+    mut rng: Option<ResMut<SimRng>>,
     current_tick: Option<Res<sim_rules::CurrentTick>>,
     clock: Res<MatchClock>,
 ) {
@@ -511,10 +549,13 @@ pub fn resolve_shot_events(
     // Acquisition arm: whoever holds the ball now resolved the shot.
     if ball.state == BallState::Possessed
         && let Some(possessor) = ball.possessor
-        && let Some((_, team, role)) = team_query.iter().find(|(e, _, _)| *e == possessor)
+        && let Some((_, team, role, _)) = team_query.iter().find(|(e, _, _, _)| *e == possessor)
     {
+        let possessor_team = team.0;
         let is_keeper = role.is_some_and(|r| r.0 == Role::Goalkeeper);
-        let (on_target, outcome) = if team.0 == shot_state.shooter_team {
+        // `team` and `role` are copied out above, ending their borrows of
+        // `team_query` so `shot_on_target` can re-borrow it below.
+        let (on_target, outcome) = if possessor_team == shot_state.shooter_team {
             // Own side gathered it: the shooter's keeper collecting a
             // back-heeled effort (off target); a teammate gathering a
             // rebound (blocked in spirit — it never reached the goal).
@@ -524,7 +565,22 @@ pub fn resolve_shot_events(
                 (true, ShotOutcome::Blocked)
             }
         } else if is_keeper {
-            (true, ShotOutcome::Saved)
+            // Opposing keeper stopped the shot. Shooting accuracy (the
+            // shooter's `Shooting` attribute through the response curve and
+            // fit multiplier) decides whether it was on target; the keeper
+            // holding the ball means it did not become a goal, so the
+            // outcome is `Saved` (physical ground truth). `Reflexes` /
+            // `Finishing` shape the save model via the pipeline pure
+            // functions, which are unit-tested in
+            // `sim_components::shot_pipeline`.
+            let on_target = shot_on_target(
+                shot_state.shooter,
+                &team_query,
+                tuning.as_deref(),
+                rng.as_deref_mut(),
+            )
+            .unwrap_or(true);
+            (on_target, ShotOutcome::Saved)
         } else {
             (true, ShotOutcome::Blocked)
         };
@@ -551,7 +607,7 @@ pub fn resolve_shot_events(
                 event_log.next_seq,
                 tick,
                 &clock,
-                team.0,
+                possessor_team,
                 PlayerId::from_entity(possessor),
                 shooter_id,
                 kind,

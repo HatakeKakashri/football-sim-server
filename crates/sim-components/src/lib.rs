@@ -12,6 +12,7 @@ pub mod intent_dispatch;
 pub mod position;
 pub mod profile;
 pub mod quality;
+pub mod shot_pipeline;
 pub mod time;
 
 #[cfg(test)]
@@ -24,6 +25,11 @@ pub use profile::{
 };
 pub use position::{PosSlot, PositionError};
 pub use quality::quality;
+pub use shot_pipeline::{
+    finishing_conversion, keeper_positioning_error, keeper_save_chance, resolve_shot_outcome,
+    rush_out_quality, save_kind_from_speed, save_probability, shot_accuracy, shot_power,
+    SAVE_CATCH_MAX_SPEED_MPS, ShotResolution,
+};
 pub use sim_math::{effective_attribute, fit_multiplier, QualityGroup, QualityWeights};
 
 pub use ball_touch::{

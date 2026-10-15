@@ -186,7 +186,7 @@ impl Simulation {
             Ball, BallMarker, HomeSlot, Match, MatchClock, MatchState,
             PendingBallTouches, Player, Position, Team, TeamId, Velocity,
         };
-        use sim_math::Vec2;
+        use sim_math::{Tuning, Vec2};
 
         // Create ball entity. Phase C §4.3: `Ball` is now a Resource, so the
         // ball entity carries only `Position`, `Velocity`, and a `BallMarker`
@@ -213,6 +213,9 @@ impl Simulation {
         world.insert_resource(super::lifecycle::HalfTimeEntryTick { tick: None });
         world.insert_resource(super::lifecycle::FirstHalfAddedTime(0));
         world.insert_resource(crate::EventLog::new());
+        // Tuning is the single edit surface for mechanic calibration
+        // (PRD §11); every shot/save consumer reads through it.
+        world.insert_resource(Tuning::default());
         world.entity_mut(ball_entity).insert(BallMarker);
         world
             .entity_mut(ball_entity)

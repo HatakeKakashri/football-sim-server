@@ -1,4 +1,6 @@
+pub mod api;
 pub mod harness;
+pub mod http;
 pub mod simulate;
 pub mod telemetry_cli;
 pub mod trace_filter;
@@ -140,6 +142,24 @@ pub enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+
+    /// Serve one-fixture match streams over HTTP + SSE (issue 12,
+    /// PRD §10). `POST /match/{id}` simulates on a dedicated OS
+    /// thread; `GET /match/{id}/stream` streams manifest + 10
+    /// segments + `full_time`.
+    Serve {
+        /// Listen address (default `127.0.0.1:8080`).
+        #[arg(long, default_value = crate::api::DEFAULT_BIND)]
+        bind: String,
+
+        /// Simultaneous simulation thread cap (default `cores − 1`).
+        #[arg(long)]
+        max_concurrent_sims: Option<usize>,
+
+        /// Cache lifetime for finished/failed results, seconds.
+        #[arg(long, default_value_t = crate::api::DEFAULT_RESULT_TTL_SECS)]
+        result_ttl_secs: u64,
+    },
 }
 
 /// Dispatch a parsed [`Cli`] to the appropriate library entry point.
@@ -232,7 +252,38 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 summary.violations.len(),
             );
         }
+
+        Commands::Serve {
+            bind,
+            max_concurrent_sims,
+            result_ttl_secs,
+        } => serve(bind, max_concurrent_sims, result_ttl_secs)?,
     }
+    Ok(())
+}
+
+/// Inlined `serve` path — builds the store and blocks on the axum
+/// server (kept private so `dispatch` stays short).
+fn serve(
+    bind: String,
+    max_concurrent_sims: Option<usize>,
+    result_ttl_secs: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::Arc;
+
+    use crate::api::{MatchRegistry, MatchStore, ServerConfig, default_concurrency_cap};
+
+    let config = ServerConfig {
+        bind: bind.clone(),
+        max_concurrent_sims: max_concurrent_sims.unwrap_or_else(default_concurrency_cap),
+        result_ttl_secs,
+        tick_cap: sim_core::TICK_CAP,
+    };
+    let store = Arc::new(MatchStore::new(config, MatchRegistry::default_fixture()));
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(crate::http::serve(store, &bind))?;
     Ok(())
 }
 

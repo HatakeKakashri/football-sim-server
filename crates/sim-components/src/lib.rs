@@ -35,16 +35,17 @@ pub use shot_pipeline::{
 };
 pub use outfield_mechanics::{
     aerial_duel_attacker_win_probability, bravery_contest_weight, cross_accuracy,
-    dribble_retention_probability, header_accuracy, header_power, mark_distance_error,
-    pass_error_spread, target_position_error, tackle_success_probability,
+    dribble_retention_probability, header_accuracy, header_power, key_pass_weight,
+    mark_distance_error, pass_error_spread, target_position_error, tackle_success_probability,
 };
 pub use goalkeeper_mechanics::{
-    agility_dive_reach, aerial_reach_radius, communication_defender_error_factor,
-    concentration_save_lapse_probability, kicking_accuracy, kicking_range,
-    punching_clearance_probability, throwing_accuracy, throwing_range,
+    agility_dive_reach, aerial_reach_radius, claim_propensity, communication_defender_error_factor,
+    concentration_save_lapse_probability, distribution_weight, kicking_accuracy, kicking_range,
+    punching_clearance_probability, rush_out_propensity, throwing_accuracy, throwing_range,
 };
 pub use physical_mechanics::{
-    aggression_stamina_factor, fitness_drain_factor, held_ball_retention_probability, sprint_speed,
+    aggression_stamina_factor, fitness_drain_factor, held_ball_retention_probability, press_frequency,
+    press_trigger_distance, sprint_speed, tackle_propensity,
 };
 pub use sim_math::{effective_attribute, fit_multiplier, QualityGroup, QualityWeights};
 

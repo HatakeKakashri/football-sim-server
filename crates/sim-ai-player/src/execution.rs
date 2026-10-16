@@ -238,15 +238,23 @@ pub fn player_action_execution_system(
                 let prob = tackle_success_probability(tackling, fit_multiplier, &tuning);
                 let roll: f32 = rng.gen_f32();
                 let success = roll <= prob;
-                // Stamina cost of the attempt, scaled by Aggression
-                // (placeholder 1.0 here; ticket 25 wires it to
-                // `Aggression`).
+                // Stamina cost of the attempt, scaled by Aggression and
+                // Fitness (PRD §7.3). `aggression_stamina_factor` now
+                // reads the `Aggression` response curve; `fitness_drain_factor`
+                // reduces the cost for fitter players.
                 let aggression = profile
                     .and_then(|p| p.get(Attribute::OutfieldAggression))
                     .unwrap_or(75);
-                let aggression_factor = aggression_stamina_factor(aggression);
-                tackle_stamina_cost =
-                    tuning.stamina_drain_per_action * tuning.tackle_drain_multiplier * aggression_factor;
+                let fitness = profile
+                    .and_then(|p| p.get(Attribute::OutfieldFitness))
+                    .unwrap_or(75);
+                let aggression_factor =
+                    aggression_stamina_factor(aggression, fit_multiplier, &tuning);
+                let fitness_factor = fitness_drain_factor(fitness, fit_multiplier, &tuning);
+                tackle_stamina_cost = tuning.stamina_drain_per_action
+                    * tuning.tackle_drain_multiplier
+                    * aggression_factor
+                    * fitness_factor;
                 tackle_success = Some(success);
                 tackle_carrier = Some(carrier);
                 if !success {
@@ -341,13 +349,20 @@ pub fn player_action_execution_system(
                 .mul_add(-drain_factor, stamina.0)
                 .clamp(0.0, 1.0);
         }
-        // Press stamina cost (scaled by Aggression, placeholder 1.0 here).
+        // Press stamina cost (scaled by Aggression and Fitness,
+        // PRD §7.3).
         if matches!(intent, Intent::Action(ActionIntent::Press(_))) {
             let aggression = profile
                 .map_or(75, |p| p.get(Attribute::OutfieldAggression).unwrap_or(75));
-            let aggression_factor = aggression_stamina_factor(aggression);
-            let press_cost =
-                tuning.stamina_drain_per_action * tuning.press_drain_multiplier * aggression_factor;
+            let fitness = profile
+                .map_or(75, |p| p.get(Attribute::OutfieldFitness).unwrap_or(75));
+            let aggression_factor =
+                aggression_stamina_factor(aggression, fit_multiplier, &tuning);
+            let fitness_factor = fitness_drain_factor(fitness, fit_multiplier, &tuning);
+            let press_cost = tuning.stamina_drain_per_action
+                * tuning.press_drain_multiplier
+                * aggression_factor
+                * fitness_factor;
             stamina.0 = (stamina.0 - press_cost).clamp(0.0, 1.0);
         }
         // Tackle stamina drain (scaled by Aggression, placeholder 1.0 here).
@@ -1142,24 +1157,35 @@ mod tests {
                 snap(Vec2::new(60.0, 34.0), Vec2::new(60.0, 34.0)),
             ))
             .id();
-        let tackler = world
-            .spawn((
-                Player {
-                    team_id: sim_components::TeamId(0),
-                    intent: Some(Intent::Action(ActionIntent::Tackle(carrier))),
-                },
-                sim_components::TeamIdComponent(sim_components::TeamId(0)),
-                Position(Vec2::new(58.0, 34.0)),
-                Velocity(Vec2::zero()),
-                Stamina(1.0),
-                Skill(0.7),
-                sim_components::PlayerProfile::with_attribute(
-                    sim_components::Attribute::Tackling,
-                    1,
-                ),
-                snap(Vec2::new(58.0, 34.0), Vec2::new(60.0, 34.0)),
-            ))
-            .id();
+        let tackler = {
+            // Pin Aggression and Fitness so the stamina cost is
+            // deterministic: Aggression 100 ⇒ factor 0.5, Fitness 100
+            // ⇒ drain factor 0.36, cost = 0.002 * 25 * 0.5 * 0.36
+            // = 0.009; stamina = 1.0 + 0.001 - 0.009 = 0.992.
+            let mut profile =
+                sim_components::PlayerProfile::with_attribute(sim_components::Attribute::Tackling, 1);
+            profile
+                .set(sim_components::Attribute::OutfieldAggression, 100)
+                .expect("invariant: in-range attribute");
+            profile
+                .set(sim_components::Attribute::OutfieldFitness, 100)
+                .expect("invariant: in-range attribute");
+            world
+                .spawn((
+                    Player {
+                        team_id: sim_components::TeamId(0),
+                        intent: Some(Intent::Action(ActionIntent::Tackle(carrier))),
+                    },
+                    sim_components::TeamIdComponent(sim_components::TeamId(0)),
+                    Position(Vec2::new(58.0, 34.0)),
+                    Velocity(Vec2::zero()),
+                    Stamina(1.0),
+                    Skill(0.7),
+                    profile,
+                    snap(Vec2::new(58.0, 34.0), Vec2::new(60.0, 34.0)),
+                ))
+                .id()
+        };
 
         world.insert_resource(Ball {
             spin: 0.0,
@@ -1182,10 +1208,13 @@ mod tests {
         assert_eq!(attempt.tackler, tackler);
         assert_eq!(attempt.carrier, carrier);
 
-        // Stamina was spent on the attempt (tackle_stamina_cost = 0.05).
+        // Stamina was spent on the attempt. With Aggression 100 and Fitness
+        // 100: aggression factor 0.5, fitness drain factor 0.36,
+        // cost = 0.002 * 25 * 0.5 * 0.36 = 0.009,
+        // stamina = 1.0 + recovery 0.001 - cost 0.009 = 0.991 (f32 rounding).
         let stamina = world.get::<Stamina>(tackler).expect("tackler stamina");
         assert!(
-            (stamina.0 - (1.0 - 0.05)).abs() < 1e-6,
+            (stamina.0 - 0.991).abs() < 1e-6,
             "stamina drained by tackle cost, got {}",
             stamina.0
         );

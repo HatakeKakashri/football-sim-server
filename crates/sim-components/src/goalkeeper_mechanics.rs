@@ -42,6 +42,16 @@ const AERIAL_REACH_IDX: usize = Attribute::AerialReach as usize;
 const COMMUNICATION_IDX: usize = Attribute::Communication as usize;
 const AGILITY_IDX: usize = Attribute::Agility as usize;
 const CONCENTRATION_IDX: usize = Attribute::Concentration as usize;
+/// Index of `Attribute::GoalkeeperAggression` in `Attribute::ALL` /
+/// `Tuning::curve_params`. Mirrors the attribute declaration order; the
+/// cross-crate consistency is asserted by
+/// `sim_components::attribute_tests::a10_curve_monotonicity_all_attributes`.
+const GKAGGRESSION_IDX: usize = Attribute::GoalkeeperAggression as usize;
+/// Index of `Attribute::GoalkeeperCreativity` in `Attribute::ALL` /
+/// `Tuning::curve_params`. Mirrors the attribute declaration order; the
+/// cross-crate consistency is asserted by
+/// `sim_components::attribute_tests::a10_curve_monotonicity_all_attributes`.
+const GKCREATIVITY_IDX: usize = Attribute::GoalkeeperCreativity as usize;
 
 /// Hand-distribution accuracy in `[0, 1]`: the likelihood a thrown
 /// distribution reaches its target. Rises monotonically with `Throwing`.
@@ -160,6 +170,50 @@ pub fn concentration_save_lapse_probability(
     let time_factor =
         1.0 + (time_since_last_touch_ticks as f32 / 600.0).clamp(0.0, 1.0);
     (base_lapse * time_factor).clamp(0.0, 1.0)
+}
+
+/// Rush-out propensity in `[0, 1]`: how readily the goalkeeper leaves the
+/// line to close down an attacker. Rises monotonically with
+/// `GoalkeeperAggression`.
+#[must_use]
+pub fn rush_out_propensity(
+    aggression: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let effective = effective_attribute(aggression, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[GKAGGRESSION_IDX])
+}
+
+/// Claim propensity in `[0, 1]`: how readily the goalkeeper claims an
+/// incoming cross or loose ball rather than parrying or punching it.
+/// Rises monotonically with `GoalkeeperAggression`.
+#[must_use]
+pub fn claim_propensity(
+    aggression: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let effective = effective_attribute(aggression, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[GKAGGRESSION_IDX])
+}
+
+/// Weight of long / through-ball distribution options in `[0, 1]`. Rises
+/// monotonically with `GoalkeeperCreativity`: a more creative goalkeeper
+/// weights long and through-ball distributions higher relative to short
+/// throws when distributing from hand or foot.
+#[allow(
+    clippy::too_long_first_doc_paragraph,
+    reason = "the opening paragraph states the full documented effect of Goalkeeper Creativity in one place; splitting it would weaken clarity"
+)]
+#[must_use]
+pub fn distribution_weight(
+    creativity: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let effective = effective_attribute(creativity, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[GKCREATIVITY_IDX])
 }
 
 #[cfg(test)]
@@ -432,6 +486,88 @@ mod tests {
                     "concentration_save_lapse_probability {concentration}@{time} = {value} outside [0, 1]"
                 );
             }
+        }
+    }
+
+    // === Goalkeeper Aggression ===
+
+    #[test]
+    fn rush_out_propensity_is_strictly_rising_in_aggression() {
+        let tuning = tuning();
+        let mut prev = rush_out_propensity(1, fit(), &tuning);
+        for aggression in 2..=200u8 {
+            let value = rush_out_propensity(aggression, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "rush_out_propensity not strictly rising at Goalkeeper Aggression {aggression}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn rush_out_propensity_stays_in_unit_interval() {
+        let tuning = tuning();
+        for aggression in 1..=200u8 {
+            let value = rush_out_propensity(aggression, fit(), &tuning);
+            assert!(
+                (0.0..=1.0).contains(&value),
+                "rush_out_propensity {aggression} = {value} outside [0, 1]"
+            );
+        }
+    }
+
+    #[test]
+    fn claim_propensity_is_strictly_rising_in_aggression() {
+        let tuning = tuning();
+        let mut prev = claim_propensity(1, fit(), &tuning);
+        for aggression in 2..=200u8 {
+            let value = claim_propensity(aggression, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "claim_propensity not strictly rising at Goalkeeper Aggression {aggression}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn claim_propensity_stays_in_unit_interval() {
+        let tuning = tuning();
+        for aggression in 1..=200u8 {
+            let value = claim_propensity(aggression, fit(), &tuning);
+            assert!(
+                (0.0..=1.0).contains(&value),
+                "claim_propensity {aggression} = {value} outside [0, 1]"
+            );
+        }
+    }
+
+    // === Goalkeeper Creativity ===
+
+    #[test]
+    fn distribution_weight_is_strictly_rising_in_creativity() {
+        let tuning = tuning();
+        let mut prev = distribution_weight(1, fit(), &tuning);
+        for creativity in 2..=200u8 {
+            let value = distribution_weight(creativity, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "distribution_weight not strictly rising at Goalkeeper Creativity {creativity}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn distribution_weight_stays_in_unit_interval() {
+        let tuning = tuning();
+        for creativity in 1..=200u8 {
+            let value = distribution_weight(creativity, fit(), &tuning);
+            assert!(
+                (0.0..=1.0).contains(&value),
+                "distribution_weight {creativity} = {value} outside [0, 1]"
+            );
         }
     }
 }

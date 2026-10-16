@@ -44,6 +44,11 @@ const SPEED_IDX: usize = Attribute::OutfieldSpeed as usize;
 const FITNESS_IDX: usize = Attribute::OutfieldFitness as usize;
 /// Index of `Attribute::OutfieldStrength`.
 const STRENGTH_IDX: usize = Attribute::OutfieldStrength as usize;
+/// Index of `Attribute::OutfieldAggression` in `Attribute::ALL` /
+/// `Tuning::curve_params`. Mirrors the attribute declaration order; the
+/// cross-crate consistency is asserted by
+/// `sim_components::attribute_tests::a10_curve_monotonicity_all_attributes`.
+const OUTAGGRESSION_IDX: usize = Attribute::OutfieldAggression as usize;
 
 /// Sprint speed band: the curve output maps to this band (m/s), so even
 /// a maxed `Speed` stays below the physics speed cap and leaves headroom
@@ -55,11 +60,65 @@ const SPEED_MAX_MPS: f32 = 10.0;
 /// fraction of their free speed (lower with the ball than without).
 const BALL_CARRIER_SPEED_FACTOR: f32 = 0.8;
 
-/// Aggression → stamina-cost multiplier for press/tackle. Placeholder:
-/// scaled by 1.0 here; ticket 25 wires it to the `Aggression` attribute.
+/// Aggression → stamina-cost multiplier for press/tackle in `[0, 1]`.
+///
+/// Rises monotonically with `OutfieldAggression`: a more aggressive
+/// player spends more stamina per press or tackle attempt. Combined with
+/// the `Fitness` drain factor (falling) applied at the call site, the net
+/// press / tackle cost is scaled by both `Aggression` and `Fitness`
+/// (PRD §7.3).
 #[must_use]
-pub const fn aggression_stamina_factor(_aggression: u8) -> f32 {
-    1.0
+pub fn aggression_stamina_factor(
+    aggression: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let effective = effective_attribute(aggression, fit_multiplier);
+    // `effective` is bounded to [0, 200], so the cast is non-truncating.
+    curve(effective as i32, &tuning.curve_params[OUTAGGRESSION_IDX])
+}
+
+/// Press frequency in `[0, 1]`: how often an aggressive player elects to
+/// press the ball carrier. Rises monotonically with `OutfieldAggression`.
+///
+/// Shares the `OutfieldAggression` response curve with
+/// [`aggression_stamina_factor`] but is a separate semantic consumer:
+/// this weights the press decision, while the stamina factor prices it.
+#[must_use]
+pub fn press_frequency(
+    aggression: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let effective = effective_attribute(aggression, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[OUTAGGRESSION_IDX])
+}
+
+/// Press trigger distance in metres: how far from the ball carrier an
+/// aggressive player will initiate a press. Rises monotonically with
+/// `OutfieldAggression`, mapped to a `6..=18` m band.
+#[must_use]
+pub fn press_trigger_distance(
+    aggression: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let effective = effective_attribute(aggression, fit_multiplier);
+    let quality = curve(effective as i32, &tuning.curve_params[OUTAGGRESSION_IDX]);
+    (6.0 + quality.mul_add(12.0, 0.0)).clamp(6.0, 18.0)
+}
+
+/// Tackle propensity in `[0, 1]`: how readily a player commits to a
+/// tackle when challenging a ball carrier. Rises monotonically with
+/// `OutfieldAggression`.
+#[must_use]
+pub fn tackle_propensity(
+    aggression: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let effective = effective_attribute(aggression, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[OUTAGGRESSION_IDX])
 }
 
 /// Sprint speed in metres per tick. Rises monotonically with `Speed`
@@ -262,11 +321,128 @@ mod tests {
 
     #[allow(
         clippy::float_cmp,
-        reason = "aggression_stamina_factor returns the exact literal constant 1.0; equality is exact"
+        reason = "aggression_stamina_factor output is derived from the same integer literals through a strictly-monotonic curve; equality on identically-built values is exact"
     )]
     #[test]
-    fn aggression_stamina_factor_is_placeholder_one() {
-        assert_eq!(aggression_stamina_factor(1), 1.0);
-        assert_eq!(aggression_stamina_factor(200), 1.0);
+    fn aggression_stamina_factor_is_strictly_rising_in_aggression() {
+        let tuning = tuning();
+        let mut prev = aggression_stamina_factor(1, fit(), &tuning);
+        for aggression in 2..=200u8 {
+            let value = aggression_stamina_factor(aggression, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "aggression_stamina_factor not strictly rising at Aggression {aggression}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn aggression_stamina_factor_stays_in_unit_interval() {
+        let tuning = tuning();
+        for aggression in 1..=200u8 {
+            let value = aggression_stamina_factor(aggression, fit(), &tuning);
+            assert!(
+                (0.0..=1.0).contains(&value),
+                "aggression_stamina_factor {aggression} = {value} outside [0, 1]"
+            );
+        }
+    }
+
+    #[test]
+    fn aggression_stamina_factor_honors_fit_multiplier() {
+        let tuning = tuning();
+        // Lower fit multiplier ⇒ lower effective attribute ⇒ lower factor
+        // for the rising curve.
+        let full = aggression_stamina_factor(100, 1.00, &tuning);
+        let partial = aggression_stamina_factor(100, 0.75, &tuning);
+        assert!(
+            full > partial + TOL,
+            "aggression factor at full fit ({full}) must exceed partial fit ({partial})"
+        );
+    }
+
+    // === Press frequency ===
+
+    #[test]
+    fn press_frequency_is_strictly_rising_in_aggression() {
+        let tuning = tuning();
+        let mut prev = press_frequency(1, fit(), &tuning);
+        for aggression in 2..=200u8 {
+            let value = press_frequency(aggression, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "press_frequency not strictly rising at Aggression {aggression}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn press_frequency_stays_in_unit_interval() {
+        let tuning = tuning();
+        for aggression in 1..=200u8 {
+            let value = press_frequency(aggression, fit(), &tuning);
+            assert!(
+                (0.0..=1.0).contains(&value),
+                "press_frequency {aggression} = {value} outside [0, 1]"
+            );
+        }
+    }
+
+    // === Press trigger distance ===
+
+    #[test]
+    fn press_trigger_distance_is_strictly_rising_in_aggression() {
+        let tuning = tuning();
+        let mut prev = press_trigger_distance(1, fit(), &tuning);
+        for aggression in 2..=200u8 {
+            let value = press_trigger_distance(aggression, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "press_trigger_distance not strictly rising at Aggression {aggression}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn press_trigger_distance_stays_in_band() {
+        let tuning = tuning();
+        for aggression in 1..=200u8 {
+            let value = press_trigger_distance(aggression, fit(), &tuning);
+            assert!(
+                (6.0..=18.0).contains(&value),
+                "press_trigger_distance {aggression} = {value} outside [6, 18]"
+            );
+        }
+    }
+
+    // === Tackle propensity ===
+
+    #[test]
+    fn tackle_propensity_is_strictly_rising_in_aggression() {
+        let tuning = tuning();
+        let mut prev = tackle_propensity(1, fit(), &tuning);
+        for aggression in 2..=200u8 {
+            let value = tackle_propensity(aggression, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "tackle_propensity not strictly rising at Aggression {aggression}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn tackle_propensity_stays_in_unit_interval() {
+        let tuning = tuning();
+        for aggression in 1..=200u8 {
+            let value = tackle_propensity(aggression, fit(), &tuning);
+            assert!(
+                (0.0..=1.0).contains(&value),
+                "tackle_propensity {aggression} = {value} outside [0, 1]"
+            );
+        }
     }
 }

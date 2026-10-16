@@ -48,6 +48,11 @@ const CROSSING_IDX: usize = Attribute::Crossing as usize;
 const HEADING_IDX: usize = Attribute::Heading as usize;
 /// Index of `Attribute::Bravery`.
 const BRAVERY_IDX: usize = Attribute::Bravery as usize;
+/// Index of `Attribute::OutfieldCreativity` in `Attribute::ALL` /
+/// `Tuning::curve_params`. Mirrors the attribute declaration order; the
+/// cross-crate consistency is asserted by
+/// `sim_components::attribute_tests::a10_curve_monotonicity_all_attributes`.
+const OUTCREATIVITY_IDX: usize = Attribute::OutfieldCreativity as usize;
 
 /// Pass error spread in `[0, 1]`: the probability a pass deviates from
 /// its intended target.
@@ -217,6 +222,28 @@ pub fn aerial_duel_attacker_win_probability(
 pub fn bravery_contest_weight(bravery: u8, fit_multiplier: f32, tuning: &Tuning) -> f32 {
     let effective = effective_attribute(bravery, fit_multiplier);
     curve(effective as i32, &tuning.curve_params[BRAVERY_IDX])
+}
+
+/// Weight of key-pass / through-ball options in `[0, 1]`. Rises
+/// monotonically with `OutfieldCreativity`: a more creative player
+/// weights penetrating passes (key passes and through balls) higher
+/// relative to safe short passes when choosing a pass.
+///
+/// The `OutfieldCreativity` curve-table entry is rising
+/// (`min: 0.05`, `max: 0.95` at the default tuning), so the raw curve
+/// output *is* the option weight.
+#[allow(
+    clippy::too_long_first_doc_paragraph,
+    reason = "the opening paragraph states the full documented effect of Outfield Creativity in one place; splitting it would weaken clarity"
+)]
+#[must_use]
+pub fn key_pass_weight(
+    creativity: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let effective = effective_attribute(creativity, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[OUTCREATIVITY_IDX])
 }
 
 #[cfg(test)]
@@ -626,6 +653,49 @@ mod tests {
         assert!(
             full > partial + TOL,
             "bravery weight at full fit ({full}) must exceed partial fit ({partial})"
+        );
+    }
+
+    // === Creativity ===
+
+    #[test]
+    fn key_pass_weight_is_strictly_rising_in_creativity() {
+        let tuning = tuning();
+        let mut prev = key_pass_weight(1, fit(), &tuning);
+        for creativity in 2..=200u8 {
+            let value = key_pass_weight(creativity, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "key_pass_weight not strictly rising at Creativity {creativity}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+        assert!(
+            prev < 1.0 - TOL,
+            "key_pass_weight must stay below one at Creativity 200 ({prev})"
+        );
+    }
+
+    #[test]
+    fn key_pass_weight_stays_within_curve_bounds() {
+        let tuning = tuning();
+        for creativity in 1..=200u8 {
+            let value = key_pass_weight(creativity, fit(), &tuning);
+            assert!(
+                (0.05..=0.95).contains(&value),
+                "key_pass_weight {creativity} = {value} outside [0.05, 0.95]"
+            );
+        }
+    }
+
+    #[test]
+    fn key_pass_weight_honors_fit_multiplier() {
+        let tuning = tuning();
+        let full = key_pass_weight(100, 1.00, &tuning);
+        let partial = key_pass_weight(100, 0.75, &tuning);
+        assert!(
+            full > partial + TOL,
+            "key-pass weight at full fit ({full}) must exceed partial fit ({partial})"
         );
     }
 }

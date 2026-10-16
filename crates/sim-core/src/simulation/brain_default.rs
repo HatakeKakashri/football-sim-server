@@ -3,23 +3,36 @@
 use bevy_ecs::prelude::Entity;
 use sim_ai_core::ResponseCurve;
 use sim_ai_player::{Consideration, PlayerAction, UtilityBrain};
-use sim_components::{ActionIntent, Intent, MovementIntent};
+use sim_components::{ActionIntent, Intent, MovementIntent, TacticParameters};
 use sim_math::Vec2;
 
-/// Phase 2: build the default `UtilityBrain` used by every player at match
-/// start. Mirrors the §4a consideration list — `MoveToPosition`, `ChaseBall`,
-/// `PassTo`, `ShootAtGoal`, Tackle, `MarkOpponent`, Press, `SupportRun`,
-/// `HoldPosition`. Curves are tuned for the standard 105×68 pitch (midpoints
-/// are real metres, not normalised). Hysteresis bonus = 0.1.
+/// Canonical default brain: Balance mentality + Possession tactic, i.e.
+/// [`TacticParameters::neutral`]. Kept as the public entry point used by
+/// tests and callers that want the unmodified preset; the per-team variant
+/// [`default_utility_brain_with`] is the generalization (PRD §7.2: mentality
+/// and tactic are numeric parameters feeding the considerations).
+#[allow(
+    dead_code,
+    reason = "the `simulation` module is private so this pub entry point looks unused in lib builds; it is used by tests and direct callers"
+)]
+pub fn default_utility_brain() -> UtilityBrain {
+    default_utility_brain_with(&TacticParameters::neutral())
+}
+
+/// Build the default `UtilityBrain` for a team with the given numeric
+/// [`TacticParameters`] (PRD §7.2: mentality and tactic are numeric
+/// parameters feeding the considerations, not special-case code paths).
 ///
-/// Decision cadence (`DECISION_CADENCE_TICKS` = 6, ~10 Hz) is applied by
-/// `player_decision_system` itself per spec §13 #15 — this brain is
-/// cadence-agnostic.
+/// The only parameter consumed here is `press_trigger_factor`, which
+/// scales the `DistanceToPress` consideration's midpoint: a wider
+/// trigger distance (`HighPress`) makes pressing opponents from further
+/// away score higher, which is exactly what moves the press count.
+#[must_use]
 #[expect(
     clippy::too_many_lines,
     reason = "declarative table of actions and considerations; splitting it would only scatter the data"
 )]
-pub fn default_utility_brain() -> UtilityBrain {
+pub fn default_utility_brain_with(params: &TacticParameters) -> UtilityBrain {
     const fn lin(min: f32, max: f32) -> ResponseCurve {
         ResponseCurve::Linear { min, max }
     }
@@ -151,13 +164,18 @@ pub fn default_utility_brain() -> UtilityBrain {
                 },
             ],
         },
-        // Press — close-range press + stamina.
+        // Press — close-range press + stamina. The trigger distance is
+        // the team's `press_trigger_distance` (8 m × press_trigger_factor):
+        // a HighPress team presses opponents from further away, which is
+        // what raises its press count.
         PlayerAction {
             intent: Intent::Action(ActionIntent::Press(Entity::PLACEHOLDER)),
             considerations: vec![
                 Consideration::DistanceToPress {
                     weight: 0.6,
-                    curve: log(8.0, 0.4),
+                    // Logistic midpoint = press trigger distance: at the
+                    // trigger distance the score is 0.5; inside it, higher.
+                    curve: log(params.press_trigger_distance(), 0.4),
                 },
                 Consideration::Stamina {
                     weight: 0.4,

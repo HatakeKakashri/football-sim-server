@@ -7,7 +7,9 @@ use sim_ai_player::{
     kick_execution_system, perception_system, player_action_execution_system,
     player_decision_system, tackle_recovery_system,
 };
-use sim_components::{PerceptionSnapshot, PitchBounds, PlayerProfile, RoleComponent, Skill, Stamina};
+use sim_components::{
+    PerceptionSnapshot, PitchBounds, PlayerProfile, RoleComponent, Skill, Stamina, TacticParameters,
+};
 use sim_physics::{
     apply_kick_velocity_system, ball_physics_system, pitch_control_system, player_movement_system,
 };
@@ -19,7 +21,7 @@ use sim_rules::{
 
 use super::Simulation;
 use super::SimulationSet;
-use super::brain_default::default_utility_brain;
+use super::brain_default::default_utility_brain_with;
 
 /// Phase C ECS-shape polish (review §4.2): register every simulation system
 /// in one place, in the explicit per-tick order:
@@ -135,7 +137,11 @@ fn register_systems(schedule: &mut Schedule) {
 }
 
 impl Simulation {
-    /// Build a new simulation with the standard pitch, systems and match.
+    /// Build a new simulation with the standard pitch, systems and match,
+    /// using the canonical default setup for both teams (4-4-2, Balance,
+    /// Possession). This keeps `Simulation::new(seed)` — used by the CLI,
+    /// the replay path, the benchmark and every existing test — unchanged
+    /// in behaviour.
     ///
     /// # Panics
     ///
@@ -143,6 +149,24 @@ impl Simulation {
     /// an internal invariant violation.
     #[must_use]
     pub fn new(seed: u64) -> Self {
+        Self::new_with_setup(
+            seed,
+            sim_components::TeamSetup::default(),
+            sim_components::TeamSetup::default(),
+        )
+    }
+
+    /// Build a new simulation with per-side `TeamSetup`s (formation,
+    /// mentality, tactic). The formation's slot table drives each
+    /// player's `home_slot`; mentality and tactic feed numeric
+    /// `TacticParameters` that shift line heights and risk appetites
+    /// (PRD §7.2).
+    #[must_use]
+    pub fn new_with_setup(
+        seed: u64,
+        home_setup: sim_components::TeamSetup,
+        away_setup: sim_components::TeamSetup,
+    ) -> Self {
         let mut world = World::new();
         // Phase 0 substrate: physics needs pitch dimensions. Insert the standard
         // pitch as a resource so the registered ball physics system can resolve
@@ -166,7 +190,12 @@ impl Simulation {
         // Create match + home team; resolve ball entity for later use by the
         // lifecycle system and clock advancement. Phase C §4.3: `Ball` is a
         // Resource and the ball entity is tagged with `BallMarker`.
-        let (match_entity, _home_team_entity, ball_entity) = Self::create_match(&mut world, seed);
+        let (match_entity, _home_team_entity, ball_entity) = Self::create_match(
+            &mut world,
+            seed,
+            home_setup,
+            away_setup,
+        );
 
         Self {
             world,
@@ -182,7 +211,12 @@ impl Simulation {
         clippy::too_many_lines,
         reason = "one-shot match setup: ball, two 11-player squads, match entity"
     )]
-    pub fn create_match(world: &mut World, seed: u64) -> (Entity, Entity, Entity) {
+    pub fn create_match(
+        world: &mut World,
+        seed: u64,
+        home_setup: sim_components::TeamSetup,
+        away_setup: sim_components::TeamSetup,
+    ) -> (Entity, Entity, Entity) {
         use sim_components::{
             Ball, BallMarker, HomeSlot, Match, MatchClock, MatchState,
             PendingBallTouches, Player, Position, Team, TeamId, Velocity,
@@ -226,16 +260,22 @@ impl Simulation {
             .insert(Position(Vec2::new(52.5, 34.0)));
         world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
+        // Home team parameters (PRD §7.2: mentality + tactic are numeric
+        // parameters that shift line heights and risk appetites).
+        let home_params = TacticParameters::from_setup(home_setup.mentality, home_setup.tactic);
+        let home_direction = 1; // Home team attacks right (x = 105) in the first half.
+
         // Create home team
         let home_team_entity = world.spawn(()).id();
         let mut home_players = Vec::new();
 
         // Create 11 home players, one per slot of the team's formation table.
-        let formation = sim_components::Formation::FourFourTwo;
-        let slots = formation.table().slots;
+        let slots = home_setup.formation.table().slots;
         for i in 0_u8..11 {
             let slot = slots[i as usize];
-            let pos = slot.position_for(1);
+            // Apply the line-height shift along the attacking axis (positive
+            // = toward the opponent goal). See `formation::slot_position_for`.
+            let pos = super::formation::slot_position_for(slot, home_direction, home_params.line_height_shift);
             let player_entity = world.spawn(()).id();
             // Phase 1: seed each player with a default empty PerceptionSnapshot
             // stored in the existing `Player.perception` field so downstream
@@ -290,33 +330,49 @@ impl Simulation {
             }
             // Insert PerceptionSnapshot as a Component (Phase B)
             world.entity_mut(player_entity).insert(default_snapshot);
+            // Ticket 25: per-team brain so the press trigger distance
+            // (HighPress vs others) feeds the DistanceToPress consideration.
             world
                 .entity_mut(player_entity)
-                .insert(default_utility_brain());
+                .insert(default_utility_brain_with(&home_params));
             home_players.push(player_entity);
         }
 
         world.entity_mut(home_team_entity).insert(Team::with_attack_direction(
             TeamId(0),
             "Home".to_string(),
-            sim_components::Formation::FourFourTwo,
-            sim_components::Mentality::Balance,
-            sim_components::Tactic::Possession,
+            home_setup.formation,
+            home_setup.mentality,
+            home_setup.tactic,
             home_players,
             Vec::new(),
             // Home team attacks right (x = 105) in the first half.
-            1,
+            home_direction,
         ));
+        // Ticket 25: snapshot the configured tactic parameters on the team
+        // so `reset_formation` applies the configured line-height shift even
+        // if `mentality_shift_system` later mutates `Team.mentality`
+        // (PRD §7.2: mentality is configured before kickoff and does not
+        // change mid-match).
+        world.entity_mut(home_team_entity).insert(home_params);
+
+        // Away team parameters (PRD §7.2: mentality + tactic are numeric
+        // parameters that shift line heights and risk appetites).
+        let away_params =
+            TacticParameters::from_setup(away_setup.mentality, away_setup.tactic);
+        let away_direction = -1; // Away team attacks left (x = 0) in the first half.
 
         // Create away team
         let away_team_entity = world.spawn(()).id();
         let mut away_players = Vec::new();
 
         // Create 11 away players, one per slot of the team's formation table.
-        let away_slots = sim_components::Formation::FourFourTwo.table().slots;
+        let away_slots = away_setup.formation.table().slots;
         for i in 0_u8..11 {
             let slot = away_slots[i as usize];
-            let pos = slot.position_for(-1);
+            // Apply the line-height shift along the attacking axis (positive
+            // = toward the opponent goal). See `formation::slot_position_for`.
+            let pos = super::formation::slot_position_for(slot, away_direction, away_params.line_height_shift);
             let player_entity = world.spawn(()).id();
             let default_snapshot = PerceptionSnapshot {
                 self_position: pos,
@@ -364,23 +420,26 @@ impl Simulation {
                     .insert(PlayerProfile::default_outfield());
             }
             world.entity_mut(player_entity).insert(default_snapshot);
+            // Ticket 25: per-team brain so the press trigger distance
+            // (HighPress vs others) feeds the DistanceToPress consideration.
             world
                 .entity_mut(player_entity)
-                .insert(default_utility_brain());
+                .insert(default_utility_brain_with(&away_params));
             away_players.push(player_entity);
         }
 
         world.entity_mut(away_team_entity).insert(Team::with_attack_direction(
             TeamId(1),
             "Away".to_string(),
-            sim_components::Formation::FourFourTwo,
-            sim_components::Mentality::Balance,
-            sim_components::Tactic::Possession,
+            away_setup.formation,
+            away_setup.mentality,
+            away_setup.tactic,
             away_players,
             Vec::new(),
             // Away team attacks left (x = 0) in the first half.
-            -1,
+            away_direction,
         ));
+        world.entity_mut(away_team_entity).insert(away_params);
 
         // Create match entity
         let match_entity = world.spawn(()).id();

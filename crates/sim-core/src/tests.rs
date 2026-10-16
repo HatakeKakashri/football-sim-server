@@ -42,6 +42,8 @@ mod smoke_tests;
 #[cfg(test)]
 mod state_hash_tests;
 #[cfg(test)]
+mod tactic_signature_tests;
+#[cfg(test)]
 mod team_id_tests;
 #[cfg(test)]
 mod telemetry_tests;

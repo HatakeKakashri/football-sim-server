@@ -6,7 +6,8 @@ use bevy_ecs::prelude::*;
 use sim_components::{
     ActionIntent, Attribute, Ball, BallMarker, Intent, LastTouch, MatchClock, PendingBallTouches,
     PerceptionSnapshot, Player, PlayerId, PlayerProfile, Position, Skill, Stamina, TackleRecovery,
-    TouchKind, Velocity, aggression_stamina_factor, fitness_drain_factor,
+    Team, TouchKind, Velocity, TacticParameters,
+    aggression_stamina_factor, fitness_drain_factor,
     pass_error_spread, tackle_success_probability,
 };
 use sim_math::{Tuning, Vec2};
@@ -148,6 +149,7 @@ pub fn player_action_execution_system(
     mut commands: Commands,
     ball: Res<Ball>,
     tuning: Res<Tuning>,
+    team_query: Query<&Team>,
     mut pending_tackle: ResMut<PendingTackle>,
 ) {
     // Phase 2: real steering for every action. Each arm turns the abstract
@@ -349,6 +351,16 @@ pub fn player_action_execution_system(
                 .mul_add(-drain_factor, stamina.0)
                 .clamp(0.0, 1.0);
         }
+        // Ticket 25: `HighPress` raises the press stamina cost
+        // (PRD §7.2) via `press_stamina_factor`, a pure numeric parameter
+        // of the team's tactic.
+        let press_stamina_factor = team_query
+            .iter()
+            .find(|team| team.id == player.team_id)
+            .map_or(1.0, |team| {
+                TacticParameters::from_setup(team.mentality, team.tactic).press_stamina_factor
+            });
+
         // Press stamina cost (scaled by Aggression and Fitness,
         // PRD §7.3).
         if matches!(intent, Intent::Action(ActionIntent::Press(_))) {
@@ -362,7 +374,8 @@ pub fn player_action_execution_system(
             let press_cost = tuning.stamina_drain_per_action
                 * tuning.press_drain_multiplier
                 * aggression_factor
-                * fitness_factor;
+                * fitness_factor
+                * press_stamina_factor;
             stamina.0 = (stamina.0 - press_cost).clamp(0.0, 1.0);
         }
         // Tackle stamina drain (scaled by Aggression, placeholder 1.0 here).
@@ -456,6 +469,7 @@ pub fn kick_execution_system(
         Option<&PlayerProfile>,
     )>,
     ball_query: Query<&Position, With<BallMarker>>,
+    team_query: Query<&Team>,
     mut ball: ResMut<Ball>,
     mut pending: ResMut<PendingBallTouches>,
     pending_pass: Option<ResMut<PendingPass>>,
@@ -484,6 +498,17 @@ pub fn kick_execution_system(
         return;
     };
 
+    // Ticket 25: `Possession` shortens passes and `CounterAttack`
+    // lengthens them (PRD §7.2) via `pass_length_factor`, a pure numeric
+    // parameter of the team's tactic. Look up the possessor's team to
+    // read its tactic parameters.
+    let pass_length_factor = team_query
+        .iter()
+        .find(|team| team.id == possessor_player.team_id)
+        .map_or(1.0, |team| {
+            TacticParameters::from_setup(team.mentality, team.tactic).pass_length_factor
+        });
+
     // ChaseBall was used to approach the ball; once possessed, the player retains
     // possession until a deliberate action (PassTo, ShootAtGoal, etc.) is chosen.
     if matches!(intent, Intent::Movement(sim_components::MovementIntent::ChaseBall)) {
@@ -499,7 +524,8 @@ pub fn kick_execution_system(
     };
     let kick_speed = match intent {
         Intent::Action(ActionIntent::ShootAtGoal(_)) => KICK_SPEED_SHOT,
-        _ => KICK_SPEED_PASS,
+        // `pass_length_factor` scales pass length: Possession < 1, CounterAttack > 1.
+        _ => KICK_SPEED_PASS * pass_length_factor,
     };
 
     // Ticket 21: Passing narrows the pass error spread. An inaccurate

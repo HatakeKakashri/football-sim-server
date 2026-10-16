@@ -160,6 +160,17 @@ pub enum Commands {
         /// Cache lifetime for finished/failed results, seconds.
         #[arg(long, default_value_t = crate::api::DEFAULT_RESULT_TTL_SECS)]
         result_ttl_secs: u64,
+
+        /// Bearer token required for `POST /match/{id}`. Unset
+        /// disables auth for local-only deployments (PRD §4).
+        #[arg(long)]
+        api_token: Option<String>,
+
+        /// Comma-separated allowed CORS origins for
+        /// `GET /match/{id}/stream`. Empty disables CORS
+        /// (local-only deployment) (PRD §4).
+        #[arg(long, default_value = "")]
+        cors_origins: String,
     },
 }
 
@@ -268,9 +279,11 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             bind,
             max_concurrent_sims,
             result_ttl_secs,
+            api_token,
+            cors_origins,
         } => {
             let _fixtures = fixtures::load_default()?;
-            serve(bind, max_concurrent_sims, result_ttl_secs)?;
+            serve(bind, max_concurrent_sims, result_ttl_secs, api_token, cors_origins)?;
         }
     }
     Ok(())
@@ -282,22 +295,31 @@ fn serve(
     bind: String,
     max_concurrent_sims: Option<usize>,
     result_ttl_secs: u64,
+    api_token: Option<String>,
+    cors_origins: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::Arc;
 
     use crate::api::{MatchRegistry, MatchStore, ServerConfig, default_concurrency_cap};
 
+    let cors_origins: Vec<String> = cors_origins
+        .split(',')
+        .map(|origin| origin.trim().to_string())
+        .filter(|origin| !origin.is_empty())
+        .collect();
     let config = ServerConfig {
         bind: bind.clone(),
         max_concurrent_sims: max_concurrent_sims.unwrap_or_else(default_concurrency_cap),
         result_ttl_secs,
         tick_cap: sim_core::TICK_CAP,
+        api_token: api_token.clone(),
+        cors_origins: cors_origins.clone(),
     };
     let store = Arc::new(MatchStore::new(config, MatchRegistry::default_fixture()));
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(crate::http::serve(store, &bind))?;
+        .block_on(crate::http::serve(store, &bind, api_token, cors_origins))?;
     Ok(())
 }
 

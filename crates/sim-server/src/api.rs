@@ -56,6 +56,13 @@ pub struct ServerConfig {
     pub result_ttl_secs: u64,
     /// Hard stop per match; exceeding it fails the match (PRD §12).
     pub tick_cap: u64,
+    /// Bearer token required for `POST /match/{id}` when set (`Some`).
+    /// Unset (`None`) disables auth for local-only deployments (PRD §4
+    /// Security). `GET` is never authenticated.
+    pub api_token: Option<String>,
+    /// Allowed browser origins for CORS on `GET /match/{id}/stream`.
+    /// Empty disables CORS for local-only deployments (PRD §4).
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -65,6 +72,8 @@ impl Default for ServerConfig {
             max_concurrent_sims: default_concurrency_cap(),
             result_ttl_secs: DEFAULT_RESULT_TTL_SECS,
             tick_cap: TICK_CAP,
+            api_token: None,
+            cors_origins: Vec::new(),
         }
     }
 }

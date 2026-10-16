@@ -1,22 +1,30 @@
 //! Axum HTTP front end for the one-fixture match stream (PRD §10.1).
 //!
 //! Routes:
-//! - `POST /match/{match_id}` → 202 started, 200 already
-//!   known, 404 unknown id, 503 over the concurrency cap.
+//! - `POST /match/{match_id}` → 202 started, 200 already known,
+//!   401 missing/invalid bearer token (when `api_token` is set),
+//!   404 unknown id, 503 over the concurrency cap.
 //! - `GET /match/{match_id}/stream` (`text/event-stream`) → 200
 //!   stream (resumable via `Last-Event-ID`), 204 when the resume
 //!   index is at or beyond the final message, 404 unknown id, 409
 //!   never `POST`ed, 410 result expired.
 //!
-//! Auth, CORS, and the concurrency-cap config surface stay deferred
-//! to the Phase 6 hardening ticket; the status codes above prove the
-//! contract end to end on a real stream.
+//! Security (PRD §4):
+//! - `POST` requires `Authorization: Bearer <token>` when
+//!   [`ServerConfig::api_token`] is set; missing/invalid tokens get
+//!   401. `GET` is never authenticated (browser `EventSource` cannot
+//!   set headers).
+//! - `GET` responses carry `Access-Control-Allow-Origin` only for
+//!   origins in [`ServerConfig::cors_origins`]; an empty list
+//!   disables CORS (local-only deployment). `OPTIONS` preflight is
+//!   answered with the matching CORS headers.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::extract::{Path, Request, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing};
 
@@ -27,22 +35,107 @@ use crate::api::{MatchStore, StreamResponse};
 /// ready).
 const KEEP_ALIVE_SECS: u64 = 15;
 
-/// Shared handler state: the match store.
+/// Shared handler state: the match store plus the security config.
 #[derive(Debug, Clone)]
 pub struct AppState {
     /// Match store behind the routes.
     pub store: Arc<MatchStore>,
+    /// Bearer token required for `POST`; `None` disables auth.
+    pub api_token: Option<String>,
+    /// Allowed CORS origins for `GET`; empty disables CORS.
+    pub cors_origins: Vec<String>,
+}
+
+/// `Access-Control-Allow-Origin` for `origin` when it is in the
+/// allowlist; `None` when CORS is disabled or the origin is not
+/// allowed (PRD §4: empty list disables CORS).
+fn allowed_origin<'a>(origin: &'a str, cors_origins: &'a [String]) -> Option<&'a str> {
+    if cors_origins.is_empty() {
+        return None;
+    }
+    cors_origins
+        .iter()
+        .find(|o| o.as_str() == origin)
+        .map(String::as_str)
+}
+
+/// CORS middleware applied to every request (PRD §4).
+///
+/// `OPTIONS` preflight requests match no `GET`/`POST` route, so they
+/// are short-circuited here with the matching CORS headers. All other
+/// responses get `Access-Control-Allow-Origin` reflected when the
+/// request `Origin` is in the allowlist.
+async fn cors_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let origin: Option<String> = request
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+
+    let allowed = origin
+        .as_deref()
+        .and_then(|o| allowed_origin(o, &state.cors_origins));
+
+    // Preflight: answer before routing; an unlisted origin gets no
+    // `Access-Control-Allow-Origin` so the browser blocks it.
+    if request.method() == Method::OPTIONS {
+        return allowed.map_or_else(
+            || StatusCode::NO_CONTENT.into_response(),
+            |origin| {
+                (
+                    StatusCode::NO_CONTENT,
+                    [
+                        (
+                            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                            HeaderValue::from_str(origin)
+                                .expect("invariant: allowed CORS origin is a valid header value"),
+                        ),
+                        (header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, OPTIONS")),
+                        (
+                            header::ACCESS_CONTROL_ALLOW_HEADERS,
+                            HeaderValue::from_static("authorization, last-event-id, content-type"),
+                        ),
+                        (header::ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("86400")),
+                    ],
+                )
+                    .into_response()
+            },
+        );
+    }
+
+    let mut response = next.run(request).await;
+    if let Some(origin) = allowed {
+        let _ = response.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_str(origin).expect("invariant: allowed CORS origin is a valid header value"),
+        );
+    }
+    response
 }
 
 /// Build the axum router for a store.
-pub fn router(store: Arc<MatchStore>) -> Router {
+pub fn router(
+    store: Arc<MatchStore>,
+    api_token: Option<String>,
+    cors_origins: Vec<String>,
+) -> Router {
+    let state = AppState {
+        store,
+        api_token,
+        cors_origins,
+    };
     Router::new()
         .route("/match/{match_id}", routing::post(post_match_handler))
         .route(
             "/match/{match_id}/stream",
             routing::get(get_stream_handler),
         )
-        .with_state(AppState { store })
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, cors_middleware))
 }
 
 /// Serve forever on `bind` (e.g. `127.0.0.1:8080`).
@@ -50,19 +143,42 @@ pub fn router(store: Arc<MatchStore>) -> Router {
 /// # Errors
 ///
 /// Returns the bind or accept-loop I/O error.
-pub async fn serve(store: Arc<MatchStore>, bind: &str) -> std::io::Result<()> {
+pub async fn serve(
+    store: Arc<MatchStore>,
+    bind: &str,
+    api_token: Option<String>,
+    cors_origins: Vec<String>,
+) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("football-sim HTTP listening on {bind}");
-    axum::serve(listener, router(store)).await
+    axum::serve(listener, router(store, api_token, cors_origins)).await
 }
 
 /// `POST /match/{match_id}`: start the match on its own OS thread
 /// (inside [`MatchStore::post_match`]) and report 202 / 200 / 404 /
-/// 503 per PRD §10.1.
+/// 503 per PRD §10.1. Requires `Authorization: Bearer <token>` when
+/// [`AppState::api_token`] is set; missing/invalid tokens get 401.
 async fn post_match_handler(
     State(state): State<AppState>,
     Path(match_id): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
+    // Auth is checked before the registry so a missing token is 401
+    // even for an unknown id (PRD §10.1 lists 401 before 404).
+    if let Some(expected_token) = &state.api_token {
+        let provided = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok());
+        let expected = format!("Bearer {expected_token}");
+        if provided != Some(expected.as_str()) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "missing or invalid bearer token"})),
+            )
+                .into_response();
+        }
+    }
+
     let outcome = state.store.post_match(&match_id);
     let status = StatusCode::from_u16(outcome.status)
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -155,17 +271,32 @@ mod tests {
     use crate::api::{MatchRegistry, ServerConfig};
 
     fn test_state(ttl_secs: u64, tick_cap: u64) -> AppState {
+        test_state_with(ttl_secs, tick_cap, None, Vec::new())
+    }
+
+    fn test_state_with(
+        ttl_secs: u64,
+        tick_cap: u64,
+        api_token: Option<String>,
+        cors_origins: Vec<String>,
+    ) -> AppState {
         let mut registry = MatchRegistry::default();
         registry.insert("m-0000", 7);
         let store = Arc::new(MatchStore::new(
             ServerConfig {
                 result_ttl_secs: ttl_secs,
                 tick_cap,
+                api_token: api_token.clone(),
+                cors_origins: cors_origins.clone(),
                 ..ServerConfig::default()
             },
             registry,
         ));
-        AppState { store }
+        AppState {
+            store,
+            api_token,
+            cors_origins,
+        }
     }
 
     async fn response_body(response: Response) -> (StatusCode, HeaderMap, String) {
@@ -184,7 +315,8 @@ mod tests {
     #[tokio::test]
     async fn post_unknown_match_id_is_404() {
         let state = test_state(3600, 120);
-        let response = post_match_handler(State(state), Path("nope".to_string())).await;
+        let response =
+            post_match_handler(State(state), Path("nope".to_string()), HeaderMap::new()).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
@@ -220,6 +352,7 @@ mod tests {
         let response = post_match_handler(
             State(state.clone()),
             Path("m-0000".to_string()),
+            HeaderMap::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -248,6 +381,7 @@ mod tests {
         let response = post_match_handler(
             State(state.clone()),
             Path("m-0000".to_string()),
+            HeaderMap::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -271,6 +405,7 @@ mod tests {
         let response = post_match_handler(
             State(state.clone()),
             Path("m-0000".to_string()),
+            HeaderMap::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -302,6 +437,7 @@ mod tests {
         let response = post_match_handler(
             State(state.clone()),
             Path("m-0000".to_string()),
+            HeaderMap::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
@@ -337,7 +473,7 @@ mod tests {
             .local_addr()
             .expect("invariant: bound socket has an address");
         tokio::spawn(async move {
-            axum::serve(listener, router(store))
+            axum::serve(listener, router(store, None, Vec::new()))
                 .await
                 .expect("invariant: test server serves");
         });
@@ -352,6 +488,226 @@ mod tests {
             raw_get(addr, "/match/m-0000/stream", "")
                 .await
                 .starts_with("HTTP/1.1 409")
+        );
+    }
+
+    #[tokio::test]
+    async fn post_401_when_api_token_missing() {
+        let state = test_state_with(3600, 120, Some("secret".to_string()), Vec::new());
+        let response =
+            post_match_handler(State(state), Path("m-0000".to_string()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn post_401_when_api_token_invalid() {
+        let state = test_state_with(3600, 120, Some("secret".to_string()), Vec::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer wrong"));
+        let response = post_match_handler(
+            State(state),
+            Path("m-0000".to_string()),
+            headers,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn post_202_when_api_token_valid() {
+        let state = test_state_with(3600, 120, Some("secret".to_string()), Vec::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        let response = post_match_handler(
+            State(state),
+            Path("m-0000".to_string()),
+            headers,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn post_open_when_no_api_token_configured() {
+        // Auth disabled for local-only deployment: no bearer required.
+        let state = test_state(3600, 120);
+        let response =
+            post_match_handler(State(state), Path("m-0000".to_string()), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn get_status_matrix_over_real_socket() {
+        // Default TTL: the finished entry is served (200) until it
+        // expires; 404/409/204 are exercised over a real socket.
+        let mut registry = MatchRegistry::default();
+        registry.insert("m-0000", 7);
+        registry.insert("m-0001", 7);
+        let store = Arc::new(MatchStore::new(
+            ServerConfig {
+                tick_cap: 120,
+                ..ServerConfig::default()
+            },
+            registry,
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("invariant: loopback bind works in tests");
+        let addr = listener
+            .local_addr()
+            .expect("invariant: bound socket has an address");
+        let server_store = store.clone();
+        tokio::spawn(async move {
+            axum::serve(listener, router(server_store, None, Vec::new()))
+                .await
+                .expect("invariant: test server serves");
+        });
+
+        // 404: unknown id.
+        assert!(
+            raw_get(addr, "/match/nope/stream", "")
+                .await
+                .starts_with("HTTP/1.1 404")
+        );
+        // 409: known but never POSTed.
+        assert!(
+            raw_get(addr, "/match/m-0001/stream", "")
+                .await
+                .starts_with("HTTP/1.1 409")
+        );
+
+        // POST starts the fast cap-failing simulation → 202.
+        assert!(
+            raw_post(addr, "/match/m-0000").await.starts_with("HTTP/1.1 202")
+        );
+        store.wait_until_done("m-0000").await;
+
+        // 200: stream ready (the single cached error message).
+        let body = raw_get(addr, "/match/m-0000/stream", "").await;
+        assert!(body.starts_with("HTTP/1.1 200"), "body was: {body}");
+        assert!(body.contains("event: error"), "body was: {body}");
+
+        // 204: Last-Event-ID at or beyond the final message (id 0).
+        assert!(
+            raw_get(addr, "/match/m-0000/stream", "last-event-id: 0\r\n")
+                .await
+                .starts_with("HTTP/1.1 204")
+        );
+    }
+
+    #[tokio::test]
+    async fn get_expired_is_410_over_real_socket() {
+        // TTL 0: the entry expires as soon as the thread finishes.
+        let mut registry = MatchRegistry::default();
+        registry.insert("m-0000", 7);
+        let store = Arc::new(MatchStore::new(
+            ServerConfig {
+                result_ttl_secs: 0,
+                tick_cap: 120,
+                ..ServerConfig::default()
+            },
+            registry,
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("invariant: loopback bind works in tests");
+        let addr = listener
+            .local_addr()
+            .expect("invariant: bound socket has an address");
+        let server_store = store.clone();
+        tokio::spawn(async move {
+            axum::serve(listener, router(server_store, None, Vec::new()))
+                .await
+                .expect("invariant: test server serves");
+        });
+
+        assert!(
+            raw_post(addr, "/match/m-0000").await.starts_with("HTTP/1.1 202")
+        );
+        store.wait_until_done("m-0000").await;
+        assert!(
+            raw_get(addr, "/match/m-0000/stream", "")
+                .await
+                .starts_with("HTTP/1.1 410")
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_over_real_socket() {
+        let mut registry = MatchRegistry::default();
+        registry.insert("m-0000", 7);
+        let store = Arc::new(MatchStore::new(
+            ServerConfig {
+                tick_cap: 120,
+                cors_origins: vec!["http://example.com".to_string()],
+                ..ServerConfig::default()
+            },
+            registry,
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("invariant: loopback bind works in tests");
+        let addr = listener
+            .local_addr()
+            .expect("invariant: bound socket has an address");
+        let server_store = store.clone();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router(server_store, None, vec!["http://example.com".to_string()]),
+            )
+            .await
+            .expect("invariant: test server serves");
+        });
+
+        assert!(
+            raw_post(addr, "/match/m-0000").await.starts_with("HTTP/1.1 202")
+        );
+        store.wait_until_done("m-0000").await;
+
+        // Allowed origin → reflected on the GET response.
+        let allowed = raw_get(
+            addr,
+            "/match/m-0000/stream",
+            "origin: http://example.com\r\n",
+        )
+        .await;
+        assert!(allowed.starts_with("HTTP/1.1 200"), "body was: {allowed}");
+        assert!(
+            allowed.to_ascii_lowercase().contains("access-control-allow-origin: http://example.com"),
+            "body was: {allowed}"
+        );
+
+        // Disallowed origin → no Access-Control-Allow-Origin header.
+        let disallowed = raw_get(
+            addr,
+            "/match/m-0000/stream",
+            "origin: http://evil.com\r\n",
+        )
+        .await;
+        assert!(disallowed.starts_with("HTTP/1.1 200"), "body was: {disallowed}");
+        assert!(
+            !disallowed
+                .to_ascii_lowercase()
+                .contains("access-control-allow-origin"),
+            "body was: {disallowed}"
+        );
+
+        // OPTIONS preflight for an allowed origin → 204 + CORS headers.
+        let preflight = raw_options(
+            addr,
+            "/match/m-0000/stream",
+            "origin: http://example.com\r\n",
+        )
+        .await;
+        assert!(preflight.starts_with("HTTP/1.1 204"), "body was: {preflight}");
+        assert!(
+            preflight.to_ascii_lowercase().contains("access-control-allow-origin: http://example.com"),
+            "body was: {preflight}"
+        );
+        assert!(
+            preflight.to_ascii_lowercase().contains("access-control-allow-methods"),
+            "body was: {preflight}"
         );
     }
 
@@ -399,6 +755,29 @@ mod tests {
         String::from_utf8(raw).expect("invariant: test response is UTF-8")
     }
 
+    /// One raw HTTP/1.1 OPTIONS preflight over a fresh connection;
+    /// returns the raw response (status line + headers).
+    async fn raw_options(addr: std::net::SocketAddr, path: &str, extra: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("invariant: test server accepts");
+        let request = format!(
+            "OPTIONS {path} HTTP/1.1\r\nhost: {addr}\r\nconnection: close\r\n{extra}\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("invariant: test request writes");
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("invariant: test response reads");
+        String::from_utf8(raw).expect("invariant: test response is UTF-8")
+    }
+
     /// End-to-end concurrency cap over a real socket: one simulation
     /// slot, a second `POST` while a full match runs gets `503` with
     /// `Retry-After: 5`, and the slot releases when the match finishes.
@@ -425,7 +804,7 @@ mod tests {
             .expect("invariant: bound socket has an address");
         let server_store = store.clone();
         tokio::spawn(async move {
-            axum::serve(listener, router(server_store))
+            axum::serve(listener, router(server_store, None, Vec::new()))
                 .await
                 .expect("invariant: test server serves");
         });

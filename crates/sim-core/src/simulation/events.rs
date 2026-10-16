@@ -69,6 +69,13 @@ pub enum EventType {
     /// A tackle attempt (PRD §9.2, ticket 21): `tackler`, `carrier`,
     /// `success`. Emitted at every tackle attempt.
     Tackle,
+    /// An airborne cross (PRD §9.2, ticket 23): `player`, `target`,
+    /// `outcome`. Emitted when a cross resolves at its target point.
+    Cross,
+    /// An aerial header (PRD §9.2, ticket 23): `player`, `kind`,
+    /// `outcome`. Emitted when a player contests the airborne ball at
+    /// the cross target point.
+    Header,
 }
 
 impl EventType {
@@ -87,6 +94,8 @@ impl EventType {
             Self::HalfTime => "half_time",
             Self::FullTime => "full_time",
             Self::Tackle => "tackle",
+            Self::Cross => "cross",
+            Self::Header => "header",
         }
     }
 }
@@ -223,6 +232,117 @@ pub struct TackleEventPayload {
     pub carrier: PlayerId,
     /// `true` when the tackle won the ball.
     pub success: bool,
+}
+
+/// How a cross resolved (PRD §9.2 `cross.outcome`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossOutcome {
+    /// The cross reached its target point and the attacker won the
+    /// aerial duel.
+    Completed,
+    /// The cross missed its target point (accuracy failure).
+    Missed,
+    /// A defender intercepted the cross before it reached the target.
+    Intercepted,
+    /// The goalkeeper punched the cross away.
+    Punched,
+}
+
+impl CrossOutcome {
+    /// Stable string form for the wire shape (`outcome` field).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Missed => "missed",
+            Self::Intercepted => "intercepted",
+            Self::Punched => "punched",
+        }
+    }
+}
+
+/// Kind of header (PRD §9.2 `header.kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeaderKind {
+    Pass,
+    Shot,
+    Clearance,
+}
+
+impl HeaderKind {
+    /// Stable string form for the wire shape (`kind` field).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Shot => "shot",
+            Self::Clearance => "clearance",
+        }
+    }
+}
+
+/// How a header resolved (PRD §9.2 `header.outcome`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeaderOutcome {
+    /// The header reached its intended target (a completed pass / shot
+    /// on target / effective clearance).
+    Completed,
+    /// The header missed its target.
+    Missed,
+    /// The goalkeeper saved the header (a header shot).
+    Saved,
+    /// A defender blocked or intercepted the header.
+    Blocked,
+}
+
+impl HeaderOutcome {
+    /// Stable string form for the wire shape (`outcome` field).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Missed => "missed",
+            Self::Saved => "saved",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+/// `cross` event payload (PRD §9.2, ticket 23).
+///
+/// Emitted when a cross resolves at its target point. `player` is the
+/// crosser, `target` is the aimed target point, and `outcome` records
+/// how the cross resolved.
+///
+/// Note: derives `PartialEq` but not `Eq` because `target` is an
+/// `[f32; 2]` and `f32` is not `Eq` (same precedent as `PassEvent` and
+/// `OutOfBoundsEventPayload`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrossEventPayload {
+    /// Player who took the cross.
+    pub player: PlayerId,
+    /// Target point the cross was aimed at, in signed decimetres.
+    pub target: [f32; 2],
+    /// How the cross resolved.
+    pub outcome: CrossOutcome,
+}
+
+/// `header` event payload (PRD §9.2, ticket 23).
+///
+/// Emitted when a player contests the airborne ball at the cross target
+/// point. `player` is the headerer, `kind` is the intent (pass / shot /
+/// clearance), and `outcome` records how the header resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeaderEventPayload {
+    /// Player who headed the ball.
+    pub player: PlayerId,
+    /// Intent of the header.
+    pub kind: HeaderKind,
+    /// How the header resolved.
+    pub outcome: HeaderOutcome,
 }
 
 /// `possession_change` event payload (PRD §9.2).
@@ -480,6 +600,14 @@ pub enum MatchEvent {
         envelope: EventEnvelope,
         payload: SaveEventPayload,
     },
+    Cross {
+        envelope: EventEnvelope,
+        payload: CrossEventPayload,
+    },
+    Header {
+        envelope: EventEnvelope,
+        payload: HeaderEventPayload,
+    },
     Kickoff {
         envelope: EventEnvelope,
         payload: KickoffEventPayload,
@@ -506,6 +634,8 @@ impl MatchEvent {
             | Self::Goal { envelope, .. }
             | Self::Shot { envelope, .. }
             | Self::Save { envelope, .. }
+            | Self::Cross { envelope, .. }
+            | Self::Header { envelope, .. }
             | Self::Kickoff { envelope, .. }
             | Self::HalfTime { envelope, .. }
             | Self::FullTime { envelope, .. }
@@ -524,6 +654,8 @@ impl MatchEvent {
             Self::Goal { .. } => EventType::Goal,
             Self::Shot { .. } => EventType::Shot,
             Self::Save { .. } => EventType::Save,
+            Self::Cross { .. } => EventType::Cross,
+            Self::Header { .. } => EventType::Header,
             Self::Kickoff { .. } => EventType::Kickoff,
             Self::HalfTime { .. } => EventType::HalfTime,
             Self::FullTime { .. } => EventType::FullTime,
@@ -679,6 +811,38 @@ impl Serialize for MatchEvent {
                 map.serialize_entry("kind", &payload.kind)?;
                 map.end()
             }
+            Self::Cross { envelope, payload } => {
+                // 7 envelope + 3 cross payload fields = 10. The
+                // envelope's `team` is the crosser's team.
+                let mut map = ser.serialize_map(Some(10))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "cross")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("player", &payload.player)?;
+                map.serialize_entry("target", &payload.target)?;
+                map.serialize_entry("outcome", &payload.outcome)?;
+                map.end()
+            }
+            Self::Header { envelope, payload } => {
+                // 7 envelope + 3 header payload fields = 10. The
+                // envelope's `team` is the headerer's team.
+                let mut map = ser.serialize_map(Some(10))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "header")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("player", &payload.player)?;
+                map.serialize_entry("kind", &payload.kind)?;
+                map.serialize_entry("outcome", &payload.outcome)?;
+                map.end()
+            }
             Self::Kickoff { envelope, payload } => {
                 // 7 envelope + 4 kickoff payload fields = 11. The
                 // envelope's `team` is the taker team (Law 8).
@@ -794,10 +958,16 @@ impl<'de> Deserialize<'de> for MatchEvent {
             assister: Option<Option<PlayerId>>,
             own_goal: Option<bool>,
             score: Option<(u8, u8)>,
-            // shot payload
+            // shot / cross / header payloads
             shooter: Option<PlayerId>,
             on_target: Option<bool>,
-            outcome: Option<ShotOutcome>,
+            player: Option<PlayerId>,
+            target: Option<[f32; 2]>,
+            // `outcome` is shared by `shot` (ShotOutcome), `cross`
+            // (CrossOutcome) and `header` (HeaderOutcome). The string
+            // domains overlap ("saved", "blocked", ...), so capture it
+            // raw and interpret per event type, mirroring `kind_raw`.
+            outcome_raw: Option<String>,
             // save payload
             keeper: Option<PlayerId>,
             // kickoff payload
@@ -854,7 +1024,9 @@ impl<'de> Deserialize<'de> for MatchEvent {
                         "score" => sink.score = Some(map.next_value()?),
                         "shooter" => sink.shooter = Some(map.next_value()?),
                         "on_target" => sink.on_target = Some(map.next_value()?),
-                        "outcome" => sink.outcome = Some(map.next_value()?),
+                        "player" => sink.player = Some(map.next_value()?),
+                        "target" => sink.target = Some(map.next_value()?),
+                        "outcome" => sink.outcome_raw = Some(map.next_value()?),
                         "keeper" => sink.keeper = Some(map.next_value()?),
                         "reason" => sink.reason = Some(map.next_value()?),
                         "attack_home" => sink.attack_home = Some(map.next_value()?),
@@ -987,9 +1159,53 @@ impl<'de> Deserialize<'de> for MatchEvent {
                             on_target: sink
                                 .on_target
                                 .ok_or_else(|| Error::missing_field("on_target"))?,
-                            outcome: sink
-                                .outcome
-                                .ok_or_else(|| Error::missing_field("outcome"))?,
+                            outcome: parse_shot_outcome(
+                                sink
+                                    .outcome_raw
+                                    .as_deref()
+                                    .ok_or_else(|| Error::missing_field("outcome"))?,
+                            )
+                            .map_err(Error::custom)?,
+                        },
+                    }),
+                    EventType::Cross => Ok(MatchEvent::Cross {
+                        envelope,
+                        payload: CrossEventPayload {
+                            player: sink
+                                .player
+                                .ok_or_else(|| Error::missing_field("player"))?,
+                            target: sink
+                                .target
+                                .ok_or_else(|| Error::missing_field("target"))?,
+                            outcome: parse_cross_outcome(
+                                sink
+                                    .outcome_raw
+                                    .as_deref()
+                                    .ok_or_else(|| Error::missing_field("outcome"))?,
+                            )
+                            .map_err(Error::custom)?,
+                        },
+                    }),
+                    EventType::Header => Ok(MatchEvent::Header {
+                        envelope,
+                        payload: HeaderEventPayload {
+                            player: sink
+                                .player
+                                .ok_or_else(|| Error::missing_field("player"))?,
+                            kind: parse_header_kind(
+                                sink
+                                    .kind_raw
+                                    .as_deref()
+                                    .ok_or_else(|| Error::missing_field("kind"))?,
+                            )
+                            .map_err(Error::custom)?,
+                            outcome: parse_header_outcome(
+                                sink
+                                    .outcome_raw
+                                    .as_deref()
+                                    .ok_or_else(|| Error::missing_field("outcome"))?,
+                            )
+                            .map_err(Error::custom)?,
                         },
                     }),
                     EventType::Save => Ok(MatchEvent::Save {
@@ -1112,6 +1328,8 @@ impl EventLog {
             | MatchEvent::Goal { envelope, .. }
             | MatchEvent::Shot { envelope, .. }
             | MatchEvent::Save { envelope, .. }
+            | MatchEvent::Cross { envelope, .. }
+            | MatchEvent::Header { envelope, .. }
             | MatchEvent::Kickoff { envelope, .. }
             | MatchEvent::HalfTime { envelope, .. }
             | MatchEvent::FullTime { envelope, .. }
@@ -1388,6 +1606,50 @@ pub const fn opponent_of(team: TeamId) -> TeamId {
     if team.0 == 0 { TeamId(1) } else { TeamId(0) }
 }
 
+/// Parse a `shot` outcome from its wire string.
+fn parse_shot_outcome(s: &str) -> Result<ShotOutcome, String> {
+    match s {
+        "goal" => Ok(ShotOutcome::Goal),
+        "saved" => Ok(ShotOutcome::Saved),
+        "blocked" => Ok(ShotOutcome::Blocked),
+        "off_target" => Ok(ShotOutcome::OffTarget),
+        "post" => Ok(ShotOutcome::Post),
+        other => Err(format!("unknown shot outcome {other:?}")),
+    }
+}
+
+/// Parse a `cross` outcome from its wire string.
+fn parse_cross_outcome(s: &str) -> Result<CrossOutcome, String> {
+    match s {
+        "completed" => Ok(CrossOutcome::Completed),
+        "missed" => Ok(CrossOutcome::Missed),
+        "intercepted" => Ok(CrossOutcome::Intercepted),
+        "punched" => Ok(CrossOutcome::Punched),
+        other => Err(format!("unknown cross outcome {other:?}")),
+    }
+}
+
+/// Parse a `header` kind from its wire string.
+fn parse_header_kind(s: &str) -> Result<HeaderKind, String> {
+    match s {
+        "pass" => Ok(HeaderKind::Pass),
+        "shot" => Ok(HeaderKind::Shot),
+        "clearance" => Ok(HeaderKind::Clearance),
+        other => Err(format!("unknown header kind {other:?}")),
+    }
+}
+
+/// Parse a `header` outcome from its wire string.
+fn parse_header_outcome(s: &str) -> Result<HeaderOutcome, String> {
+    match s {
+        "completed" => Ok(HeaderOutcome::Completed),
+        "missed" => Ok(HeaderOutcome::Missed),
+        "saved" => Ok(HeaderOutcome::Saved),
+        "blocked" => Ok(HeaderOutcome::Blocked),
+        other => Err(format!("unknown header outcome {other:?}")),
+    }
+}
+
 /// Convenience constructor for a `goal` event (ticket 10).
 ///
 /// `scoring_team` is credited on the envelope (`team`); `attribution`
@@ -1483,6 +1745,77 @@ pub fn build_save_event(
         kind,
     };
     MatchEvent::Save { envelope, payload }
+}
+
+/// Convenience constructor for a `cross` event (PRD §9.2, ticket 23).
+///
+/// `crosser_team` is credited on the envelope (`team`). `target` is the
+/// aimed target point.
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "cross-event constructor mirrors PRD §9.2 payload fields; a builder would scatter the field set"
+)]
+pub fn build_cross_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    crosser_team: TeamId,
+    player: PlayerId,
+    target: Vec2,
+    outcome: CrossOutcome,
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::Cross,
+        team: Some(crosser_team),
+    };
+    let payload = CrossEventPayload {
+        player,
+        target: [target.x, target.y],
+        outcome,
+    };
+    MatchEvent::Cross { envelope, payload }
+}
+
+/// Convenience constructor for a `header` event (PRD §9.2, ticket 23).
+///
+/// `headerer_team` is credited on the envelope (`team`).
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "header-event constructor mirrors PRD §9.2 payload fields; a builder would scatter the field set"
+)]
+pub fn build_header_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    headerer_team: TeamId,
+    player: PlayerId,
+    kind: HeaderKind,
+    outcome: HeaderOutcome,
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::Header,
+        team: Some(headerer_team),
+    };
+    let payload = HeaderEventPayload {
+        player,
+        kind,
+        outcome,
+    };
+    MatchEvent::Header { envelope, payload }
 }
 
 /// Convenience constructor for a `kickoff` event (ticket 10).
@@ -2138,6 +2471,78 @@ mod tests {
         let json = serde_json::to_string(&log.events[0]).expect("serialise");
         assert!(json.contains("\"type\":\"kickoff\""));
         assert!(json.contains("\"reason\":\"match_start\""));
+        let back: MatchEvent = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, log.events[0]);
+    }
+
+    /// `cross` events carry player / target / outcome on the wire
+    /// (PRD §9.2, ticket 23).
+    #[test]
+    fn cross_event_payload_round_trip() {
+        use sim_components::TouchKind;
+        let mut log = EventLog::new();
+        let clock = sample_clock(1, 7_000, 0);
+        let scorer = touch_on(TeamId(0), 11, TouchKind::Play, 7_000);
+        log.append(build_cross_event(
+            log.next_seq,
+            7_000,
+            &clock,
+            TeamId(0),
+            scorer.player_id.expect("invariant: test touch has a player id"),
+            Vec2::new(94.0, 34.0),
+            CrossOutcome::Completed,
+        ));
+        let MatchEvent::Cross { envelope, payload } = &log.events[0] else {
+            panic!("expected cross event");
+        };
+        assert_eq!(envelope.team, Some(TeamId(0)));
+        assert_eq!(
+            payload.player,
+            scorer.player_id.expect("invariant: test touch has a player id")
+        );
+        assert_eq!(payload.target, [94.0, 34.0]);
+        assert_eq!(payload.outcome, CrossOutcome::Completed);
+
+        let json = serde_json::to_string(&log.events[0]).expect("serialise");
+        assert!(json.contains("\"type\":\"cross\""));
+        assert!(json.contains("\"target\":[94.0,34.0]"));
+        assert!(json.contains("\"outcome\":\"completed\""));
+        let back: MatchEvent = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, log.events[0]);
+    }
+
+    /// `header` events carry player / kind / outcome on the wire
+    /// (PRD §9.2, ticket 23).
+    #[test]
+    fn header_event_payload_round_trip() {
+        use sim_components::TouchKind;
+        let mut log = EventLog::new();
+        let clock = sample_clock(1, 7_000, 0);
+        let scorer = touch_on(TeamId(0), 22, TouchKind::Play, 7_000);
+        log.append(build_header_event(
+            log.next_seq,
+            7_000,
+            &clock,
+            TeamId(0),
+            scorer.player_id.expect("invariant: test touch has a player id"),
+            HeaderKind::Shot,
+            HeaderOutcome::Saved,
+        ));
+        let MatchEvent::Header { envelope, payload } = &log.events[0] else {
+            panic!("expected header event");
+        };
+        assert_eq!(envelope.team, Some(TeamId(0)));
+        assert_eq!(
+            payload.player,
+            scorer.player_id.expect("invariant: test touch has a player id")
+        );
+        assert_eq!(payload.kind, HeaderKind::Shot);
+        assert_eq!(payload.outcome, HeaderOutcome::Saved);
+
+        let json = serde_json::to_string(&log.events[0]).expect("serialise");
+        assert!(json.contains("\"type\":\"header\""));
+        assert!(json.contains("\"kind\":\"shot\""));
+        assert!(json.contains("\"outcome\":\"saved\""));
         let back: MatchEvent = serde_json::from_str(&json).expect("deserialise");
         assert_eq!(back, log.events[0]);
     }

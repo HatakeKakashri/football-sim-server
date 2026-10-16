@@ -22,6 +22,7 @@
     reason = "effective attributes are bounded to [0, 200] before the cast, so f32 -> i32 is lossless"
 )]
 
+use crate::physical_mechanics::held_ball_retention_probability;
 use crate::Attribute;
 use sim_math::{curve, effective_attribute, Tuning};
 
@@ -36,6 +37,17 @@ const TACKLING_IDX: usize = Attribute::Tackling as usize;
 const MARKING_IDX: usize = Attribute::Marking as usize;
 /// Index of `Attribute::Positioning`.
 const POSITIONING_IDX: usize = Attribute::Positioning as usize;
+/// Index of `Attribute::Dribbling` in `Attribute::ALL` /
+/// `Tuning::curve_params`. Mirrors the attribute declaration order; the
+/// cross-crate consistency is asserted by
+/// `sim_components::attribute_tests::a10_curve_monotonicity_all_attributes`.
+const DRIBBLING_IDX: usize = Attribute::Dribbling as usize;
+/// Index of `Attribute::Crossing`.
+const CROSSING_IDX: usize = Attribute::Crossing as usize;
+/// Index of `Attribute::Heading`.
+const HEADING_IDX: usize = Attribute::Heading as usize;
+/// Index of `Attribute::Bravery`.
+const BRAVERY_IDX: usize = Attribute::Bravery as usize;
 
 /// Pass error spread in `[0, 1]`: the probability a pass deviates from
 /// its intended target.
@@ -94,6 +106,117 @@ pub fn mark_distance_error(marking: u8, fit_multiplier: f32, tuning: &Tuning) ->
 pub fn target_position_error(positioning: u8, fit_multiplier: f32, tuning: &Tuning) -> f32 {
     let effective = effective_attribute(positioning, fit_multiplier);
     curve(effective as i32, &tuning.curve_params[POSITIONING_IDX])
+}
+
+/// Ball-control retention probability in `[0, 1]`: the carrier's chance
+/// to keep the ball against an incoming challenge while dribbling.
+///
+/// Rises monotonically with `Dribbling` — a better dribbler retains
+/// possession more often under pressure.
+///
+/// The `Dribbling` curve-table entry is rising (`min: 0.05`, `max:
+/// 0.95` at the default tuning), so the raw curve output *is* the
+/// retention probability.
+#[must_use]
+pub fn dribble_retention_probability(
+    dribbling: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let effective = effective_attribute(dribbling, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[DRIBBLING_IDX])
+}
+
+/// Cross accuracy in `[0, 1]`: the likelihood a cross reaches its
+/// intended target point.
+///
+/// Rises monotonically with `Crossing` — a better crosser hits the
+/// target point more often, which feeds the airborne duel at that point
+/// (PRD §7.4).
+///
+/// The `Crossing` curve-table entry is rising (`min: 0.05`, `max:
+/// 0.95` at the default tuning), so the raw curve output *is* the
+/// accuracy.
+#[must_use]
+pub fn cross_accuracy(crossing: u8, fit_multiplier: f32, tuning: &Tuning) -> f32 {
+    let effective = effective_attribute(crossing, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[CROSSING_IDX])
+}
+
+/// Header accuracy in `[0, 1]`: the likelihood a header hits its
+/// intended target.
+///
+/// Rises monotonically with `Heading` — a better headerer directs the
+/// ball more accurately at the aerial target point.
+///
+/// The `Heading` curve-table entry is rising (`min: 0.05`, `max: 0.95`
+/// at the default tuning), so the raw curve output *is* the accuracy.
+#[must_use]
+pub fn header_accuracy(heading: u8, fit_multiplier: f32, tuning: &Tuning) -> f32 {
+    let effective = effective_attribute(heading, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[HEADING_IDX])
+}
+
+/// Header power in `[0, 1]`: the pace and placement of the header.
+///
+/// Rises monotonically with `Heading` — a more powerful header is
+/// harder for the defender or goalkeeper to deal with.
+///
+/// The `Heading` curve-table entry is rising, so the raw curve output
+/// *is* the power.
+#[must_use]
+pub fn header_power(heading: u8, fit_multiplier: f32, tuning: &Tuning) -> f32 {
+    let effective = effective_attribute(heading, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[HEADING_IDX])
+}
+
+/// Probability the attacker wins an aerial duel at the target point
+/// (PRD §7.4).
+///
+/// The attacker's `Heading` (power) and `Strength` contend with the
+/// defender's `Heading` (accuracy) and `Strength`. The attacker's win
+/// probability rises monotonically with the attacker's attributes and
+/// falls monotonically with the defender's, so it is a genuine
+/// probabilistic duel rather than a deterministic comparison.
+#[must_use]
+pub fn aerial_duel_attacker_win_probability(
+    attacker_heading: u8,
+    attacker_strength: u8,
+    defender_heading: u8,
+    defender_strength: u8,
+    fit_multiplier: f32,
+    tuning: &Tuning,
+) -> f32 {
+    let attacker = header_power(attacker_heading, fit_multiplier, tuning)
+        .mul_add(
+            held_ball_retention_probability(attacker_strength, fit_multiplier, tuning),
+            0.0,
+        );
+    let defender = header_accuracy(defender_heading, fit_multiplier, tuning).mul_add(
+        held_ball_retention_probability(defender_strength, fit_multiplier, tuning),
+        0.0,
+    );
+    let total = attacker + defender;
+    if total <= 0.0 {
+        return 0.5;
+    }
+    attacker / total
+}
+
+/// Bravery decision weight in `[0, 1]`: a player's willingness to
+/// contest duels, block shots, and attempt challenges.
+///
+/// Rises monotonically with `Bravery` — a braver player is more likely
+/// to commit to a contest, which weights the tackle / press / challenge
+/// decision (PRD §6.2).
+///
+/// The `Bravery` curve-table entry is rising (`min: 0.05`, `max: 0.95`
+/// at the default tuning), so the raw curve output *is* the decision
+/// weight.
+#[must_use]
+pub fn bravery_contest_weight(bravery: u8, fit_multiplier: f32, tuning: &Tuning) -> f32 {
+    let effective = effective_attribute(bravery, fit_multiplier);
+    curve(effective as i32, &tuning.curve_params[BRAVERY_IDX])
 }
 
 #[cfg(test)]
@@ -249,5 +372,260 @@ mod tests {
                 "target_position_error {positioning} = {value} outside [0.02, 0.70]"
             );
         }
+    }
+
+    // === Dribbling ===
+
+    #[test]
+    fn dribble_retention_probability_is_strictly_rising_in_dribbling() {
+        let tuning = tuning();
+        let mut prev = dribble_retention_probability(1, fit(), &tuning);
+        for dribbling in 2..=200u8 {
+            let value = dribble_retention_probability(dribbling, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "dribble_retention_probability not strictly rising at Dribbling {dribbling}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+        assert!(
+            prev < 1.0 - TOL,
+            "dribble_retention_probability must stay below one at Dribbling 200 ({prev})"
+        );
+    }
+
+    #[test]
+    fn dribble_retention_probability_stays_within_curve_bounds() {
+        let tuning = tuning();
+        for dribbling in 1..=200u8 {
+            let value = dribble_retention_probability(dribbling, fit(), &tuning);
+            assert!(
+                (0.05..=0.95).contains(&value),
+                "dribble_retention_probability {dribbling} = {value} outside [0.05, 0.95]"
+            );
+        }
+    }
+
+    #[test]
+    fn dribble_retention_probability_honors_fit_multiplier() {
+        let tuning = tuning();
+        let full = dribble_retention_probability(100, 1.00, &tuning);
+        let partial = dribble_retention_probability(100, 0.75, &tuning);
+        assert!(
+            full > partial + TOL,
+            "retention at full fit ({full}) must exceed partial fit ({partial})"
+        );
+    }
+
+    // === Crossing ===
+
+    #[test]
+    fn cross_accuracy_is_strictly_rising_in_crossing() {
+        let tuning = tuning();
+        let mut prev = cross_accuracy(1, fit(), &tuning);
+        for crossing in 2..=200u8 {
+            let value = cross_accuracy(crossing, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "cross_accuracy not strictly rising at Crossing {crossing}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+        assert!(
+            prev < 1.0 - TOL,
+            "cross_accuracy must stay below one at Crossing 200 ({prev})"
+        );
+    }
+
+    #[test]
+    fn cross_accuracy_stays_within_curve_bounds() {
+        let tuning = tuning();
+        for crossing in 1..=200u8 {
+            let value = cross_accuracy(crossing, fit(), &tuning);
+            assert!(
+                (0.05..=0.95).contains(&value),
+                "cross_accuracy {crossing} = {value} outside [0.05, 0.95]"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_accuracy_honors_fit_multiplier() {
+        let tuning = tuning();
+        let full = cross_accuracy(100, 1.00, &tuning);
+        let partial = cross_accuracy(100, 0.75, &tuning);
+        assert!(
+            full > partial + TOL,
+            "cross accuracy at full fit ({full}) must exceed partial fit ({partial})"
+        );
+    }
+
+    // === Heading ===
+
+    #[test]
+    fn header_accuracy_is_strictly_rising_in_heading() {
+        let tuning = tuning();
+        let mut prev = header_accuracy(1, fit(), &tuning);
+        for heading in 2..=200u8 {
+            let value = header_accuracy(heading, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "header_accuracy not strictly rising at Heading {heading}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn header_accuracy_stays_within_curve_bounds() {
+        let tuning = tuning();
+        for heading in 1..=200u8 {
+            let value = header_accuracy(heading, fit(), &tuning);
+            assert!(
+                (0.05..=0.95).contains(&value),
+                "header_accuracy {heading} = {value} outside [0.05, 0.95]"
+            );
+        }
+    }
+
+    #[test]
+    fn header_power_is_strictly_rising_in_heading() {
+        let tuning = tuning();
+        let mut prev = header_power(1, fit(), &tuning);
+        for heading in 2..=200u8 {
+            let value = header_power(heading, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "header_power not strictly rising at Heading {heading}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn header_power_stays_within_curve_bounds() {
+        let tuning = tuning();
+        for heading in 1..=200u8 {
+            let value = header_power(heading, fit(), &tuning);
+            assert!(
+                (0.05..=0.95).contains(&value),
+                "header_power {heading} = {value} outside [0.05, 0.95]"
+            );
+        }
+    }
+
+    // === Aerial duel ===
+
+    #[test]
+    fn aerial_duel_attacker_win_rises_with_attacker_heading() {
+        let tuning = tuning();
+        let fit = 1.0;
+        let mut prev = aerial_duel_attacker_win_probability(1, 100, 100, 100, fit, &tuning);
+        for heading in 2..=200u8 {
+            let value = aerial_duel_attacker_win_probability(heading, 100, 100, 100, fit, &tuning);
+            assert!(
+                value > prev + TOL,
+                "duel win prob not rising in attacker Heading at {heading}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn aerial_duel_attacker_win_falls_with_defender_heading() {
+        let tuning = tuning();
+        let fit = 1.0;
+        let mut prev = aerial_duel_attacker_win_probability(100, 100, 1, 100, fit, &tuning);
+        for heading in 2..=200u8 {
+            let value = aerial_duel_attacker_win_probability(100, 100, heading, 100, fit, &tuning);
+            assert!(
+                value < prev - TOL,
+                "duel win prob not falling in defender Heading at {heading}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn aerial_duel_attacker_win_rises_with_attacker_strength() {
+        let tuning = tuning();
+        let fit = 1.0;
+        let mut prev =
+            aerial_duel_attacker_win_probability(100, 1, 100, 100, fit, &tuning);
+        for strength in 2..=200u8 {
+            let value =
+                aerial_duel_attacker_win_probability(100, strength, 100, 100, fit, &tuning);
+            assert!(
+                value > prev + TOL,
+                "duel win prob not rising in attacker Strength at {strength}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+    }
+
+    #[test]
+    fn aerial_duel_attacker_win_stays_in_unit_interval() {
+        let tuning = tuning();
+        let fit = 1.0;
+        // A bounded grid over the attribute range is enough to confirm the
+        // duel probability is always a valid [0, 1] value; an exhaustive
+        // 200^4 sweep would be prohibitively slow in a unit test.
+        for ah in [1u8, 50, 100, 150, 200] {
+            for as_ in [1u8, 50, 100, 150, 200] {
+                for dh in [1u8, 50, 100, 150, 200] {
+                    for ds in [1u8, 50, 100, 150, 200] {
+                        let value =
+                            aerial_duel_attacker_win_probability(ah, as_, dh, ds, fit, &tuning);
+                        assert!(
+                            (0.0..=1.0).contains(&value),
+                            "duel win prob {value} outside [0, 1] for ({ah}, {as_}, {dh}, {ds})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // === Bravery ===
+
+    #[test]
+    fn bravery_contest_weight_is_strictly_rising_in_bravery() {
+        let tuning = tuning();
+        let mut prev = bravery_contest_weight(1, fit(), &tuning);
+        for bravery in 2..=200u8 {
+            let value = bravery_contest_weight(bravery, fit(), &tuning);
+            assert!(
+                value > prev + TOL,
+                "bravery_contest_weight not strictly rising at Bravery {bravery}: {prev} -> {value}"
+            );
+            prev = value;
+        }
+        assert!(
+            prev < 1.0 - TOL,
+            "bravery_contest_weight must stay below one at Bravery 200 ({prev})"
+        );
+    }
+
+    #[test]
+    fn bravery_contest_weight_stays_within_curve_bounds() {
+        let tuning = tuning();
+        for bravery in 1..=200u8 {
+            let value = bravery_contest_weight(bravery, fit(), &tuning);
+            assert!(
+                (0.05..=0.95).contains(&value),
+                "bravery_contest_weight {bravery} = {value} outside [0.05, 0.95]"
+            );
+        }
+    }
+
+    #[test]
+    fn bravery_contest_weight_honors_fit_multiplier() {
+        let tuning = tuning();
+        let full = bravery_contest_weight(100, 1.00, &tuning);
+        let partial = bravery_contest_weight(100, 0.75, &tuning);
+        assert!(
+            full > partial + TOL,
+            "bravery weight at full fit ({full}) must exceed partial fit ({partial})"
+        );
     }
 }

@@ -51,7 +51,8 @@ use sim_components::shot_pipeline::shot_accuracy;
 
 use super::SimulationSet;
 use super::events::{
-    EventLog, PossessionChangeCause, RestartKind, attribute_goal, build_goal_event,
+    CrossOutcome, EventLog, HeaderKind, HeaderOutcome, PossessionChangeCause, RestartKind,
+    attribute_goal, build_cross_event, build_goal_event, build_header_event,
     build_kickoff_event, build_out_of_bounds_event, build_pass_event,
     build_possession_change_event, build_restart_event, build_save_event, build_shot_event,
     build_tackle_event, opponent_of,
@@ -65,6 +66,55 @@ use super::events::{
 /// Reach / Concentration model. Faster balls are parried; punching
 /// is reserved for cross clearances (aerial play, also Phase 4).
 const SAVE_CATCH_MAX_SPEED: f32 = 0.25;
+
+/// A resolved cross awaiting event emission (PRD §9.2, ticket 23).
+///
+/// Written by the cross-resolution logic and drained by
+/// [`emit_cross_header_events`] in the same tick, so the emitter sees
+/// it without relying on a deferred-commands sync point (mirrors the
+/// `PendingOutOfBounds` contract). Inserted as an empty default by
+/// `Simulation::create_match`; no cross is emitted until a cross is
+/// resolved (the live cross kick site is the natural consumer).
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct PendingCross(pub Option<CrossResolved>);
+
+impl PendingCross {
+    /// Take the pending cross, leaving `None` for next time.
+    #[must_use]
+    pub const fn take(&mut self) -> Option<CrossResolved> {
+        self.0.take()
+    }
+}
+
+/// One resolved cross, ready to be emitted as `cross` (plus optional
+/// `header`) events.
+#[derive(Debug, Clone, Copy)]
+pub struct CrossResolved {
+    /// Stable player identity for the wire payload.
+    pub player_id: PlayerId,
+    /// The crosser's team (credited on the envelope).
+    pub team: TeamId,
+    /// Target point the cross was aimed at.
+    pub target: Vec2,
+    /// How the cross resolved (`completed` / `missed` / `intercepted`
+    /// / `punched`).
+    pub outcome: CrossOutcome,
+    /// The header that followed the cross, if the attacker won the
+    /// aerial duel at the target point. `None` when the cross was
+    /// missed, intercepted, or punched (no clean header).
+    pub header: Option<HeaderResolved>,
+}
+
+/// One resolved header awaiting emission.
+#[derive(Debug, Clone, Copy)]
+pub struct HeaderResolved {
+    /// Player who headed the ball.
+    pub player: PlayerId,
+    /// Intent of the header (pass / shot / clearance).
+    pub kind: HeaderKind,
+    /// How the header resolved.
+    pub outcome: HeaderOutcome,
+}
 
 /// Whether a shot is on target, per the Phase 4 pipeline: the shooter's
 /// `Shooting` attribute feeds [`shot_accuracy`] (response curve plus fit
@@ -653,6 +703,53 @@ pub fn emit_tackle_events(
     event_log.append(event);
 }
 
+/// `cross` (plus optional `header`) resolution (PRD §9.2, ticket 23).
+///
+/// Runs in the `Rules` set and drains `PendingCross`, emitting the
+/// `cross` event and, when the attacker won the aerial duel at the
+/// target point, the companion `header` event on the next `seq` (same
+/// tick). Clears `PendingCross` so it does not re-fire.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Bevy system param set: standard Rules-set emitters all carry similar param lists"
+)]
+pub fn emit_cross_header_events(
+    mut event_log: ResMut<EventLog>,
+    mut pending_cross: Option<ResMut<PendingCross>>,
+    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    clock: Res<MatchClock>,
+) {
+    let Some(ref mut slot) = pending_cross else {
+        return;
+    };
+    let Some(resolved) = slot.take() else {
+        return;
+    };
+    let tick = current_tick.map_or(0, |c| c.0);
+    let cross = build_cross_event(
+        event_log.next_seq,
+        tick,
+        &clock,
+        resolved.team,
+        resolved.player_id,
+        resolved.target,
+        resolved.outcome,
+    );
+    event_log.append(cross);
+    if let Some(header) = resolved.header {
+        let header_event = build_header_event(
+            event_log.next_seq,
+            tick,
+            &clock,
+            resolved.team,
+            header.player,
+            header.kind,
+            header.outcome,
+        );
+        event_log.append(header_event);
+    }
+}
+
 /// Emit the `out_of_bounds` and `restart` event pair (PRD §9.2,
 /// ticket 09).
 ///
@@ -775,6 +872,7 @@ pub fn register_event_systems(schedule: &mut Schedule) {
             emit_goal_events,
             emit_kickoff_restart_events,
             emit_tackle_events,
+            emit_cross_header_events,
             emit_oob_and_restart_events,
             emit_possession_change_on_oob,
             emit_possession_change_on_acquisition,

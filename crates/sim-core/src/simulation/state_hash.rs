@@ -175,6 +175,23 @@ pub(super) fn hash_world(world: &World, seed: u64) -> u64 {
             b.possessor
                 .map_or(u64::MAX, bevy_ecs::entity::Entity::to_bits),
         );
+        // Airborne-phase state: mixing `BallAirborne` keeps the hash
+        // stable when the cross / aerial-duel phase of the ball changes
+        // (PRD §7.4).
+        if let Some(airborne) = world.get_resource::<sim_components::BallAirborne>() {
+            if let Some(p) = airborne.landing_point {
+                mix(&mut h, u64::from(p.x.to_bits()));
+                mix(&mut h, u64::from(p.y.to_bits()));
+            } else {
+                mix(&mut h, u64::MAX);
+                mix(&mut h, u64::MAX);
+            }
+            mix(&mut h, airborne.flight_ticks_remaining);
+        } else {
+            mix(&mut h, u64::MAX);
+            mix(&mut h, u64::MAX);
+            mix(&mut h, u64::MAX);
+        }
         if let Some(touch) = b.last_touch.as_ref() {
             // Mix the toucher identity and the `TouchKind`.
             //

@@ -337,6 +337,123 @@ fn shot_resolves_to_saved_with_catch_for_slow_ball() {
     );
 }
 
+/// Ticket 23: a pending cross resolves to a `cross` event and, when the
+/// attacker wins the aerial duel at the target point, a companion
+/// `header` event on the next `seq` (same tick).
+#[test]
+fn cross_resolves_to_cross_and_header_events() {
+    use bevy_ecs::prelude::{Schedule, World};
+    use sim_components::{MatchClock, PlayerId, TeamId};
+    use sim_rules::CurrentTick;
+    use sim_math::Vec2;
+
+    use crate::simulation::event_emit::{
+        emit_cross_header_events, CrossResolved, HeaderResolved, PendingCross,
+    };
+    use crate::simulation::events::{CrossOutcome, HeaderKind, HeaderOutcome};
+
+    let mut world = World::new();
+    world.insert_resource(MatchClock {
+        elapsed_ticks: 7_000,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    });
+    world.insert_resource(EventLog::new());
+    world.insert_resource(CurrentTick(7_000));
+
+    let crosser = PlayerId::from_bits(11);
+    let headerer = PlayerId::from_bits(22);
+    world.insert_resource(PendingCross(Some(CrossResolved {
+        player_id: crosser,
+        team: TeamId(0),
+        target: Vec2::new(94.0, 34.0),
+        outcome: CrossOutcome::Completed,
+        header: Some(HeaderResolved {
+            player: headerer,
+            kind: HeaderKind::Shot,
+            outcome: HeaderOutcome::Completed,
+        }),
+    })));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(emit_cross_header_events);
+    schedule.run(&mut world);
+
+    let log = world.resource::<EventLog>();
+    assert_eq!(log.events.len(), 2, "cross then header");
+    assert_eq!(log.next_seq, 2);
+    assert!(
+        check_gapless_seq(log).is_none(),
+        "cross + header must be gapless"
+    );
+
+    let MatchEvent::Cross { envelope, payload } = &log.events[0] else {
+        panic!("expected cross event first");
+    };
+    assert_eq!(envelope.seq, 0);
+    assert_eq!(envelope.tick, 7_000);
+    assert_eq!(envelope.team, Some(TeamId(0)), "crosser team credited");
+    assert_eq!(payload.player, crosser);
+    assert_eq!(payload.target, [94.0, 34.0]);
+    assert_eq!(payload.outcome, CrossOutcome::Completed);
+
+    let MatchEvent::Header { envelope, payload } = &log.events[1] else {
+        panic!("expected header event second");
+    };
+    assert_eq!(envelope.seq, 1);
+    assert_eq!(envelope.tick, 7_000);
+    assert_eq!(envelope.team, Some(TeamId(0)), "headerer team credited");
+    assert_eq!(payload.player, headerer);
+    assert_eq!(payload.kind, HeaderKind::Shot);
+    assert_eq!(payload.outcome, HeaderOutcome::Completed);
+}
+
+/// Ticket 23: a cross that was punched / intercepted produces a `cross`
+/// event with no companion `header`.
+#[test]
+fn cross_without_header_emits_only_cross() {
+    use bevy_ecs::prelude::{Schedule, World};
+    use sim_components::{MatchClock, PlayerId, TeamId};
+    use sim_rules::CurrentTick;
+    use sim_math::Vec2;
+
+    use crate::simulation::event_emit::{
+        emit_cross_header_events, CrossResolved, PendingCross,
+    };
+    use crate::simulation::events::CrossOutcome;
+
+    let mut world = World::new();
+    world.insert_resource(MatchClock {
+        elapsed_ticks: 7_000,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    });
+    world.insert_resource(EventLog::new());
+    world.insert_resource(CurrentTick(7_000));
+
+    world.insert_resource(PendingCross(Some(CrossResolved {
+        player_id: PlayerId::from_bits(11),
+        team: TeamId(1),
+        target: Vec2::new(94.0, 34.0),
+        outcome: CrossOutcome::Punched,
+        header: None,
+    })));
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(emit_cross_header_events);
+    schedule.run(&mut world);
+
+    let log = world.resource::<EventLog>();
+    assert_eq!(log.events.len(), 1, "only the cross event");
+    assert_eq!(log.next_seq, 1);
+    let MatchEvent::Cross { payload, .. } = &log.events[0] else {
+        panic!("expected cross event");
+    };
+    assert_eq!(payload.outcome, CrossOutcome::Punched);
+}
+
 /// Ticket 10: detection and emission compose in one schedule run —
 /// `goal_detection_system` credits the score and stashes the window,
 /// then the emitters write the `goal` event (with scorer) and the

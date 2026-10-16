@@ -8,6 +8,7 @@ pub mod ball_touch;
 pub mod event_kinds;
 pub mod fixture;
 pub mod formation_slot;
+pub mod goalkeeper_mechanics;
 pub mod intent_dispatch;
 pub mod outfield_mechanics;
 pub mod physical_mechanics;
@@ -33,7 +34,14 @@ pub use shot_pipeline::{
     SAVE_CATCH_MAX_SPEED_MPS, ShotResolution,
 };
 pub use outfield_mechanics::{
-    mark_distance_error, pass_error_spread, target_position_error, tackle_success_probability,
+    aerial_duel_attacker_win_probability, bravery_contest_weight, cross_accuracy,
+    dribble_retention_probability, header_accuracy, header_power, mark_distance_error,
+    pass_error_spread, target_position_error, tackle_success_probability,
+};
+pub use goalkeeper_mechanics::{
+    agility_dive_reach, aerial_reach_radius, communication_defender_error_factor,
+    concentration_save_lapse_probability, kicking_accuracy, kicking_range,
+    punching_clearance_probability, throwing_accuracy, throwing_range,
 };
 pub use physical_mechanics::{
     aggression_stamina_factor, fitness_drain_factor, held_ball_retention_probability, sprint_speed,
@@ -41,8 +49,8 @@ pub use physical_mechanics::{
 pub use sim_math::{effective_attribute, fit_multiplier, QualityGroup, QualityWeights};
 
 pub use ball_touch::{
-    BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches, PlayerId, RuleEvent,
-    TouchKind,
+    BallAirborne, BallOutOfBoundsType, BallState, FoulType, LastTouch, PendingBallTouches,
+    PlayerId, RuleEvent, TouchKind,
 };
 pub use event_kinds::{KickoffReason, SaveKind, ShotOutcome};
 pub use formation_slot::{FormationSlot, HomeSlot};

@@ -12,6 +12,7 @@
 
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
+use sim_math::Vec2;
 
 use crate::TeamId;
 
@@ -222,6 +223,23 @@ impl LastTouch {
             Self::by_player(team, taker, kind)
         }
     }
+}
+
+/// Airborne state of the ball (PRD §7.4).
+///
+/// When the ball is in flight from a cross, `landing_point` is where it
+/// will settle and `flight_ticks_remaining` counts down each tick until
+/// it lands. `None` / `0` means the ball is not airborne (on the ground
+/// or possessed).
+///
+/// Kept as a separate resource (rather than fields on [`Ball`]) so the
+/// ball's core constructor stays stable across test fixtures.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct BallAirborne {
+    /// Where the airborne ball will settle. `None` when not airborne.
+    pub landing_point: Option<Vec2>,
+    /// Ticks remaining until the ball lands. `0` when not airborne.
+    pub flight_ticks_remaining: u64,
 }
 
 /// Pending ball touches registered this tick.

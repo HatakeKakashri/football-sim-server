@@ -205,6 +205,7 @@ impl Simulation {
             kick_velocity: None,
         });
         world.insert_resource(PendingBallTouches::default());
+        world.insert_resource(sim_components::BallAirborne::default());
         world.insert_resource(sim_rules::PendingOutOfBounds::default());
         world.insert_resource(sim_rules::OobRestartForEmit::default());
         world.insert_resource(sim_rules::PendingPass::default());
@@ -212,6 +213,7 @@ impl Simulation {
         world.insert_resource(sim_rules::KickoffForEmit::default());
         world.insert_resource(sim_rules::PendingShot::default());
         world.insert_resource(sim_rules::PendingTackle::default());
+        world.insert_resource(super::event_emit::PendingCross::default());
         world.insert_resource(super::lifecycle::HalfTimeEntryTick { tick: None });
         world.insert_resource(super::lifecycle::FirstHalfAddedTime(0));
         world.insert_resource(crate::EventLog::new());

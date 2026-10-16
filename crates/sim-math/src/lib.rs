@@ -606,9 +606,21 @@ pub struct Tuning {
     /// the tackler moves slower and cannot re-engage; the carrier skips
     /// past.
     pub tackle_recovery_ticks: u64,
-    /// Stamina (0..=1) spent by a tackler on every tackle attempt
-    /// (PRD §7.3: pressing and tackling spend stamina).
-    pub tackle_stamina_cost: f32,
+    /// Stamina (0..=1) drained per tick while the player is running or
+    /// moving (a costful action under PRD §7.3). Fitness scales the
+    /// effective drain downwards through its response curve.
+    pub stamina_drain_per_action: f32,
+    /// Stamina (0..=1) recovered per tick while idle (PRD §7.3: Fitness
+    /// governs drain and recovery).
+    pub stamina_recovery_rate: f32,
+    /// Multiplier on `stamina_drain_per_action` for a press attempt,
+    /// before the Aggression multiplier (ticket 25 wires this to
+    /// `Aggression`; placeholder 1.0 here).
+    pub press_drain_multiplier: f32,
+    /// Multiplier on `stamina_drain_per_action` for a tackle attempt,
+    /// before the Aggression multiplier (ticket 25 wires this to
+    /// `Aggression`; placeholder 1.0 here).
+    pub tackle_drain_multiplier: f32,
 }
 
 impl Tuning {
@@ -660,7 +672,10 @@ impl Tuning {
             ],
             quality_weights: QualityWeights::default_assumptions(),
             tackle_recovery_ticks: 90,
-            tackle_stamina_cost: 0.05,
+            stamina_drain_per_action: 0.002,
+            stamina_recovery_rate: 0.001,
+            press_drain_multiplier: 25.0,
+            tackle_drain_multiplier: 25.0,
         }
     }
 }
@@ -1181,7 +1196,10 @@ mod tests {
         assert_eq!(tuning.fit_multipliers.at_distance_2_or_more, 0.75);
         assert_eq!(tuning.curve_params.len(), CURVE_PARAM_COUNT);
         assert_eq!(tuning.tackle_recovery_ticks, 90);
-        assert!((0.0..=1.0).contains(&tuning.tackle_stamina_cost));
+        assert!((0.0..=1.0).contains(&tuning.stamina_drain_per_action));
+        assert!((0.0..=1.0).contains(&tuning.stamina_recovery_rate));
+        assert!(tuning.press_drain_multiplier > 0.0);
+        assert!(tuning.tackle_drain_multiplier > 0.0);
     }
 
     #[test]

@@ -6,7 +6,8 @@ use bevy_ecs::prelude::*;
 use sim_components::{
     ActionIntent, Attribute, Ball, BallMarker, Intent, LastTouch, MatchClock, PendingBallTouches,
     PerceptionSnapshot, Player, PlayerId, PlayerProfile, Position, Skill, Stamina, TackleRecovery,
-    TouchKind, Velocity, pass_error_spread, tackle_success_probability,
+    TouchKind, Velocity, aggression_stamina_factor, fitness_drain_factor,
+    pass_error_spread, tackle_success_probability,
 };
 use sim_math::{Tuning, Vec2};
 use sim_physics::{PLAYER_ARRIVAL_DECEL, PLAYER_MAX_ACCEL_PER_TICK, SimRng};
@@ -237,9 +238,17 @@ pub fn player_action_execution_system(
                 let prob = tackle_success_probability(tackling, fit_multiplier, &tuning);
                 let roll: f32 = rng.gen_f32();
                 let success = roll <= prob;
+                // Stamina cost of the attempt, scaled by Aggression
+                // (placeholder 1.0 here; ticket 25 wires it to
+                // `Aggression`).
+                let aggression = profile
+                    .and_then(|p| p.get(Attribute::OutfieldAggression))
+                    .unwrap_or(75);
+                let aggression_factor = aggression_stamina_factor(aggression);
+                tackle_stamina_cost =
+                    tuning.stamina_drain_per_action * tuning.tackle_drain_multiplier * aggression_factor;
                 tackle_success = Some(success);
                 tackle_carrier = Some(carrier);
-                tackle_stamina_cost = tuning.tackle_stamina_cost;
                 if !success {
                     // Tackle fails - the tackler stumbles and is out of
                     // position for the recovery window; the carrier skips past.
@@ -314,8 +323,34 @@ pub fn player_action_execution_system(
             PLAYER_MAX_ACCEL_PER_TICK,
         );
 
-        // Stamina drain for the tackle attempt (PRD §7.3: tackling spends
-        // stamina).
+        // Stamina (Fitness): recover every tick, then drain for every
+        // costful action (running, pressing, tackling). Fitness lowers the
+        // effective running drain through its response curve; press and
+        // tackle carry fixed per-action costs (scaled by Aggression, a
+        // placeholder 1.0 here; ticket 25 wires it to `Aggression`).
+        stamina.0 = (stamina.0 + tuning.stamina_recovery_rate).clamp(0.0, 1.0);
+        // Running drain: any movement tick spends stamina (scaled by
+        // Fitness). Press and tackle carry their own fixed per-action
+        // costs below.
+        if matches!(intent, Intent::Movement(_)) {
+            let fitness = profile
+                .map_or(75, |p| p.get(Attribute::OutfieldFitness).unwrap_or(75));
+            let drain_factor = fitness_drain_factor(fitness, fit_multiplier, &tuning);
+            stamina.0 = tuning
+                .stamina_drain_per_action
+                .mul_add(-drain_factor, stamina.0)
+                .clamp(0.0, 1.0);
+        }
+        // Press stamina cost (scaled by Aggression, placeholder 1.0 here).
+        if matches!(intent, Intent::Action(ActionIntent::Press(_))) {
+            let aggression = profile
+                .map_or(75, |p| p.get(Attribute::OutfieldAggression).unwrap_or(75));
+            let aggression_factor = aggression_stamina_factor(aggression);
+            let press_cost =
+                tuning.stamina_drain_per_action * tuning.press_drain_multiplier * aggression_factor;
+            stamina.0 = (stamina.0 - press_cost).clamp(0.0, 1.0);
+        }
+        // Tackle stamina drain (scaled by Aggression, placeholder 1.0 here).
         if tackle_stamina_cost > 0.0 {
             stamina.0 = (stamina.0 - tackle_stamina_cost).clamp(0.0, 1.0);
         }

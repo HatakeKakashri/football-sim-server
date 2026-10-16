@@ -10,6 +10,7 @@ pub mod fixture;
 pub mod formation_slot;
 pub mod intent_dispatch;
 pub mod outfield_mechanics;
+pub mod physical_mechanics;
 pub mod position;
 pub mod profile;
 pub mod quality;
@@ -33,6 +34,9 @@ pub use shot_pipeline::{
 };
 pub use outfield_mechanics::{
     mark_distance_error, pass_error_spread, target_position_error, tackle_success_probability,
+};
+pub use physical_mechanics::{
+    aggression_stamina_factor, fitness_drain_factor, held_ball_retention_probability, sprint_speed,
 };
 pub use sim_math::{effective_attribute, fit_multiplier, QualityGroup, QualityWeights};
 

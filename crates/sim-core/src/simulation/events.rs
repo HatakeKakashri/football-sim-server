@@ -66,6 +66,9 @@ pub enum EventType {
     Kickoff,
     HalfTime,
     FullTime,
+    /// A tackle attempt (PRD §9.2, ticket 21): `tackler`, `carrier`,
+    /// `success`. Emitted at every tackle attempt.
+    Tackle,
 }
 
 impl EventType {
@@ -83,6 +86,7 @@ impl EventType {
             Self::Kickoff => "kickoff",
             Self::HalfTime => "half_time",
             Self::FullTime => "full_time",
+            Self::Tackle => "tackle",
         }
     }
 }
@@ -202,6 +206,23 @@ pub struct PassEvent {
     pub start: [f32; 2],
     /// Ball position at the resolution (acquisition / OOB / goal).
     pub end: [f32; 2],
+}
+
+/// `tackle` event payload (PRD §9.2, ticket 21).
+///
+/// Emitted at every tackle attempt. `tackler` is the player attempting
+/// the challenge, `carrier` is the ball carrier being tackled, and
+/// `success` is whether the tackle won the ball. A failed tackle leaves
+/// the tackler in a recovery window (`tackle_recovery_ticks`) and lets
+/// the carrier skip past.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TackleEventPayload {
+    /// Player attempting the tackle.
+    pub tackler: PlayerId,
+    /// Ball carrier being challenged.
+    pub carrier: PlayerId,
+    /// `true` when the tackle won the ball.
+    pub success: bool,
 }
 
 /// `possession_change` event payload (PRD §9.2).
@@ -430,6 +451,11 @@ pub enum MatchEvent {
         envelope: EventEnvelope,
         payload: PassEvent,
     },
+    /// `tackle` event (PRD §9.2, ticket 21).
+    Tackle {
+        envelope: EventEnvelope,
+        payload: TackleEventPayload,
+    },
     PossessionChange {
         envelope: EventEnvelope,
         payload: PossessionChangeEvent,
@@ -482,7 +508,8 @@ impl MatchEvent {
             | Self::Save { envelope, .. }
             | Self::Kickoff { envelope, .. }
             | Self::HalfTime { envelope, .. }
-            | Self::FullTime { envelope, .. } => envelope,
+            | Self::FullTime { envelope, .. }
+            | Self::Tackle { envelope, .. } => envelope,
         }
     }
 
@@ -500,6 +527,7 @@ impl MatchEvent {
             Self::Kickoff { .. } => EventType::Kickoff,
             Self::HalfTime { .. } => EventType::HalfTime,
             Self::FullTime { .. } => EventType::FullTime,
+            Self::Tackle { .. } => EventType::Tackle,
         }
     }
 }
@@ -530,6 +558,21 @@ impl Serialize for MatchEvent {
                 map.serialize_entry("kick_tick", &payload.kick_tick)?;
                 map.serialize_entry("start", &payload.start)?;
                 map.serialize_entry("end", &payload.end)?;
+                map.end()
+            }
+            Self::Tackle { envelope, payload } => {
+                // 7 envelope + 3 tackle payload fields = 10.
+                let mut map = ser.serialize_map(Some(10))?;
+                map.serialize_entry("seq", &envelope.seq)?;
+                map.serialize_entry("tick", &envelope.tick)?;
+                map.serialize_entry("half", &envelope.half)?;
+                map.serialize_entry("minute", &envelope.minute)?;
+                map.serialize_entry("added_minute", &envelope.added_minute)?;
+                map.serialize_entry("type", "tackle")?;
+                map.serialize_entry("team", &envelope.team)?;
+                map.serialize_entry("tackler", &payload.tackler)?;
+                map.serialize_entry("carrier", &payload.carrier)?;
+                map.serialize_entry("success", &payload.success)?;
                 map.end()
             }
             Self::PossessionChange { envelope, payload } => {
@@ -727,6 +770,9 @@ impl<'de> Deserialize<'de> for MatchEvent {
             kick_tick: Option<u64>,
             start: Option<[f32; 2]>,
             end: Option<[f32; 2]>,
+            // tackle payload
+            tackler: Option<PlayerId>,
+            carrier: Option<PlayerId>,
             // possession_change payload
             from_team: Option<TeamId>,
             to_team: Option<TeamId>,
@@ -791,6 +837,8 @@ impl<'de> Deserialize<'de> for MatchEvent {
                         "kick_tick" => sink.kick_tick = Some(map.next_value()?),
                         "start" => sink.start = Some(map.next_value()?),
                         "end" => sink.end = Some(map.next_value()?),
+                        "tackler" => sink.tackler = Some(map.next_value()?),
+                        "carrier" => sink.carrier = Some(map.next_value()?),
                         "from_team" => sink.from_team = Some(map.next_value()?),
                         "to_team" => sink.to_team = Some(map.next_value()?),
                         "cause" => sink.cause = Some(map.next_value()?),
@@ -848,6 +896,20 @@ impl<'de> Deserialize<'de> for MatchEvent {
                                 .ok_or_else(|| Error::missing_field("kick_tick"))?,
                             start: sink.start.ok_or_else(|| Error::missing_field("start"))?,
                             end: sink.end.ok_or_else(|| Error::missing_field("end"))?,
+                        },
+                    }),
+                    EventType::Tackle => Ok(MatchEvent::Tackle {
+                        envelope,
+                        payload: TackleEventPayload {
+                            tackler: sink
+                                .tackler
+                                .ok_or_else(|| Error::missing_field("tackler"))?,
+                            carrier: sink
+                                .carrier
+                                .ok_or_else(|| Error::missing_field("carrier"))?,
+                            success: sink
+                                .success
+                                .ok_or_else(|| Error::missing_field("success"))?,
                         },
                     }),
                     EventType::PossessionChange => Ok(MatchEvent::PossessionChange {
@@ -1052,7 +1114,8 @@ impl EventLog {
             | MatchEvent::Save { envelope, .. }
             | MatchEvent::Kickoff { envelope, .. }
             | MatchEvent::HalfTime { envelope, .. }
-            | MatchEvent::FullTime { envelope, .. } => {
+            | MatchEvent::FullTime { envelope, .. }
+            | MatchEvent::Tackle { envelope, .. } => {
                 envelope.seq = seq;
             }
         }
@@ -1150,6 +1213,43 @@ pub fn build_pass_event(
         end: [end.x, end.y],
     };
     MatchEvent::Pass { envelope, payload }
+}
+
+/// Convenience constructor for a `tackle` event (PRD §9.2, ticket 21).
+///
+/// `tackler` is the player attempting the challenge, `carrier` is the
+/// ball carrier being challenged, and `success` is whether the tackle
+/// won the ball.
+#[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "tackle-event constructor mirrors PRD §9.2 payload fields; a builder would scatter the field set"
+)]
+pub fn build_tackle_event(
+    seq: u64,
+    tick: u64,
+    clock: &MatchClock,
+    team: TeamId,
+    tackler: PlayerId,
+    carrier: PlayerId,
+    success: bool,
+) -> MatchEvent {
+    let (minute, added_minute) = envelope_minute_fields(clock);
+    let envelope = EventEnvelope {
+        seq,
+        tick,
+        half: clock.half,
+        minute,
+        added_minute,
+        event_type: EventType::Tackle,
+        team: Some(team),
+    };
+    let payload = TackleEventPayload {
+        tackler,
+        carrier,
+        success,
+    };
+    MatchEvent::Tackle { envelope, payload }
 }
 
 /// Convenience constructor for a `possession_change` event.

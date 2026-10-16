@@ -27,7 +27,7 @@ mod tests;
 
 pub use brain::{PlayerAction, UtilityBrain};
 pub use decision::{consideration_scoring_system, player_decision_system};
-pub use execution::{kick_execution_system, player_action_execution_system};
+pub use execution::{kick_execution_system, player_action_execution_system, tackle_recovery_system};
 pub use perception::perception_system;
 pub use sim_components::{NearbyEntity, PerceptionSnapshot, PitchBounds};
 

@@ -596,6 +596,19 @@ pub struct Tuning {
     /// Per-position-group quality weights (PRD §6.4). Used only by
     /// reporting / display code; the match simulation never reads them.
     pub quality_weights: QualityWeights,
+    /// Tackle success probability is read off the `Tackling` response
+    /// curve (`curve_params[Attribute::Tackling as usize]`); its `min`
+    /// is the base probability for an attribute of zero and its `max`
+    /// the ceiling for an attribute of 200.
+    ///
+    /// Number of ticks a tackler is out of position after a *failed*
+    /// tackle (PRD §7.3: about 1.5 s / 90 ticks). During this window
+    /// the tackler moves slower and cannot re-engage; the carrier skips
+    /// past.
+    pub tackle_recovery_ticks: u64,
+    /// Stamina (0..=1) spent by a tackler on every tackle attempt
+    /// (PRD §7.3: pressing and tackling spend stamina).
+    pub tackle_stamina_cost: f32,
 }
 
 impl Tuning {
@@ -609,7 +622,6 @@ impl Tuning {
         Self {
             fit_multipliers: FitMultipliers::default_assumptions(),
             curve_params: [
-                // Index 0..=29 mirrors Attribute::ALL (sim-components).
                 // Outfield defence.
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Tackling
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // Marking
@@ -647,6 +659,8 @@ impl Tuning {
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // GoalkeeperCreativity
             ],
             quality_weights: QualityWeights::default_assumptions(),
+            tackle_recovery_ticks: 90,
+            tackle_stamina_cost: 0.05,
         }
     }
 }
@@ -1166,6 +1180,8 @@ mod tests {
         assert_eq!(tuning.fit_multipliers.at_distance_1, 0.92);
         assert_eq!(tuning.fit_multipliers.at_distance_2_or_more, 0.75);
         assert_eq!(tuning.curve_params.len(), CURVE_PARAM_COUNT);
+        assert_eq!(tuning.tackle_recovery_ticks, 90);
+        assert!((0.0..=1.0).contains(&tuning.tackle_stamina_cost));
     }
 
     #[test]

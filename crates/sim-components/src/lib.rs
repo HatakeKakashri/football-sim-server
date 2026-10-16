@@ -9,6 +9,7 @@ pub mod event_kinds;
 pub mod fixture;
 pub mod formation_slot;
 pub mod intent_dispatch;
+pub mod outfield_mechanics;
 pub mod position;
 pub mod profile;
 pub mod quality;
@@ -29,6 +30,9 @@ pub use shot_pipeline::{
     finishing_conversion, keeper_positioning_error, keeper_save_chance, resolve_shot_outcome,
     rush_out_quality, save_kind_from_speed, save_probability, shot_accuracy, shot_power,
     SAVE_CATCH_MAX_SPEED_MPS, ShotResolution,
+};
+pub use outfield_mechanics::{
+    mark_distance_error, pass_error_spread, target_position_error, tackle_success_probability,
 };
 pub use sim_math::{effective_attribute, fit_multiplier, QualityGroup, QualityWeights};
 
@@ -270,6 +274,20 @@ pub struct Stamina(pub f32);
 
 #[derive(Component, Debug, Clone)]
 pub struct Skill(pub f32);
+
+/// A tackler is out of position for this many ticks after a *failed*
+/// tackle (PRD §7.3).
+///
+/// Initial value: `tackle_recovery_ticks` (90) from
+/// [`sim_math::Tuning`]; the recovery system decrements it each tick
+/// and removes the component when it reaches zero. While present, the
+/// tackler moves slower and cannot re-engage, so the carrier skips
+/// past.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct TackleRecovery {
+    /// Ticks remaining in the recovery window.
+    pub ticks_remaining: u64,
+}
 
 #[derive(Component, Debug, Clone)]
 pub struct TeamIdComponent(pub TeamId);

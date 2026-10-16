@@ -463,6 +463,63 @@ fn pass_event_emits_correct_envelope_and_payload() {
     assert_eq!(payload.end, [60.0, 34.0]);
 }
 
+/// `tackle` events are emitted at every tackle attempt with `tackler`,
+/// `carrier` and `success` (PRD §9.2, ticket 21).
+#[test]
+fn tackle_event_emitted_with_tackler_carrier_and_success() {
+    let mut world = World::new();
+    world.insert_resource(sim_components::MatchClock {
+        elapsed_ticks: 200,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    });
+    world.insert_resource(sim_rules::CurrentTick(200));
+    world.insert_resource(sim_rules::PendingTackle::default());
+    world.insert_resource(EventLog::new());
+
+    let tackler = world
+        .spawn((
+            Player {
+                team_id: sim_components::TeamId(0),
+                intent: None,
+            },
+            sim_components::TeamIdComponent(sim_components::TeamId(0)),
+        ))
+        .id();
+    let carrier = world.spawn(()).id();
+
+    world
+        .resource_mut::<sim_rules::PendingTackle>()
+        .set(sim_rules::TackleAttempt {
+            tackler,
+            carrier,
+            success: true,
+        });
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(crate::simulation::event_emit::emit_tackle_events);
+    schedule.run(&mut world);
+
+    let log = world.resource::<EventLog>();
+    assert_eq!(log.events.len(), 1, "exactly one tackle event");
+    let MatchEvent::Tackle { payload, envelope } = &log.events[0] else {
+        panic!("expected tackle event, got {:?}", log.events[0]);
+    };
+    assert_eq!(envelope.seq, 0);
+    assert_eq!(envelope.tick, 200);
+    assert_eq!(envelope.team, Some(sim_components::TeamId(0)));
+    assert_eq!(
+        payload.tackler,
+        sim_components::PlayerId::from_entity(tackler)
+    );
+    assert_eq!(
+        payload.carrier,
+        sim_components::PlayerId::from_entity(carrier)
+    );
+    assert!(payload.success);
+}
+
 /// `possession_change` events have the right fields when built.
 #[test]
 fn possession_change_event_emits_correct_envelope_and_payload() {

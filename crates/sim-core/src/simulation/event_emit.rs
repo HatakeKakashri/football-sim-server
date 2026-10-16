@@ -54,7 +54,7 @@ use super::events::{
     EventLog, PossessionChangeCause, RestartKind, attribute_goal, build_goal_event,
     build_kickoff_event, build_out_of_bounds_event, build_pass_event,
     build_possession_change_event, build_restart_event, build_save_event, build_shot_event,
-    opponent_of,
+    build_tackle_event, opponent_of,
 };
 
 /// Ball speed at or below which a goalkeeper catches (rather than
@@ -618,6 +618,41 @@ pub fn resolve_shot_events(
     }
 }
 
+/// `tackle` event emission (PRD §9.2, ticket 21).
+///
+/// Runs in the `Rules` set after `player_action_execution_system` has
+/// stashed the resolved tackle attempt on `PendingTackle`. Emits one
+/// `tackle` event per attempt with `tackler`, `carrier`, `success`.
+pub fn emit_tackle_events(
+    mut event_log: ResMut<EventLog>,
+    mut pending_tackle: Option<ResMut<sim_rules::PendingTackle>>,
+    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    clock: Res<MatchClock>,
+    team_query: Query<(Entity, &sim_components::TeamIdComponent)>,
+) {
+    let Some(ref mut slot) = pending_tackle else {
+        return;
+    };
+    let Some(attempt) = slot.take() else {
+        return;
+    };
+    let tick = current_tick.map_or(0, |c| c.0);
+    let tackler_team = team_query
+        .iter()
+        .find(|(e, _)| *e == attempt.tackler)
+        .map_or(TeamId(0), |(_, t)| t.0);
+    let event = build_tackle_event(
+        event_log.next_seq,
+        tick,
+        &clock,
+        tackler_team,
+        PlayerId::from_entity(attempt.tackler),
+        PlayerId::from_entity(attempt.carrier),
+        attempt.success,
+    );
+    event_log.append(event);
+}
+
 /// Emit the `out_of_bounds` and `restart` event pair (PRD §9.2,
 /// ticket 09).
 ///
@@ -739,6 +774,7 @@ pub fn register_event_systems(schedule: &mut Schedule) {
             resolve_shot_events,
             emit_goal_events,
             emit_kickoff_restart_events,
+            emit_tackle_events,
             emit_oob_and_restart_events,
             emit_possession_change_on_oob,
             emit_possession_change_on_acquisition,

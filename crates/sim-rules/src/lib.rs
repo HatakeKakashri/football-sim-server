@@ -297,3 +297,46 @@ impl Default for PendingPass {
         Self::default_inactive()
     }
 }
+
+/// A tackle attempt awaiting event emission (PRD §9.2 `tackle`).
+///
+/// Written by `sim-ai-player::execution::player_action_execution_system`
+/// when a player executes a `Tackle` intent against a ball carrier;
+/// drained by `sim-core::simulation::event_emit::emit_tackle_events`
+/// in the `Rules` set, which emits the `tackle` event with `tackler`,
+/// `carrier` and `success`. Carried by a resource rather than deferred
+/// commands so the emitter sees it in the same system run (see the
+/// `PendingOutOfBounds` contract).
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct PendingTackle(pub Option<TackleAttempt>);
+
+/// One resolved tackle attempt.
+#[derive(Debug, Clone, Copy)]
+pub struct TackleAttempt {
+    /// The player attempting the tackle.
+    pub tackler: Entity,
+    /// The ball carrier being challenged.
+    pub carrier: Entity,
+    /// `true` when the tackle won the ball.
+    pub success: bool,
+}
+
+impl PendingTackle {
+    /// Record a tackle attempt for the event emitter to drain this tick.
+    pub const fn set(&mut self, attempt: TackleAttempt) {
+        self.0 = Some(attempt);
+    }
+
+    /// Take the pending tackle attempt, leaving `None` for next time.
+    #[must_use]
+    pub const fn take(&mut self) -> Option<TackleAttempt> {
+        self.0.take()
+    }
+
+    /// Peek at the pending tackle attempt without consuming it.
+    #[must_use]
+    pub const fn get(&self) -> Option<&TackleAttempt> {
+        self.0.as_ref()
+    }
+}
+

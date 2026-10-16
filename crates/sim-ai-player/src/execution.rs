@@ -4,12 +4,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    ActionIntent, Ball, BallMarker, Intent, LastTouch, MatchClock, PendingBallTouches,
-    PerceptionSnapshot, Player, PlayerId, Position, Skill, Stamina, TouchKind, Velocity,
+    ActionIntent, Attribute, Ball, BallMarker, Intent, LastTouch, MatchClock, PendingBallTouches,
+    PerceptionSnapshot, Player, PlayerId, PlayerProfile, Position, Skill, Stamina, TackleRecovery,
+    TouchKind, Velocity, pass_error_spread, tackle_success_probability,
 };
-use sim_math::Vec2;
+use sim_math::{Tuning, Vec2};
 use sim_physics::{PLAYER_ARRIVAL_DECEL, PLAYER_MAX_ACCEL_PER_TICK, SimRng};
-use sim_rules::{CurrentTick, PendingPass, PendingShot, PendingShotState};
+use sim_rules::{
+    CurrentTick, PendingPass, PendingShot, PendingShotState, PendingTackle, TackleAttempt,
+};
 use sim_telemetry::TelemetryConfig;
 
 /// Monotonic counter for `pass()` flow ids. Two passes share the same
@@ -121,16 +124,30 @@ fn apply_acceleration_limit(prev: Vec2, desired: Vec2, max_accel_per_tick: f32) 
     }
 }
 
+#[allow(
+    clippy::type_complexity,
+    reason = "Bevy Query signature: the per-entity query carries the player state plus optional profile and recovery marker"
+)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "tackle and pass stochastic resolution plus recovery and stamina bookkeeping; splitting would scatter the per-entity action flow"
+)]
 pub fn player_action_execution_system(
     mut query: Query<(
         Entity,
         &mut Player,
         &mut Velocity,
-        &Stamina,
+        &mut Stamina,
         &Skill,
+        Option<&PlayerProfile>,
+        Option<&TackleRecovery>,
         &PerceptionSnapshot,
     )>,
     mut rng: ResMut<SimRng>,
+    mut commands: Commands,
+    ball: Res<Ball>,
+    tuning: Res<Tuning>,
+    mut pending_tackle: ResMut<PendingTackle>,
 ) {
     // Phase 2: real steering for every action. Each arm turns the abstract
     // intent into a constant-velocity steer toward (or away from) the
@@ -152,15 +169,40 @@ pub fn player_action_execution_system(
     // overshoot bug (a player inside the arrival radius being asked to
     // leap past the target and reverse direction next tick).
     //
+    // Ticket 21: `Tackling` drives tackle success probability through the
+    // response curve; a failed tackle puts the tackler in a recovery window
+    // and lets the carrier skip past. `Passing` narrows the pass error
+    // spread (applied to the kick direction in `kick_execution_system`).
+    //
     // DETERMINISM: collect entities first and sort by Entity ID to ensure
     // stable RNG draw order across processes (spec §7, rule #22). Reading
     // `velocity.0` into `prev_velocity` first preserves the previous-tick
     // value across the iteration even though we hold a `&mut Velocity`
     // borrow — the local is independent storage.
-    let mut entities: Vec<Entity> = query.iter().map(|(e, _, _, _, _, _)| e).collect();
+
+    // MVP: players occupy their trained slots, so the fit multiplier is
+    // 1.00. The parameter is retained so calibrated out-of-position
+    // penalties flow through automatically once trained positions are
+    // tracked per player.
+    let fit_multiplier = 1.0f32;
+
+    // The ball's current carrier, if any. A tackle is only an attempt
+    // when there is a carrier to challenge.
+    let carrier_entity = ball.possessor;
+
+    let mut entities: Vec<Entity> = query.iter().map(|(e, _, _, _, _, _, _, _)| e).collect();
     entities.sort_by_key(|e| e.to_bits());
     for entity in entities {
-        let Ok((_entity, player, mut velocity, stamina, skill, perception)) = query.get_mut(entity)
+        let Ok((
+            _entity,
+            player,
+            mut velocity,
+            mut stamina,
+            skill,
+            profile,
+            tackle_recovery,
+            perception,
+        )) = query.get_mut(entity)
         else {
             continue;
         };
@@ -178,21 +220,41 @@ pub fn player_action_execution_system(
         let mut speed_modifier = 1.0;
         let mut direction_modifier = Vec2::zero();
 
-        match &intent {
-            Intent::Action(ActionIntent::Tackle(target)) => {
-                // Tackle resolution: higher skill = higher success probability
-                // Roll against skill-based probability
-                let tackle_success_prob = skill.0.clamp(0.3, 0.9);
+        // --- Tackle outcome (pre-computed so the match arm below stays a
+        // pure dispatch over modifiers). ---
+        let mut tackle_success: Option<bool> = None;
+        let mut tackle_carrier: Option<Entity> = None;
+        let mut tackle_stamina_cost = 0.0f32;
+        let mut tackle_recovery_ticks: Option<u64> = None;
+
+        if let Intent::Action(ActionIntent::Tackle(_)) = intent {
+            // A tackle needs a ball carrier to challenge; without one it
+            // is just a closing run, not a tackle attempt.
+            if let Some(carrier) = carrier_entity {
+                let tackling = profile
+                    .and_then(|p| p.get(Attribute::Tackling))
+                    .unwrap_or(100);
+                let prob = tackle_success_probability(tackling, fit_multiplier, &tuning);
                 let roll: f32 = rng.gen_f32();
-                if roll > tackle_success_prob {
-                    // Tackle fails - player stumbles, moves slower
+                let success = roll <= prob;
+                tackle_success = Some(success);
+                tackle_carrier = Some(carrier);
+                tackle_stamina_cost = tuning.tackle_stamina_cost;
+                if !success {
+                    // Tackle fails - the tackler stumbles and is out of
+                    // position for the recovery window; the carrier skips past.
                     speed_modifier = 0.3;
+                    tackle_recovery_ticks = Some(tuning.tackle_recovery_ticks);
                 }
-                // Store target for potential later use
-                let _ = target;
             }
+        }
+
+        match &intent {
             Intent::Action(ActionIntent::PassTo) => {
-                // Pass completion: probability based on distance and skill
+                // Pass completion: probability based on distance and skill.
+                // The pass error spread (Passing attribute) is applied to
+                // the kick direction in `kick_execution_system`; this arm
+                // keeps the legacy movement deviation for the kicker.
                 let pass_distance = perception
                     .nearby_teammates
                     .first()
@@ -226,7 +288,22 @@ pub fn player_action_execution_system(
                 }
             }
             Intent::Movement(_)
-            | Intent::Action(ActionIntent::MarkOpponent(_) | ActionIntent::Press(_)) => {}
+            | Intent::Action(
+                ActionIntent::MarkOpponent(_)
+                | ActionIntent::Press(_)
+                | ActionIntent::Tackle(_),
+            ) => {
+                // Mark / Press have no stochastic execution effect;
+                // movement intents steer; the tackle outcome was
+                // pre-computed above.
+            }
+        }
+
+        // Recovering tacklers are out of position: move slower while the
+        // recovery window runs (inserted on a failed tackle above; the
+        // deferred command becomes visible from the next tick).
+        if tackle_recovery.is_some_and(|r| r.ticks_remaining > 0) {
+            speed_modifier *= 0.5;
         }
 
         let desired = steer(perception, &intent);
@@ -236,6 +313,51 @@ pub fn player_action_execution_system(
             desired_with_stochastic,
             PLAYER_MAX_ACCEL_PER_TICK,
         );
+
+        // Stamina drain for the tackle attempt (PRD §7.3: tackling spends
+        // stamina).
+        if tackle_stamina_cost > 0.0 {
+            stamina.0 = (stamina.0 - tackle_stamina_cost).clamp(0.0, 1.0);
+        }
+
+        // Record the tackle attempt so the Rules set can emit the
+        // `tackle` event (`tackler`, `carrier`, `success`).
+        if let (Some(success), Some(carrier)) = (tackle_success, tackle_carrier) {
+            pending_tackle.set(TackleAttempt {
+                tackler: entity,
+                carrier,
+                success,
+            });
+        }
+
+        // Recovery window on a failed tackle. Inserted via a deferred
+        // command, so it becomes visible to `tackle_recovery_system`
+        // from the next tick.
+        if let Some(ticks) = tackle_recovery_ticks {
+            commands.entity(entity).insert(TackleRecovery { ticks_remaining: ticks });
+        }
+    }
+}
+
+/// Decrements every `TackleRecovery` timer each tick.
+///
+/// Removes the component when the window expires. A tackler is out of
+/// position for `tackle_recovery_ticks` after a failed tackle; while the
+/// component is present `player_action_execution_system` slows them down.
+///
+/// Runs once per tick (registered in `SimulationSet::MatchAdmin`) after
+/// deferred component inserts from the `Execution` set have been applied,
+/// so a recovery window opened this tick begins decrementing next tick.
+pub fn tackle_recovery_system(
+    mut query: Query<(Entity, &mut TackleRecovery)>,
+    mut commands: Commands,
+) {
+    for (entity, mut recovery) in &mut query {
+        if recovery.ticks_remaining <= 1 {
+            commands.entity(entity).remove::<TackleRecovery>();
+        } else {
+            recovery.ticks_remaining -= 1;
+        }
     }
 }
 
@@ -271,8 +393,18 @@ pub fn player_action_execution_system(
     clippy::too_many_arguments,
     reason = "Bevy system param set: kick execution needs player/ball state, touch + pass/shot signals, tick, clock and telemetry; splitting would scatter the kick write across systems"
 )]
+#[allow(
+    clippy::too_many_lines,
+    reason = "kick execution handles shots, passes and velocity continuations plus pass-accuracy deviation; splitting would scatter the kick write"
+)]
 pub fn kick_execution_system(
-    player_query: Query<(Entity, &Player, &PerceptionSnapshot, &Velocity)>,
+    player_query: Query<(
+        Entity,
+        &Player,
+        &PerceptionSnapshot,
+        &Velocity,
+        Option<&PlayerProfile>,
+    )>,
     ball_query: Query<&Position, With<BallMarker>>,
     mut ball: ResMut<Ball>,
     mut pending: ResMut<PendingBallTouches>,
@@ -281,6 +413,10 @@ pub fn kick_execution_system(
     current_tick: Option<Res<CurrentTick>>,
     match_clock: Option<Res<MatchClock>>,
     telemetry: Option<Res<TelemetryConfig>>,
+    // Ticket 21: pass-accuracy RNG and tuning are optional so legacy test
+    // worlds without them still run (no deviation is applied when absent).
+    mut rng: Option<ResMut<SimRng>>,
+    tuning: Option<Res<Tuning>>,
 ) {
     let Some(possessor) = ball.possessor else {
         return;
@@ -289,8 +425,8 @@ pub fn kick_execution_system(
     // pass that resolves perception/velocity — the team is denormalised
     // into `LastTouch` at the write site below. The `else` early-return
     // makes the team lookup at the write site provably infallible.
-    let Some((_, possessor_player, perception, player_vel)) =
-        player_query.iter().find(|(e, _, _, _)| *e == possessor)
+    let Some((_, possessor_player, perception, player_vel, profile)) =
+        player_query.iter().find(|(e, _, _, _, _)| *e == possessor)
     else {
         return;
     };
@@ -308,13 +444,36 @@ pub fn kick_execution_system(
     // `sim_components::intent_dispatch`. The speed multiplier depends on
     // whether the kick is a shot (uses `KICK_SPEED_SHOT`) or a pass /
     // velocity-continuation (uses `KICK_SPEED_PASS`).
-    let Some(kick_dir) = intent.kick(perception, player_vel.0) else {
+    let Some(mut kick_dir) = intent.kick(perception, player_vel.0) else {
         return;
     };
     let kick_speed = match intent {
         Intent::Action(ActionIntent::ShootAtGoal(_)) => KICK_SPEED_SHOT,
         _ => KICK_SPEED_PASS,
     };
+
+    // Ticket 21: Passing narrows the pass error spread. An inaccurate
+    // pass is kicked slightly off-target, so it is less likely to reach
+    // the intended receiver and the `pass` event's `to` field stays
+    // `None`. Only applied when RNG and tuning are present (real matches;
+    // legacy test worlds skip it).
+    if matches!(intent, Intent::Action(ActionIntent::PassTo))
+        && kick_dir.length() > 0.01
+        && let (Some(pass_rng), Some(passing_profile), Some(tuning)) =
+            (rng.as_deref_mut(), profile, tuning.as_deref())
+        && let Some(passing) = passing_profile.get(Attribute::Passing)
+    {
+        let pass_error = pass_error_spread(passing, 1.0, tuning);
+        if pass_rng.gen_f32() < pass_error {
+            let dev = pass_error * (3.0 / 60.0);
+            kick_dir = (kick_dir
+                + Vec2::new(
+                    pass_rng.gen_range_f32(-dev, dev),
+                    pass_rng.gen_range_f32(-dev, dev),
+                ))
+            .normalized();
+        }
+    }
 
     // Preserve the original `dir.length() > 0.01` guard: if the
     // computed direction is effectively zero (e.g. a `ShootAtGoal`
@@ -731,6 +890,16 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(sim_math::PitchDimensions::standard());
         world.insert_resource(SimRng::new(1));
+        world.insert_resource(Ball {
+            spin: 0.0,
+            state: sim_components::BallState::Free,
+            possessor: None,
+            last_touch: None,
+            touch_history: [None, None],
+            kick_velocity: None,
+        });
+        world.insert_resource(sim_math::Tuning::default());
+        world.insert_resource(sim_rules::PendingTackle::default());
 
         let player_pos = Vec2::new(50.0, 34.0);
         let ball_pos = Vec2::new(60.0, 34.0);
@@ -804,6 +973,16 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(sim_math::PitchDimensions::standard());
         world.insert_resource(SimRng::new(1));
+        world.insert_resource(Ball {
+            spin: 0.0,
+            state: sim_components::BallState::Free,
+            possessor: None,
+            last_touch: None,
+            touch_history: [None, None],
+            kick_velocity: None,
+        });
+        world.insert_resource(sim_math::Tuning::default());
+        world.insert_resource(sim_rules::PendingTackle::default());
 
         // Player 0.05 m from a stationary ball (inside the 0.1 m deadband).
         let player_pos = Vec2::new(50.0, 34.0);
@@ -856,6 +1035,138 @@ mod tests {
             if let Some(mut snap) = world.get_mut::<PerceptionSnapshot>(player_entity) {
                 snap.self_position = p;
             }
+        }
+    }
+
+    /// `tackle_recovery_system` decrements the recovery timer each tick and
+    /// removes the component when the window expires.
+    #[test]
+    fn tackle_recovery_decrements_each_tick_and_removes_at_zero() {
+        let mut world = World::new();
+        let tackler = world.spawn(TackleRecovery { ticks_remaining: 3 }).id();
+        let mut schedule = Schedule::default();
+        schedule.add_systems(tackle_recovery_system);
+
+        schedule.run(&mut world);
+        assert_eq!(
+            world.get::<TackleRecovery>(tackler).unwrap().ticks_remaining,
+            2,
+            "first tick decrements 3 -> 2"
+        );
+        schedule.run(&mut world);
+        assert_eq!(
+            world.get::<TackleRecovery>(tackler).unwrap().ticks_remaining,
+            1,
+            "second tick decrements 2 -> 1"
+        );
+        schedule.run(&mut world);
+        assert!(
+            world.get::<TackleRecovery>(tackler).is_none(),
+            "recovery component removed when the window expires"
+        );
+    }
+
+    /// A tackle attempt against a carrier records a `PendingTackle`
+    /// (`tackler`, `carrier`, `success`) and, on failure, puts the tackler
+    /// in a `tackle_recovery_ticks` recovery window and drains stamina.
+    #[test]
+    fn tackle_attempt_records_pending_tackle_and_recovery_on_failure() {
+        let mut world = World::new();
+        world.insert_resource(sim_math::PitchDimensions::standard());
+        world.insert_resource(SimRng::new(1));
+        world.insert_resource(sim_math::Tuning::default());
+        world.insert_resource(PendingTackle::default());
+
+        let snap = |pos: Vec2, ball: Vec2| PerceptionSnapshot {
+            self_position: pos,
+            nearby_teammates: smallvec![],
+            nearby_opponents: smallvec![],
+            ball_position: ball,
+            ball_state: sim_components::BallState::Possessed,
+            goal_position: sim_math::goal_position_for(1),
+            home_slot: pos,
+            pitch_bounds: PitchBounds {
+                distance_to_left: pos.x,
+                distance_to_right: sim_math::PITCH_LENGTH - pos.x,
+                distance_to_top: pos.y,
+                distance_to_bottom: 68.0 - pos.y,
+            },
+        };
+
+        let carrier = world
+            .spawn((
+                Player {
+                    team_id: sim_components::TeamId(1),
+                    intent: None,
+                },
+                sim_components::TeamIdComponent(sim_components::TeamId(1)),
+                Position(Vec2::new(60.0, 34.0)),
+                Velocity(Vec2::zero()),
+                Stamina(1.0),
+                Skill(0.7),
+                snap(Vec2::new(60.0, 34.0), Vec2::new(60.0, 34.0)),
+            ))
+            .id();
+        let tackler = world
+            .spawn((
+                Player {
+                    team_id: sim_components::TeamId(0),
+                    intent: Some(Intent::Action(ActionIntent::Tackle(carrier))),
+                },
+                sim_components::TeamIdComponent(sim_components::TeamId(0)),
+                Position(Vec2::new(58.0, 34.0)),
+                Velocity(Vec2::zero()),
+                Stamina(1.0),
+                Skill(0.7),
+                sim_components::PlayerProfile::with_attribute(
+                    sim_components::Attribute::Tackling,
+                    1,
+                ),
+                snap(Vec2::new(58.0, 34.0), Vec2::new(60.0, 34.0)),
+            ))
+            .id();
+
+        world.insert_resource(Ball {
+            spin: 0.0,
+            state: sim_components::BallState::Possessed,
+            possessor: Some(carrier),
+            last_touch: None,
+            touch_history: [None, None],
+            kick_velocity: None,
+        });
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(player_action_execution_system);
+        schedule.run(&mut world);
+
+        // The attempt was recorded with the right identities.
+        let attempt = world
+            .resource::<PendingTackle>()
+            .get()
+            .expect("a tackle attempt is recorded");
+        assert_eq!(attempt.tackler, tackler);
+        assert_eq!(attempt.carrier, carrier);
+
+        // Stamina was spent on the attempt (tackle_stamina_cost = 0.05).
+        let stamina = world.get::<Stamina>(tackler).expect("tackler stamina");
+        assert!(
+            (stamina.0 - (1.0 - 0.05)).abs() < 1e-6,
+            "stamina drained by tackle cost, got {}",
+            stamina.0
+        );
+
+        // The recovery window tracks the outcome: failure ⇒ 90 ticks,
+        // success ⇒ none.
+        if attempt.success {
+            assert!(
+                world.get::<TackleRecovery>(tackler).is_none(),
+                "successful tackle leaves no recovery window"
+            );
+        } else {
+            let recovery = world
+                .get::<TackleRecovery>(tackler)
+                .expect("failed tackle ⇒ recovery window");
+            assert_eq!(recovery.ticks_remaining, 90);
         }
     }
 }

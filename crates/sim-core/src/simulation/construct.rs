@@ -5,7 +5,7 @@ use bevy_ecs::prelude::*;
 use sim_ai_manager::{mentality_shift_system, substitution_system};
 use sim_ai_player::{
     kick_execution_system, perception_system, player_action_execution_system,
-    player_decision_system,
+    player_decision_system, tackle_recovery_system,
 };
 use sim_components::{PerceptionSnapshot, PitchBounds, PlayerProfile, RoleComponent, Skill, Stamina};
 use sim_physics::{
@@ -126,6 +126,7 @@ fn register_systems(schedule: &mut Schedule) {
             minimum_player_count_system,
             substitution_system,
             mentality_shift_system,
+            tackle_recovery_system,
         )
             .chain()
             .in_set(SimulationSet::MatchAdmin)
@@ -210,6 +211,7 @@ impl Simulation {
         world.insert_resource(sim_rules::GoalForEmit::default());
         world.insert_resource(sim_rules::KickoffForEmit::default());
         world.insert_resource(sim_rules::PendingShot::default());
+        world.insert_resource(sim_rules::PendingTackle::default());
         world.insert_resource(super::lifecycle::HalfTimeEntryTick { tick: None });
         world.insert_resource(super::lifecycle::FirstHalfAddedTime(0));
         world.insert_resource(crate::EventLog::new());

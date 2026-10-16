@@ -262,6 +262,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_then_regenerate_is_byte_identical_end_to_end() {
+        // TTL = 1 second: fresh immediately after completion, expired
+        // shortly after. The 120-tick run fails fast on the cap, so the
+        // stream is deterministic and the test finishes in ms.
+        let state = test_state(1, 120);
+
+        let response = post_match_handler(
+            State(state.clone()),
+            Path("m-0000".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        state.store.wait_until_done("m-0000").await;
+
+        let (status, _, first_body) = response_body(
+            get_stream_handler(
+                State(state.clone()),
+                Path("m-0000".to_string()),
+                HeaderMap::new(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(first_body.contains("tick_cap_exceeded"));
+
+        // Let the TTL elapse, then GET must return 410.
+        tokio::time::sleep(Duration::from_secs_f32(1.5)).await;
+        let response = get_stream_handler(
+            State(state.clone()),
+            Path("m-0000".to_string()),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::GONE);
+
+        // Re-POST re-simulates the same seed (PRD §10.4).
+        let response = post_match_handler(
+            State(state.clone()),
+            Path("m-0000".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        state.store.wait_until_done("m-0000").await;
+
+        let (status, _, second_body) = response_body(
+            get_stream_handler(
+                State(state.clone()),
+                Path("m-0000".to_string()),
+                HeaderMap::new(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            first_body, second_body,
+            "evict-and-regenerate must be byte-identical (uncompressed, PRD §10.4)"
+        );
+    }
+
+    #[tokio::test]
     async fn real_socket_serves_sse_with_resume_and_204() {
         // Bind an ephemeral port and serve over a real socket; speak
         // raw HTTP/1.1 to prove the contract bytes.
@@ -313,5 +375,83 @@ mod tests {
             .await
             .expect("invariant: test response reads");
         String::from_utf8(raw).expect("invariant: test response is UTF-8")
+    }
+
+    /// One raw HTTP/1.1 POST with an empty body over a fresh connection.
+    async fn raw_post(addr: std::net::SocketAddr, path: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("invariant: test server accepts");
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nhost: {addr}\r\nconnection: close\r\ncontent-length: 0\r\n\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("invariant: test request writes");
+        let mut raw = Vec::new();
+        stream
+            .read_to_end(&mut raw)
+            .await
+            .expect("invariant: test response reads");
+        String::from_utf8(raw).expect("invariant: test response is UTF-8")
+    }
+
+    /// End-to-end concurrency cap over a real socket: one simulation
+    /// slot, a second `POST` while a full match runs gets `503` with
+    /// `Retry-After: 5`, and the slot releases when the match finishes.
+    /// Runs full matches, so it is minutes-long in debug — `#[ignore]`d;
+    /// verify with `cargo test --release -p sim-server --lib --ignored`.
+    #[tokio::test]
+    #[ignore = "long-running end-to-end concurrency-cap test over a real socket"]
+    async fn concurrency_cap_end_to_end_503_over_cap() {
+        let mut registry = MatchRegistry::default();
+        registry.insert("m-0000", 7);
+        registry.insert("m-0001", 42);
+        let store = Arc::new(MatchStore::new(
+            ServerConfig {
+                max_concurrent_sims: 1,
+                ..ServerConfig::default()
+            },
+            registry,
+        ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("invariant: loopback bind works in tests");
+        let addr = listener
+            .local_addr()
+            .expect("invariant: bound socket has an address");
+        let server_store = store.clone();
+        tokio::spawn(async move {
+            axum::serve(listener, router(server_store))
+                .await
+                .expect("invariant: test server serves");
+        });
+
+        // POST #1 starts a full match on its own OS thread → 202.
+        let first = raw_post(addr, "/match/m-0000").await;
+        assert!(first.starts_with("HTTP/1.1 202"), "first POST: {first}");
+
+        // POST #2 while #1 is still running → 503 + Retry-After.
+        let second = raw_post(addr, "/match/m-0001").await;
+        assert!(second.starts_with("HTTP/1.1 503"), "second POST: {second}");
+        assert!(
+            second.to_ascii_lowercase().contains("retry-after: 5"),
+            "missing Retry-After header: {second}"
+        );
+
+        // The slot releases when match #1 reaches FullTime.
+        store.wait_until_done("m-0000").await;
+
+        // POST #2 again → 202 once the cap has released.
+        let third = raw_post(addr, "/match/m-0001").await;
+        assert!(third.starts_with("HTTP/1.1 202"), "third POST: {third}");
+
+        // Finished results are still served: GET is never held up by the cap.
+        let stream = raw_get(addr, "/match/m-0000/stream", "").await;
+        assert!(stream.starts_with("HTTP/1.1 200"), "stream GET: {stream}");
+        assert!(stream.contains("event: full_time"));
     }
 }

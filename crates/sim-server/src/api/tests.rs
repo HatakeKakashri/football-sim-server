@@ -5,13 +5,13 @@
 //! `cargo test --release -p sim-server --lib api_end_to_end_full_match -- --ignored`.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sim_core::Simulation;
 
 use super::runner::{MatchOutcome, build_roster, capture_frame, run_match_blocking};
 use super::stream::{CompletedMatch, HalfBoundaries, SseMessage, build_stream, render_body};
-use super::RETRY_AFTER_SECS;
+use super::{default_concurrency_cap, RETRY_AFTER_SECS};
 use super::{JobStatus, MatchRecord, MatchRegistry, MatchStore, ServerConfig, StreamResponse};
 
 fn test_store(fixture_count: u32, config: ServerConfig) -> Arc<MatchStore> {
@@ -100,6 +100,130 @@ fn expired_result_is_410_until_repost() {
     let response = store.post_match("m-0000");
     assert_eq!(response.status, 202);
     runtime.block_on(store.wait_until_done("m-0000"));
+}
+
+#[test]
+fn default_concurrency_cap_is_cores_minus_one() {
+    let expected = std::thread::available_parallelism()
+        .map_or(1, |cores| cores.get().max(2) - 1);
+    assert_eq!(default_concurrency_cap(), expected);
+    assert!(
+        default_concurrency_cap() >= 1,
+        "concurrency cap must allow at least one simulation"
+    );
+}
+
+#[test]
+fn cached_get_never_blocked_by_concurrency_cap() {
+    // A tick-cap failure is a cached result just like a finished match
+    // (PRD §10: failures cache like successes), and it runs in ms.
+    let config = ServerConfig {
+        max_concurrent_sims: 1,
+        tick_cap: 120,
+        ..ServerConfig::default()
+    };
+    let store = test_store(3, config);
+
+    // Cache a finished result first.
+    let response = store.post_match("m-0000");
+    assert_eq!(response.status, 202);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("invariant: test runtime builds");
+    runtime.block_on(store.wait_until_done("m-0000"));
+    assert!(matches!(
+        store.stream_slice("m-0000", None),
+        StreamResponse::Ready(_)
+    ));
+
+    // Occupy the only slot so the concurrency cap is reached.
+    {
+        let mut state = store
+            .state
+            .lock()
+            .expect("invariant: test lock is never poisoned");
+        state.records.insert(
+            "m-0001".to_string(),
+            MatchRecord {
+                status: JobStatus::Running,
+                completed_at: None,
+                stream: Vec::new(),
+            },
+        );
+        state.running = 1;
+    }
+
+    // Over-cap POST → 503 + Retry-After.
+    let response = store.post_match("m-0002");
+    assert_eq!(response.status, 503);
+    assert_eq!(response.retry_after_secs, Some(RETRY_AFTER_SECS));
+
+    // Cached GET is served immediately even with the cap full: the cap
+    // never holds up GET of cached results.
+    let StreamResponse::Ready(body) = store.stream_slice("m-0000", None) else {
+        panic!("expected cached stream to be ready immediately");
+    };
+    assert!(!body.is_empty());
+}
+
+#[test]
+fn evict_and_regenerate_is_byte_identical_after_ttl_expiry() {
+    let config = ServerConfig {
+        result_ttl_secs: 1,
+        tick_cap: 120,
+        ..ServerConfig::default()
+    };
+    let store = test_store(1, config);
+
+    // First simulation: tick-cap failure, deterministic for the seed.
+    let response = store.post_match("m-0000");
+    assert_eq!(response.status, 202);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("invariant: test runtime builds");
+    runtime.block_on(store.wait_until_done("m-0000"));
+
+    let StreamResponse::Ready(first_body) = store.stream_slice("m-0000", None) else {
+        panic!("expected a finished stream");
+    };
+    assert!(first_body.contains("tick_cap_exceeded"));
+
+    // Evict: backdate completed_at beyond the one-second TTL.
+    {
+        let mut state = store
+            .state
+            .lock()
+            .expect("invariant: test lock is never poisoned");
+        let record = state
+            .records
+            .get_mut("m-0000")
+            .expect("invariant: match record exists after POST");
+        record.completed_at = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(2))
+                .expect("invariant: the test process has been running for at least 2 seconds"),
+        );
+        drop(state);
+    }
+    assert!(matches!(
+        store.stream_slice("m-0000", None),
+        StreamResponse::Expired
+    ));
+
+    // Re-POST re-simulates the same seed (PRD §10.4).
+    let response = store.post_match("m-0000");
+    assert_eq!(response.status, 202);
+    runtime.block_on(store.wait_until_done("m-0000"));
+
+    let StreamResponse::Ready(second_body) = store.stream_slice("m-0000", None) else {
+        panic!("expected a regenerated stream");
+    };
+    assert_eq!(
+        first_body, second_body,
+        "evict-and-regenerate must produce a byte-identical uncompressed SSE body"
+    );
 }
 
 #[test]

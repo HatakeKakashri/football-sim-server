@@ -62,6 +62,12 @@ pub struct SeedReport {
     pub violations: Vec<InvariantViolation>,
     pub final_state_hash: u64,
     pub determinism_agreed: bool,
+    /// A8 event-ordering check (PRD §13.1 A8, §9.1). `true` if the
+    /// final `EventLog` passes `check_gapless_seq` (strictly increasing
+    /// and gapless `seq`; non-decreasing `tick`). Defaults to `false`
+    /// because the harness only flips it to `true` after a successful
+    /// check; a `false` value therefore always means the gate failed.
+    pub event_order_ok: bool,
 }
 
 /// Aggregate metrics across all seeds.
@@ -75,6 +81,10 @@ pub struct HarnessSummary {
     pub zero_zero_rate: f64,
     pub max_dead_ball_window: u64,
     pub determinism_failures: usize,
+    /// A8 event-ordering failures across the batch (PRD §13.1 A8,
+    /// §9.1). Counts seeds whose `SeedReport.event_order_ok` is `false`
+    /// — i.e. the final `EventLog` is not gapless-monotonic.
+    pub event_order_failures: usize,
     pub violations: Vec<ViolationRecord>,
     /// Per-seed reports in the order the seeds were read. Useful for
     /// post-hoc inspection when an aggregate metric flags a failure.
@@ -108,6 +118,9 @@ impl HarnessSummary {
         }
         if !report.determinism_agreed {
             self.determinism_failures += 1;
+        }
+        if !report.event_order_ok {
+            self.event_order_failures += 1;
         }
         for v in &report.violations {
             self.violations.push(ViolationRecord {
@@ -320,6 +333,15 @@ fn play_one(seed: u64) -> (SeedReport, u64) {
     if let Some(v) = last_violation {
         report.violations.push(v);
     }
+    // A8 event ordering (PRD §13.1 A8): seq strictly increasing and
+    // gapless across the match; ticks non-decreasing within each
+    // event envelope. The engine emits envelopes in tick order, so
+    // the seq check (which is gapless-monotonic) is the load-bearing
+    // invariant. `check_gapless_seq` returns `None` on success.
+    report.event_order_ok = sim
+        .world()
+        .get_resource::<sim_core::EventLog>()
+        .is_some_and(|log| sim_core::check_gapless_seq(log).is_none());
     let hash = sim.get_state_hash();
     (report, hash)
 }
@@ -360,5 +382,50 @@ mod tests {
     #[test]
     fn tick_cap_constant_is_400_000() {
         assert_eq!(TICK_CAP, 400_000);
+    }
+
+    /// A8 event ordering: `seq` must be strictly gapless-monotonic
+    /// across the whole match (PRD §13.1 A8, §9.1).
+    ///
+    /// This is the A8 check surfaced as a `SeedReport` field; the
+    /// harness writes `true` when the final event log passes
+    /// `check_gapless_seq`, and the field is otherwise `false`.
+    ///
+    /// `#[ignore]`'d (PRD §14: full-match tests run manually in
+    /// release). Run with:
+    ///
+    /// ```text
+    /// cargo test --release -p sim-server --lib -- --ignored event_order
+    /// ```
+    #[test]
+    #[ignore = "full-match test is minutes-long; run explicitly when verifying the A8 metric"]
+    fn seed_report_has_event_order_ok_field() {
+        let report = play_one(12345);
+        // The field exists and is a bool. Whether `true` or `false`
+        // depends on the run; the field's mere presence proves the
+        // harness carries the A8 measurement.
+        let _ = report.0.event_order_ok;
+    }
+
+    /// `event_order_ok` is true for the canonical seed (12345), since
+    /// the event-log invariant holds across the existing tests.
+    /// The seed's score / state are deterministic.
+    ///
+    /// `#[ignore]`'d (PRD §14: full-match tests run manually in
+    /// release). Run with:
+    ///
+    /// ```text
+    /// cargo test --release -p sim-server --lib -- --ignored event_order_ok_for_canonical_seed_12345
+    /// ```
+    #[test]
+    #[ignore = "full-match test is minutes-long; run explicitly when verifying the A8 metric"]
+    fn event_order_ok_for_canonical_seed_12345() {
+        let (report, _hash) = play_one(12345);
+        // The harness plays to FullTime, then checks `check_gapless_seq`
+        // on the final EventLog. PRD §9.1 / §13.1 A8 requires gapless
+        // monotonic seq; if the harness ever reports a non-OK value
+        // here, the engine has a seq-ordering regression.
+        assert!(report.event_order_ok, "A8: seq must be gapless");
+        assert!(report.reached_full_time, "A1: full-time within cap");
     }
 }

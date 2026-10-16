@@ -266,11 +266,13 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             };
             let summary = run_harness(&opts)?;
             tracing::info!(
-                "harness: {} seeds, {} full-time, mean_goals={:.2}, max_dead_window={}, violations={}",
+                "harness: {} seeds, {} full-time, mean_goals={:.2}, max_dead_window={}, determinism_failures={}, event_order_failures={}, violations={}",
                 summary.seed_count,
                 summary.matches_reached_full_time,
                 summary.mean_goals,
                 summary.max_dead_ball_window,
+                summary.determinism_failures,
+                summary.event_order_failures,
                 summary.violations.len(),
             );
         }

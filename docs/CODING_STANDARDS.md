@@ -6,8 +6,8 @@
 > different convention (then match the file).
 
 This document is the authoritative coding standard for the `football-sim-server`
-workspace. It pairs with the codebase review at `docs/reviews/CODEBASE_REVIEW.md`
-and the phased evolution plan at `docs/reviews/CODEBASE_REVIEW.md` §7.
+workspace. It pairs with the product specification at `docs/football-sim-mvp-prd.md`
+(baseline findings §3, build order §15).
 
 ---
 

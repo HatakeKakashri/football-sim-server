@@ -144,14 +144,10 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 
 ## Where specs / design docs live
 
-- `docs/football-sim-mvp-prd.md` — **authoritative MVP PRD (single source of truth, 10 Oct 2026)**.
+- `docs/football-sim-mvp-prd.md` — **authoritative product specification (single source of truth, 17 Oct 2026)**. Covers the match engine, player model, rules, event model, API contract, acceptance criteria. Rewritten from the earlier MVP PRD; all superseded design docs have been deleted.
 - `docs/CODING_STANDARDS.md` — authoritative coding standard.
-- `docs/reviews/CODEBASE_REVIEW.md` — current state review (needs re-basing against PRD).
-- `specs/002-tick-observability/{spec,plan,contracts/trace-schema}.md` — Chrome trace telemetry feature (developer tooling only, opt-in via `--trace-out`).
-- `docs/superpowers/specs/2026-10-01-tick-observability-design.md` — implementation design for 002 tick observability.
-- `docs/superpowers/specs/2026-10-03-ball-touch-event-refactor-design.md` — touch registration refactor (align with PRD §8.5, §6.2; strip offside tests).
-- `docs/superpowers/specs/2026-10-03-pickup-refactor-ticket.md` — future work: AI pickup (PRD Phase 4).
-- **Archived (superseded by PRD):** `spec/football-sim-server-spec.md`, `specs/001-football-sim-engine/`, `docs/superpowers/specs/2026-09-29-phase-e-*.md`, `2026-09-30-phase-f-*.md`, `2026-10-05-final-goal-design.md` — see `docs/archive/`.
+- `docs/agents/{issue-tracker,triage-labels,domain}.md` — agent workflow docs.
+- Trace telemetry (Chrome/Perfetto) is implemented in `crates/sim-telemetry`; its schema lives in code, not in docs.
 
 ## 🚫 Merge/Push Authorization Rule
 
@@ -333,14 +329,10 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 
 ## Where specs / design docs live
 
-- `docs/football-sim-mvp-prd.md` — **authoritative MVP PRD (single source of truth, 10 Oct 2026)**.
+- `docs/football-sim-mvp-prd.md` — **authoritative product specification (single source of truth, 17 Oct 2026)**. Covers the match engine, player model, rules, event model, API contract, acceptance criteria. Rewritten from the earlier MVP PRD; all superseded design docs have been deleted.
 - `docs/CODING_STANDARDS.md` — authoritative coding standard.
-- `docs/reviews/CODEBASE_REVIEW.md` — current state review (needs re-basing against PRD).
-- `specs/002-tick-observability/{spec,plan,contracts/trace-schema}.md` — Chrome trace telemetry feature (developer tooling only, opt-in via `--trace-out`).
-- `docs/superpowers/specs/2026-10-01-tick-observability-design.md` — implementation design for 002 tick observability.
-- `docs/superpowers/specs/2026-10-03-ball-touch-event-refactor-design.md` — touch registration refactor (align with PRD §8.5, §6.2; strip offside tests).
-- `docs/superpowers/specs/2026-10-03-pickup-refactor-ticket.md` — future work: AI pickup (PRD Phase 4).
-- **Archived (superseded by PRD):** `spec/football-sim-server-spec.md`, `specs/001-football-sim-engine/`, `docs/superpowers/specs/2026-09-29-phase-e-*.md`, `2026-09-30-phase-f-*.md`, `2026-10-05-final-goal-design.md` — see `docs/archive/`.
+- `docs/agents/{issue-tracker,triage-labels,domain}.md` — agent workflow docs.
+- Trace telemetry (Chrome/Perfetto) is implemented in `crates/sim-telemetry`; its schema lives in code, not in docs.
 
 ## 🚫 Merge/Push Authorization Rule
 

@@ -472,15 +472,13 @@ pub fn kick_execution_system(
     team_query: Query<&Team>,
     mut ball: ResMut<Ball>,
     mut pending: ResMut<PendingBallTouches>,
-    pending_pass: Option<ResMut<PendingPass>>,
-    pending_shot: Option<ResMut<PendingShot>>,
-    current_tick: Option<Res<CurrentTick>>,
-    match_clock: Option<Res<MatchClock>>,
+    mut pending_pass: ResMut<PendingPass>,
+    mut pending_shot: ResMut<PendingShot>,
+    current_tick: Res<CurrentTick>,
+    match_clock: Res<MatchClock>,
     telemetry: Option<Res<TelemetryConfig>>,
-    // Ticket 21: pass-accuracy RNG and tuning are optional so legacy test
-    // worlds without them still run (no deviation is applied when absent).
-    mut rng: Option<ResMut<SimRng>>,
-    tuning: Option<Res<Tuning>>,
+    mut rng: ResMut<SimRng>,
+    tuning: Res<Tuning>,
 ) {
     let Some(possessor) = ball.possessor else {
         return;
@@ -535,11 +533,11 @@ pub fn kick_execution_system(
     // legacy test worlds skip it).
     if matches!(intent, Intent::Action(ActionIntent::PassTo))
         && kick_dir.length() > 0.01
-        && let (Some(pass_rng), Some(passing_profile), Some(tuning)) =
-            (rng.as_deref_mut(), profile, tuning.as_deref())
+        && let Some(passing_profile) = profile
         && let Some(passing) = passing_profile.get(Attribute::Passing)
     {
-        let pass_error = pass_error_spread(passing, 1.0, tuning);
+        let pass_error = pass_error_spread(passing, 1.0, &tuning);
+        let pass_rng = &mut *rng;
         if pass_rng.gen_f32() < pass_error {
             let dev = pass_error * (3.0 / 60.0);
             kick_dir = (kick_dir
@@ -563,7 +561,7 @@ pub fn kick_execution_system(
         // applies it to `Ball.last_touch` at the start of the Rules set.
         // The same entity is recorded as both the kicker (during this
         // tick) and the last-toucher (after this tick).
-        let tick = current_tick.as_deref().map_or(0, |t| t.0);
+        let tick = current_tick.0;
         pending.0.push(
             LastTouch::by_player(possessor_player.team_id, possessor, TouchKind::Play)
                 .with_tick(tick),
@@ -591,21 +589,13 @@ pub fn kick_execution_system(
                 .iter()
                 .next()
                 .map_or(Vec2::zero(), |p| p.0);
-            // `PendingShot` is taken as `Option<ResMut<_>>` so legacy
-            // test worlds that don't register the resource still work.
-            // The real match always registers it via
-            // `Simulation::create_match`.
-            if let Some(mut pending_shot) = pending_shot {
-                pending_shot.0 = Some(PendingShotState {
-                    shooter: possessor,
-                    shooter_team: possessor_player.team_id,
-                    kick_tick: tick,
-                    kick_pos,
-                });
-            }
-            if let Some(mut pending_pass) = pending_pass {
-                let _ = pending_pass.cancel();
-            }
+            pending_shot.0 = Some(PendingShotState {
+                shooter: possessor,
+                shooter_team: possessor_player.team_id,
+                kick_tick: tick,
+                kick_pos,
+            });
+            let _ = pending_pass.cancel();
         } else if matches!(intent, Intent::Action(ActionIntent::PassTo)) {
             // Ball position at the kick (`start`). The position is
             // on the ball entity as a `Position` component; look it
@@ -616,28 +606,20 @@ pub fn kick_execution_system(
                 .iter()
                 .next()
                 .map_or(Vec2::zero(), |p| p.0);
-            let kick_tick = match_clock.as_deref().map_or(0, |c| c.elapsed_ticks);
-            // `PendingPass` is taken as `Option<ResMut<_>>` so
-            // legacy test worlds that don't register the resource
-            // still work. The real match always registers it via
-            // `Simulation::create_match`.
-            if let Some(mut pending_pass) = pending_pass {
-                pending_pass.active = true;
-                pending_pass.from = PlayerId::from_entity(possessor);
-                pending_pass.from_team = possessor_player.team_id;
-                pending_pass.intended_to = perception
-                    .nearby_teammates
-                    .first()
-                    .map(|t| PlayerId::from_entity(t.entity));
-                pending_pass.kick_tick = kick_tick;
-                pending_pass.kick_position = kick_pos;
-            }
+            let kick_tick = match_clock.elapsed_ticks;
+            pending_pass.active = true;
+            pending_pass.from = PlayerId::from_entity(possessor);
+            pending_pass.from_team = possessor_player.team_id;
+            pending_pass.intended_to = perception
+                .nearby_teammates
+                .first()
+                .map(|t| PlayerId::from_entity(t.entity));
+            pending_pass.kick_tick = kick_tick;
+            pending_pass.kick_position = kick_pos;
             // A pass kick supersedes any stale pending shot (defensive;
             // the shot resolver normally drains first — see above).
-            if let Some(mut stale_shot) = pending_shot {
-                stale_shot.0 = None;
-            }
-        } else if let Some(mut pending_pass) = pending_pass {
+            pending_shot.0 = None;
+        } else {
             // Any non-pass kick cancels a stale pending pass. This
             // shouldn't happen in normal play (a player with the
             // ball has only one intent at a time) but the defensive
@@ -646,9 +628,7 @@ pub fn kick_execution_system(
             let _ = pending_pass.cancel();
             // Same for a stale pending shot (defensive; the shot
             // resolver normally drains first — see above).
-            if let Some(mut stale_shot) = pending_shot {
-                stale_shot.0 = None;
-            }
+            pending_shot.0 = None;
         }
         // Emit a `pass` flow event when telemetry is on and this was a
         // pass. Shots / tackles don't carry identity of a "receiver", so
@@ -658,7 +638,7 @@ pub fn kick_execution_system(
             telemetry.is_some() && matches!(intent, Intent::Action(ActionIntent::PassTo)),
             perception.nearby_teammates.first().map(|t| t.entity),
         ) {
-            let tick = match_clock.as_deref().map_or(0, |c| c.elapsed_ticks);
+            let tick = match_clock.elapsed_ticks;
             let flow_id = NEXT_PASS_FLOW_ID.fetch_add(1, Ordering::Relaxed);
             sim_telemetry::emit::pass(
                 flow_id,
@@ -872,6 +852,10 @@ mod tests {
         });
         world.insert_resource(TelemetryConfig::new(60, None).expect("valid"));
         world.insert_resource(sim_rules::PendingPass::default());
+        world.insert_resource(sim_rules::PendingShot::default());
+        world.insert_resource(sim_rules::CurrentTick(100));
+        world.insert_resource(sim_physics::SimRng::new(1));
+        world.insert_resource(sim_math::Tuning::default());
 
         let events: EventVec = capture_trace(|| {
             let mut schedule = Schedule::default();
@@ -940,7 +924,17 @@ mod tests {
         });
         world.insert_resource(PendingBallTouches::default());
         world.insert_resource(sim_rules::PendingPass::default());
-        // No MatchClock, no TelemetryConfig: telemetry fully off.
+        world.insert_resource(sim_rules::PendingShot::default());
+        world.insert_resource(MatchClock {
+            elapsed_ticks: 100,
+            half: 1,
+            added_time_ticks: 0,
+            is_running: true,
+        });
+        world.insert_resource(sim_rules::CurrentTick(100));
+        world.insert_resource(sim_physics::SimRng::new(1));
+        world.insert_resource(sim_math::Tuning::default());
+        // No TelemetryConfig: telemetry fully off.
 
         let events: EventVec = capture_trace(|| {
             let mut schedule = Schedule::default();

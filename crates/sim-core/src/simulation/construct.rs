@@ -168,19 +168,11 @@ impl Simulation {
         away_setup: sim_components::TeamSetup,
     ) -> Self {
         let mut world = World::new();
-        // Phase 0 substrate: physics needs pitch dimensions. Insert the standard
-        // pitch as a resource so the registered ball physics system can resolve
-        // its `Res<PitchDimensions>` parameter.
-        world.insert_resource(sim_math::PitchDimensions::standard());
-        // Phase 2: insert the pitch control grid resource so the
-        // pitch_control_system (registered below) can mutate it in place.
-        world.insert_resource(sim_physics::PitchControlGrid::build_standard());
-        // Phase 3: insert the RNG as a resource for stochastic gameplay outcomes
-        // (tackle resolution, pass completion, shot accuracy).
-        world.insert_resource(sim_physics::SimRng::new(seed));
-        // Phase D: player_decision_system requires the evaluation counter
-        // (CODEBASE_REVIEW §7 — per-player decision cadence).
-        world.insert_resource(sim_ai_player::DecisionEvaluationCount::default());
+        // Install every resource the simulation's systems require as
+        // required `Res<T>` / `ResMut<T>`. After this, no system
+        // needs an `Option<Res<T>>` fallback — missing resources fail
+        // loudly instead of silently defaulting.
+        crate::world_installer::install_all_resources(&mut world, seed);
 
         let mut schedule = Schedule::default();
         let original_seed = seed;
@@ -218,42 +210,15 @@ impl Simulation {
         away_setup: sim_components::TeamSetup,
     ) -> (Entity, Entity, Entity) {
         use sim_components::{
-            Ball, BallMarker, HomeSlot, Match, MatchClock, MatchState,
-            PendingBallTouches, Player, Position, Team, TeamId, Velocity,
+            BallMarker, HomeSlot, Match, MatchClock, MatchState, Player, Position, Team, TeamId,
+            Velocity,
         };
-        use sim_math::{Tuning, Vec2};
+        use sim_math::Vec2;
 
-        // Create ball entity. Phase C §4.3: `Ball` is now a Resource, so the
-        // ball entity carries only `Position`, `Velocity`, and a `BallMarker`
-        // component (so systems can find it via Query without an
-        // `iter_entities` scan). `Ball` state lives in
-        // `world.resource::<Ball>()` and is the single source of truth for
-        // spin/state/possessor/last_touch/kick_velocity.
+        // All resources are pre-installed by `install_all_resources`
+        // (called from `new_with_setup`). `create_match` only spawns
+        // entities and attaches components.
         let ball_entity = world.spawn(()).id();
-        world.insert_resource(Ball {
-            spin: 0.0,
-            state: sim_components::BallState::Free,
-            possessor: None,
-            last_touch: None,
-            touch_history: [None, None],
-            kick_velocity: None,
-        });
-        world.insert_resource(PendingBallTouches::default());
-        world.insert_resource(sim_components::BallAirborne::default());
-        world.insert_resource(sim_rules::PendingOutOfBounds::default());
-        world.insert_resource(sim_rules::OobRestartForEmit::default());
-        world.insert_resource(sim_rules::PendingPass::default());
-        world.insert_resource(sim_rules::GoalForEmit::default());
-        world.insert_resource(sim_rules::KickoffForEmit::default());
-        world.insert_resource(sim_rules::PendingShot::default());
-        world.insert_resource(sim_rules::PendingTackle::default());
-        world.insert_resource(super::event_emit::PendingCross::default());
-        world.insert_resource(super::lifecycle::HalfTimeEntryTick { tick: None });
-        world.insert_resource(super::lifecycle::FirstHalfAddedTime(0));
-        world.insert_resource(crate::EventLog::new());
-        // Tuning is the single edit surface for mechanic calibration
-        // (PRD §11); every shot/save consumer reads through it.
-        world.insert_resource(Tuning::default());
         world.entity_mut(ball_entity).insert(BallMarker);
         world
             .entity_mut(ball_entity)
@@ -464,7 +429,10 @@ impl Simulation {
         // backwards compatibility with tests + external code that builds
         // worlds by hand; the Resource form is the source of truth.
         world.insert_resource(match_resource);
-        world.insert_resource(initial_clock.clone());
+        // MatchClock resource is pre-installed by `install_all_resources`;
+        // the Component form is preserved on the match entity for
+        // backwards compatibility with tests + external code that builds
+        // worlds by hand.
         world.entity_mut(match_entity).insert(initial_clock);
 
         // The referee lives for the whole match so `added_time_calculation_system`

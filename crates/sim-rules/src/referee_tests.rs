@@ -18,6 +18,14 @@ use crate::referee::{DEAD_BALL_STOPPAGE_REASON, stoppage_tracking_system};
 #[test]
 fn test_foul_detection_dangerous_play() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::CurrentTick(0));
+    world.insert_resource(crate::PendingPass::default());
+    world.insert_resource(crate::GoalForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+
+    world.insert_resource(crate::CurrentTick(0));
 
     world.insert_resource(sim_components::Match {
         id: 1,

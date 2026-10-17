@@ -357,6 +357,7 @@ fn test_defender_tackle() {
 fn test_decision_cadence_does_not_re_evaluate_every_tick() {
     use sim_ai_core::ResponseCurve as TestResponseCurve;
     let mut world = World::new();
+    crate::tests::install_ai_test_resources(&mut world);
 
     // Spawn a player + utility brain.
     let player_entity = world.spawn(()).id();
@@ -612,6 +613,14 @@ fn test_shoot_at_goal_sentinel_resolves_to_directional_goal() {
         world.insert_resource(clock.clone());
         world.entity_mut(match_entity).insert(clock);
         world.insert_resource(DecisionEvaluationCount::default());
+        world.insert_resource(sim_components::Ball {
+            spin: 0.0,
+            state: sim_components::BallState::Possessed,
+            possessor: Some(player_entity),
+            last_touch: None,
+            touch_history: [None, None],
+            kick_velocity: None,
+        });
 
         let mut schedule = Schedule::default();
         schedule.add_systems(player_decision_system);

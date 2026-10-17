@@ -201,7 +201,7 @@ fn goal_running_score_equals_fold_over_short_window() {
 fn goal_emitter_attributes_scorer_and_possession_change() {
     use bevy_ecs::prelude::{Schedule, World};
     use sim_components::{LastTouch, MatchClock, TouchKind};
-    use sim_rules::{GoalForEmit, GoalResolved};
+    use sim_rules::{CurrentTick, GoalForEmit, GoalResolved};
 
     let mut world = World::new();
     world.insert_resource(MatchClock {
@@ -210,6 +210,7 @@ fn goal_emitter_attributes_scorer_and_possession_change() {
         added_time_ticks: 0,
         is_running: true,
     });
+    world.insert_resource(CurrentTick(4_500));
     world.insert_resource(EventLog::new());
     let scorer_e = world.spawn(()).id();
     let assister_e = world.spawn(()).id();
@@ -259,7 +260,9 @@ fn shot_resolves_to_saved_with_catch_for_slow_ball() {
         Ball, BallMarker, BallState, LastTouch, MatchClock, Player, Position, Role, RoleComponent,
         TeamIdComponent, TouchKind, Velocity,
     };
-    use sim_rules::{PendingShot, PendingShotState};
+    use sim_math::Tuning;
+    use sim_physics::SimRng;
+    use sim_rules::{CurrentTick, GoalForEmit, OobRestartForEmit, PendingShot, PendingShotState};
 
     let mut world = World::new();
     world.insert_resource(MatchClock {
@@ -268,6 +271,11 @@ fn shot_resolves_to_saved_with_catch_for_slow_ball() {
         added_time_ticks: 0,
         is_running: true,
     });
+    world.insert_resource(CurrentTick(5_000));
+    world.insert_resource(GoalForEmit::default());
+    world.insert_resource(OobRestartForEmit::default());
+    world.insert_resource(Tuning::default());
+    world.insert_resource(SimRng::new(0));
     world.insert_resource(EventLog::new());
     let shooter = world.spawn(()).id();
     let keeper = world
@@ -487,6 +495,7 @@ fn goal_detection_and_emission_compose_in_one_schedule() {
     world.insert_resource(sim_rules::PendingPass::default());
     world.insert_resource(sim_rules::GoalForEmit::default());
     world.insert_resource(sim_rules::CurrentTick(4_500));
+    world.insert_resource(sim_rules::PendingOutOfBounds::default());
     let toucher = world.spawn(()).id();
     let touch = LastTouch::by_player(TeamId(0), toucher, TouchKind::Play).with_tick(4_500);
     world.insert_resource(Ball {
@@ -544,7 +553,7 @@ fn goal_detection_and_emission_compose_in_one_schedule() {
 fn kickoff_restart_emits_after_goal_without_attack_directions() {
     use bevy_ecs::prelude::{Schedule, World};
     use sim_components::MatchClock;
-    use sim_rules::{KickoffForEmit, KickoffResolved};
+    use sim_rules::{CurrentTick, KickoffForEmit, KickoffResolved};
 
     let mut world = World::new();
     world.insert_resource(MatchClock {
@@ -553,6 +562,7 @@ fn kickoff_restart_emits_after_goal_without_attack_directions() {
         added_time_ticks: 0,
         is_running: true,
     });
+    world.insert_resource(CurrentTick(5_100));
     world.insert_resource(EventLog::new());
     let taker = world.spawn(()).id();
     world.insert_resource(KickoffForEmit(Some(KickoffResolved {

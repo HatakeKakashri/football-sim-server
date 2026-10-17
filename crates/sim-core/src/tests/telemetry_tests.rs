@@ -263,6 +263,14 @@ fn stoppages_queued_on_different_recorded_ticks_are_all_reported() {
     // what was queued since the last one. Every entry must reach the
     // trace, not just the first.
     let mut world = World::new();
+    world.insert_resource(Ball {
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: None,
+        touch_history: [None, None],
+        kick_velocity: None,
+    });
     let referee = world
         .spawn(Referee {
             stoppage_events: vec![StoppageEvent {

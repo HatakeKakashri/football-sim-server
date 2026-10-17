@@ -15,6 +15,14 @@ use crate::touch::apply_ball_touched_system;
 #[test]
 fn test_possession_resolution() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::CurrentTick(0));
+    world.insert_resource(crate::PendingPass::default());
+    world.insert_resource(crate::GoalForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+
+    world.insert_resource(crate::CurrentTick(0));
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
@@ -67,6 +75,14 @@ fn test_possession_resolution() {
 #[test]
 fn test_possession_resolved_to_real_entity() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::CurrentTick(0));
+    world.insert_resource(crate::PendingPass::default());
+    world.insert_resource(crate::GoalForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+
+    world.insert_resource(crate::CurrentTick(0));
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
@@ -128,6 +144,14 @@ fn test_possession_resolved_to_real_entity() {
 #[test]
 fn test_possession_cleared_when_ball_free() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::CurrentTick(0));
+    world.insert_resource(crate::PendingPass::default());
+    world.insert_resource(crate::GoalForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+
+    world.insert_resource(crate::CurrentTick(0));
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
@@ -184,6 +208,14 @@ fn test_possession_cleared_when_ball_free() {
 #[test]
 fn test_possession_change_registers_play_touch() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::CurrentTick(0));
+    world.insert_resource(crate::PendingPass::default());
+    world.insert_resource(crate::GoalForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+
+    world.insert_resource(crate::CurrentTick(0));
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
@@ -295,6 +327,14 @@ fn test_possession_change_registers_play_touch() {
 #[test]
 fn test_interception_registers_play_touch_on_new_possessor() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::CurrentTick(0));
+    world.insert_resource(crate::PendingPass::default());
+    world.insert_resource(crate::GoalForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+
+    world.insert_resource(crate::CurrentTick(0));
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);

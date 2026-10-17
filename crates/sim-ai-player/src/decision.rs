@@ -60,7 +60,7 @@ pub fn player_decision_system(
         &RoleComponent,
         &TeamIdComponent,
     )>,
-    pitch_control: Option<Res<PitchControlGrid>>,
+    pitch_control: Res<PitchControlGrid>,
     // Phase F follow-up: MatchClock is a Resource (spec §3). Read it
     // directly via `Res<MatchClock>` instead of the previous
     // `Query<&MatchClock>` (which used a silent `.iter().next().map_or(0)`
@@ -71,7 +71,7 @@ pub fn player_decision_system(
     // which case the scratch buffer is never touched and nothing is emitted.
     gate: Option<Res<TraceGate>>,
     mut scratch: Local<DecisionTraceScratch>,
-    ball_res: Option<Res<Ball>>,
+    ball_res: Res<Ball>,
 ) {
     let tracing_decisions = gate.is_some_and(|g| g.decisions());
     // Snapshot the clock once per system run. Reading from `Res<MatchClock>`
@@ -90,7 +90,7 @@ pub fn player_decision_system(
         // Player passed the guard — count this evaluation.
         eval_count.0 += 1;
 
-        let is_possessor = ball_res.as_ref().is_some_and(|b| b.possessor == Some(entity));
+        let is_possessor = ball_res.possessor == Some(entity);
 
         // Evaluate each action.
         let mut best_action: Option<(Intent, f32)> = None;
@@ -113,7 +113,7 @@ pub fn player_decision_system(
                     intent: &action.intent,
                     stamina: stamina.0,
                     skill: skill.0,
-                    grid: pitch_control.as_deref(),
+                    grid: Some(&*pitch_control),
                     team_id: Some(team_id.0),
                     is_possessor,
                 };
@@ -136,7 +136,8 @@ pub fn player_decision_system(
                 Intent::Action(ActionIntent::PassTo | ActionIntent::ShootAtGoal(_))
             );
 
-            let action_permitted = ball_res.as_ref().is_none_or(|ball| {
+            let action_permitted = {
+                let ball = &*ball_res;
                 if is_possessor {
                     is_kicking_action
                 } else if ball.possessor.is_none() {
@@ -152,7 +153,7 @@ pub fn player_decision_system(
                 } else {
                     !is_kicking_action
                 }
-            });
+            };
 
             if consideration_scores.is_empty() {
                 // No considerations ⇒ fixed baseline.

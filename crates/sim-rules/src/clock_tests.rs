@@ -10,6 +10,7 @@ use sim_components::{MatchClock, Referee, StoppageEvent};
 
 use crate::added_time_calculation_system;
 use crate::match_duration_enforcement_system;
+use crate::CurrentTick;
 
 #[test]
 fn test_match_duration_enforcement() {
@@ -32,6 +33,7 @@ fn test_match_duration_enforcement() {
         is_running: true,
     });
 
+    world.insert_resource(CurrentTick(0));
     let mut schedule = Schedule::default();
     schedule.add_systems(match_duration_enforcement_system);
     schedule.run(&mut world);

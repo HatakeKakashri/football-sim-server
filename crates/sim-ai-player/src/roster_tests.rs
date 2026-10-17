@@ -7,9 +7,11 @@ use crate::{
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    Player, Position, Role, RoleComponent, Skill, Stamina, TeamId, TeamIdComponent, Velocity,
+    Ball, BallState, Player, Position, Role, RoleComponent, Skill, Stamina, TeamId,
+    TeamIdComponent, Velocity,
 };
 use sim_math::Vec2;
+use sim_physics::PitchControlGrid;
 
 /// Phase D regression: the cadence counter must not fire on ticks that
 /// do not match a player's slot. Spawning 22 players (a full roster)
@@ -44,6 +46,16 @@ fn test_cadence_full_roster_load_distribution() {
     };
     world.insert_resource(clock.clone());
     world.entity_mut(match_entity).insert(clock);
+    world.insert_resource(DecisionEvaluationCount::default());
+    world.insert_resource(PitchControlGrid::build_standard());
+    world.insert_resource(Ball {
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: None,
+        touch_history: [None, None],
+        kick_velocity: None,
+    });
 
     // 22-player roster (Phase 3 default), 11 per team.
     for team in 0..2u8 {

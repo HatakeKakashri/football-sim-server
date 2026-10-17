@@ -8,6 +8,7 @@
 //! - `validate_command` / `apply_validated_command` / `get_state_hash` / `tick`.
 
 mod simulation;
+pub mod world_installer;
 #[cfg(test)]
 mod tests;
 

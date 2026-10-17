@@ -10,10 +10,11 @@ use bevy_ecs::prelude::*;
 use serde_json::Value;
 use sim_ai_core::{ResponseCurve, geometric_mean};
 use sim_components::{
-    Intent, MatchClock, MovementIntent, PerceptionSnapshot, PitchBounds, Player, Role,
-    RoleComponent, Skill, Stamina, TeamId, TeamIdComponent,
+    Ball, BallState, Intent, MatchClock, MovementIntent, PerceptionSnapshot, PitchBounds, Player,
+    Role, RoleComponent, Skill, Stamina, TeamId, TeamIdComponent,
 };
 use sim_math::Vec2;
+use sim_physics::PitchControlGrid;
 use sim_telemetry::{TelemetryConfig, TraceGate, capture_trace};
 
 use crate::brain::intent_kind;
@@ -102,6 +103,15 @@ fn world_with_player() -> (World, Entity) {
         half: 1,
         added_time_ticks: 0,
         is_running: true,
+    });
+    world.insert_resource(PitchControlGrid::build_standard());
+    world.insert_resource(Ball {
+        spin: 0.0,
+        state: BallState::Free,
+        possessor: None,
+        last_touch: None,
+        touch_history: [None, None],
+        kick_velocity: None,
     });
     (world, player)
 }

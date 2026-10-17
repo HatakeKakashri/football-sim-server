@@ -94,7 +94,7 @@ pub fn trace_emission_system(
         &Velocity,
         &Stamina,
     )>,
-    ball: Option<Res<Ball>>,
+    ball: Res<Ball>,
     ball_body: Query<(&Position, &Velocity), With<BallMarker>>,
     referees: Query<&Referee>,
     mut tracker: Local<ChangeTracker>,
@@ -120,7 +120,7 @@ pub fn trace_emission_system(
         emit::counter(track, tick, "stamina", stamina.0);
     }
 
-    if let (Some(ball), Some((position, velocity))) = (ball, ball_body.iter().next()) {
+    if let Some((position, velocity)) = ball_body.iter().next() {
         emit::counter(BALL_TRACK, tick, "x", position.0.x);
         emit::counter(BALL_TRACK, tick, "y", position.0.y);
         emit::counter(BALL_TRACK, tick, "vx", velocity.0.x);

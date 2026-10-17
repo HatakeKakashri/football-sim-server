@@ -681,6 +681,9 @@ fn run_oob_scenario(
     world.insert_resource(sim_rules::PendingOutOfBounds::default());
     world.insert_resource(sim_rules::OobRestartForEmit::default());
     world.insert_resource(sim_rules::PendingPass::default());
+    world.insert_resource(sim_rules::PendingRestart::default());
+    world.insert_resource(sim_rules::KickoffForEmit::default());
+    world.insert_resource(sim_rules::GoalForEmit::default());
     world.insert_resource(sim_components::PendingBallTouches::default());
     world.insert_resource(sim_components::Match {
         id: 1,

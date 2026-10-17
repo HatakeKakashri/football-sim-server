@@ -26,6 +26,14 @@ use crate::{
     touch::apply_ball_touched_system,
 };
 
+/// Install every resource that sim-rules systems require as required
+/// `Res<T>` / `ResMut<T>`. Call this after `World::new()` in each test
+/// before inserting test-specific resources (e.g. a `Ball` with a
+/// specific `possessor`).
+pub fn install_rule_test_resources(world: &mut World) {
+    sim_core::world_installer::install_all_resources(world, 0);
+}
+
 /// Produces a test `Ball` resource with the given `state`.
 /// All other fields are zeroed; `possessor` and `last_touch` are `None`.
 ///
@@ -51,6 +59,15 @@ pub fn ball_fixture(_pos: Vec2, state: BallState) -> Ball {
 #[test]
 fn test_kickoff_restart_places_ball_at_center() {
     let mut world = World::new();
+    install_rule_test_resources(&mut world);
+    world.insert_resource(crate::PendingPass::default());
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::CurrentTick(0));
+    world.insert_resource(crate::PendingPass::default());
+    world.insert_resource(crate::GoalForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+
 
     world.insert_resource(sim_components::Match {
         id: 1,

@@ -171,27 +171,24 @@ fn shot_on_target(
 pub fn resolve_pass_events(
     mut event_log: ResMut<EventLog>,
     mut pending_pass: ResMut<PendingPass>,
-    pending_oob: Option<Res<PendingOutOfBounds>>,
-    mut goal_for_emit: Option<ResMut<GoalForEmit>>,
+    pending_oob: Res<PendingOutOfBounds>,
+    mut goal_for_emit: ResMut<GoalForEmit>,
     ball: Res<Ball>,
     ball_query: Query<&Position, With<BallMarker>>,
     clock: Res<MatchClock>,
-    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    current_tick: Res<sim_rules::CurrentTick>,
     team_query: Query<(Entity, &sim_components::TeamIdComponent)>,
 ) {
     // The ball's current position is the `end` of any pass we
     // resolve here. If the entity is missing (test fixture),
     // `Vec2::zero()` is a defensive placeholder.
     let ball_pos = ball_query.iter().next().map_or(Vec2::zero(), |p| p.0);
-    let tick = current_tick.map_or(0, |c| c.0);
+    let tick = current_tick.0;
 
     // OOB arm: the OOB detector set `PendingOutOfBounds` on this
     // tick. Resolve the pending pass with `to = None` and
     // `success = false`, then drain the OOB signal.
-    if let Some(oob) = pending_oob
-        && oob.get().is_some()
-        && let Some(pass) = pending_pass.take()
-    {
+    if pending_oob.get().is_some() && let Some(pass) = pending_pass.take() {
         let event = build_pass_event(
             event_log.next_seq,
             tick,
@@ -212,11 +209,7 @@ pub fn resolve_pass_events(
     // Goal arm (ticket 10): the ball crossed the line while a pass
     // was in flight. Resolve with `to = None` and `success = false`
     // — the pass never reached a teammate.
-    if goal_for_emit
-        .as_deref()
-        .is_some_and(|g| g.0.is_some())
-        && let Some(pass) = pending_pass.take()
-    {
+    if goal_for_emit.0.is_some() && let Some(pass) = pending_pass.take() {
         let event = build_pass_event(
             event_log.next_seq,
             tick,
@@ -235,9 +228,7 @@ pub fn resolve_pass_events(
     // chain (`emit_goal_events` and `resolve_shot_events` ran
     // earlier), so clearing here keeps a stale signal from re-firing
     // on the next tick.
-    if let Some(ref mut slot) = goal_for_emit {
-        slot.0 = None;
-    }
+    goal_for_emit.0 = None;
 
     // Acquisition arm: the ball is now Possessed and a pass was
     // in flight. Resolve it. The possessor's team is read from
@@ -294,7 +285,7 @@ pub fn emit_possession_change_on_acquisition(
     mut event_log: ResMut<EventLog>,
     ball: Res<Ball>,
     team_query: Query<(Entity, &sim_components::TeamIdComponent)>,
-    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
     if ball.state != BallState::Possessed {
@@ -325,7 +316,7 @@ pub fn emit_possession_change_on_acquisition(
         event_log.possession_team = Some(new_team);
         return;
     };
-    let tick = current_tick.map_or(0, |c| c.0);
+    let tick = current_tick.0;
     let event = build_possession_change_event(
         event_log.next_seq,
         tick,
@@ -351,12 +342,13 @@ pub fn emit_possession_change_on_acquisition(
 /// only fires for the OOB family.
 pub fn emit_possession_change_on_oob(
     mut event_log: ResMut<EventLog>,
-    pending_oob: Option<Res<PendingOutOfBounds>>,
+    pending_oob: Res<PendingOutOfBounds>,
     ball: Res<Ball>,
-    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(oob) = pending_oob else {
+    let oob = pending_oob;
+    let Some(_oob_event) = oob.get() else {
         return;
     };
     let Some(_oob_event) = oob.get() else {
@@ -382,7 +374,7 @@ pub fn emit_possession_change_on_oob(
         // acquisition arm should have fired. Skip.
         return;
     }
-    let tick = current_tick.map_or(0, |c| c.0);
+    let tick = current_tick.0;
     let event = build_possession_change_event(
         event_log.next_seq,
         tick,
@@ -410,17 +402,15 @@ pub fn emit_possession_change_on_oob(
 /// (last) owns the drain.
 pub fn emit_goal_events(
     mut event_log: ResMut<EventLog>,
-    goal_for_emit: Option<Res<GoalForEmit>>,
-    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    goal_for_emit: Res<GoalForEmit>,
+    current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(slot) = goal_for_emit.as_deref() else {
-        return;
-    };
+    let slot = &goal_for_emit;
     let Some(resolved) = slot.0 else {
         return;
     };
-    let tick = current_tick.map_or(0, |c| c.0);
+    let tick = current_tick.0;
     let attribution = attribute_goal(
         resolved.scorer_team,
         [
@@ -469,17 +459,15 @@ pub fn emit_goal_events(
 /// world.
 pub fn emit_kickoff_restart_events(
     mut event_log: ResMut<EventLog>,
-    mut kickoff_for_emit: Option<ResMut<KickoffForEmit>>,
-    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    mut kickoff_for_emit: ResMut<KickoffForEmit>,
+    current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(ref mut slot) = kickoff_for_emit else {
-        return;
-    };
+    let slot = &mut kickoff_for_emit;
     let Some(resolved) = slot.0 else {
         return;
     };
-    let tick = current_tick.map_or(0, |c| c.0);
+    let tick = current_tick.0;
     // Map the (possibly placeholder) entity to a PlayerId. Real
     // matches always have a player on the taker team so this
     // resolves to `Some`; sparse test worlds collapse to `None`.
@@ -530,9 +518,9 @@ pub fn emit_kickoff_restart_events(
 )]
 pub fn resolve_shot_events(
     mut event_log: ResMut<EventLog>,
-    mut pending_shot: Option<ResMut<PendingShot>>,
-    goal_for_emit: Option<Res<GoalForEmit>>,
-    oob_for_emit: Option<Res<OobRestartForEmit>>,
+    mut pending_shot: ResMut<PendingShot>,
+    goal_for_emit: Res<GoalForEmit>,
+    oob_for_emit: Res<OobRestartForEmit>,
     ball: Res<Ball>,
     ball_vel: Query<&Velocity, With<BallMarker>>,
     team_query: Query<(
@@ -541,25 +529,20 @@ pub fn resolve_shot_events(
         Option<&RoleComponent>,
         Option<&PlayerProfile>,
     )>,
-    tuning: Option<Res<Tuning>>,
-    mut rng: Option<ResMut<SimRng>>,
-    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    tuning: Res<Tuning>,
+    mut rng: ResMut<SimRng>,
+    current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(ref mut slot) = pending_shot else {
-        return;
-    };
+    let slot = &mut pending_shot;
     let Some(shot_state) = slot.0 else {
         return;
     };
-    let tick = current_tick.map_or(0, |c| c.0);
+    let tick = current_tick.0;
     let shooter_id = PlayerId::from_entity(shot_state.shooter);
 
     // Goal arm: the shot went straight in.
-    if goal_for_emit
-        .as_deref()
-        .is_some_and(|g| g.0.is_some())
-    {
+    if goal_for_emit.0.is_some() {
         let event = build_shot_event(
             event_log.next_seq,
             tick,
@@ -575,7 +558,7 @@ pub fn resolve_shot_events(
     }
 
     // OOB arm: resolved restart kind decides on-target vs off-target.
-    if let Some(resolved) = oob_for_emit.as_deref().and_then(|o| o.0) {
+    if let Some(resolved) = oob_for_emit.0 {
         let (on_target, outcome) = match resolved.oob_type {
             BallOutOfBoundsType::Corner => (true, ShotOutcome::Blocked),
             BallOutOfBoundsType::ThrowIn | BallOutOfBoundsType::GoalKick => {
@@ -626,8 +609,8 @@ pub fn resolve_shot_events(
             let on_target = shot_on_target(
                 shot_state.shooter,
                 &team_query,
-                tuning.as_deref(),
-                rng.as_deref_mut(),
+                Some(&*tuning),
+                Some(&mut *rng),
             )
             .unwrap_or(true);
             (on_target, ShotOutcome::Saved)
@@ -675,18 +658,16 @@ pub fn resolve_shot_events(
 /// `tackle` event per attempt with `tackler`, `carrier`, `success`.
 pub fn emit_tackle_events(
     mut event_log: ResMut<EventLog>,
-    mut pending_tackle: Option<ResMut<sim_rules::PendingTackle>>,
-    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    mut pending_tackle: ResMut<sim_rules::PendingTackle>,
+    current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
     team_query: Query<(Entity, &sim_components::TeamIdComponent)>,
 ) {
-    let Some(ref mut slot) = pending_tackle else {
-        return;
-    };
+    let slot = &mut pending_tackle;
     let Some(attempt) = slot.take() else {
         return;
     };
-    let tick = current_tick.map_or(0, |c| c.0);
+    let tick = current_tick.0;
     let tackler_team = team_query
         .iter()
         .find(|(e, _)| *e == attempt.tackler)
@@ -715,17 +696,15 @@ pub fn emit_tackle_events(
 )]
 pub fn emit_cross_header_events(
     mut event_log: ResMut<EventLog>,
-    mut pending_cross: Option<ResMut<PendingCross>>,
-    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    mut pending_cross: ResMut<PendingCross>,
+    current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(ref mut slot) = pending_cross else {
-        return;
-    };
+    let slot = &mut pending_cross;
     let Some(resolved) = slot.take() else {
         return;
     };
-    let tick = current_tick.map_or(0, |c| c.0);
+    let tick = current_tick.0;
     let cross = build_cross_event(
         event_log.next_seq,
         tick,
@@ -783,17 +762,15 @@ pub fn emit_cross_header_events(
 )]
 pub fn emit_oob_and_restart_events(
     mut event_log: ResMut<EventLog>,
-    mut oob_for_emit: Option<ResMut<OobRestartForEmit>>,
-    current_tick: Option<Res<sim_rules::CurrentTick>>,
+    mut oob_for_emit: ResMut<OobRestartForEmit>,
+    current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(ref mut slot) = oob_for_emit else {
-        return;
-    };
+    let slot = &mut oob_for_emit;
     let Some(resolved) = slot.0 else {
         return;
     };
-    let tick = current_tick.map_or(0, |c| c.0);
+    let tick = current_tick.0;
     let kind = RestartKind::from_oob(resolved.oob_type);
     // The OOB event's `team` is the last-touch team (the team whose
     // touch sent the ball out). `last_touch` carries the full record

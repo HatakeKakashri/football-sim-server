@@ -20,6 +20,8 @@ use crate::{
 #[test]
 fn test_goal_scored_home_team() {
     let mut world = World::new();
+    sim_core::world_installer::install_all_resources(&mut world, 0);
+    world.insert_resource(crate::GoalForEmit::default());
 
     // Match is now a Resource (Phase C §4.3).
     world.insert_resource(sim_components::Match {
@@ -175,6 +177,11 @@ fn test_goal_detection_stashes_emit_slot() {
 #[test]
 fn test_goal_scored_away_team() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+    world.insert_resource(crate::GoalForEmit::default());
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -243,6 +250,11 @@ fn test_goal_scored_away_team() {
 #[test]
 fn test_no_double_goal_when_ball_dead() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+    world.insert_resource(crate::GoalForEmit::default());
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -286,6 +298,11 @@ fn test_no_double_goal_when_ball_dead() {
 #[test]
 fn test_kickoff_restart_registers_restart_touch() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+    world.insert_resource(crate::GoalForEmit::default());
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -363,6 +380,11 @@ fn test_kickoff_restart_registers_restart_touch() {
 #[test]
 fn test_goal_scorer_threads_into_post_goal_kickoff_taker() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+    world.insert_resource(crate::GoalForEmit::default());
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -419,6 +441,11 @@ fn test_goal_scorer_threads_into_post_goal_kickoff_taker() {
 #[test]
 fn test_missed_shot_gives_goal_kick() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+    world.insert_resource(crate::GoalForEmit::default());
 
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {
@@ -484,6 +511,11 @@ fn test_missed_shot_gives_goal_kick() {
 #[test]
 fn test_deflected_shot_gives_corner() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+    world.insert_resource(crate::GoalForEmit::default());
 
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {
@@ -550,6 +582,11 @@ fn test_deflected_shot_gives_corner() {
 #[test]
 fn test_throw_in_to_opposite_team() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+    world.insert_resource(crate::GoalForEmit::default());
 
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {
@@ -656,6 +693,11 @@ fn test_throw_in_to_opposite_team() {
 #[test]
 fn test_oob_restart_reads_signal_same_run_without_sync_point() {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+    world.insert_resource(crate::GoalForEmit::default());
 
     let toucher = world.spawn((Player { team_id: TeamId(0), intent: None }, TeamIdComponent(TeamId(0)))).id();
     let taker = world.spawn((Player { team_id: TeamId(1), intent: None }, TeamIdComponent(TeamId(1)))).id();
@@ -731,6 +773,11 @@ fn spawn_teams(world: &mut World, home_direction: i8) {
 /// return the resulting score plus the scorer carried by the goal event.
 fn score_for_ball_at(ball_x: f32, home_direction: i8) -> ((u8, u8), TeamId) {
     let mut world = World::new();
+    crate::tests::install_rule_test_resources(&mut world);
+    world.insert_resource(crate::KickoffForEmit::default());
+    world.insert_resource(crate::OobRestartForEmit::default());
+    world.insert_resource(crate::PendingRestart::default());
+    world.insert_resource(crate::GoalForEmit::default());
     world.insert_resource(sim_components::Match {
         id: 1,
         home_team: Entity::PLACEHOLDER,

@@ -13,6 +13,8 @@ use crate::brain::intent_kind;
 use crate::{Consideration, ConsiderationContext, tactical_thresholds};
 
 use bevy_ecs::prelude::*;
+use sim_physics::PitchControlGrid;
+use sim_components::{Ball, BallState};
 use sim_ai_core::ResponseCurve;
 use sim_components::{ActionIntent, Intent, MovementIntent};
 use sim_math::Vec2;
@@ -63,6 +65,8 @@ pub fn run_one_cadence_window(
     schedule: &mut Schedule,
     match_entity: Entity,
 ) -> u64 {
+    // Ensure resources required by `player_decision_system` are present.
+    install_ai_test_resources(world);
     for _ in 0..crate::DECISION_CADENCE_TICKS {
         // Phase F follow-up: MatchClock is a Resource (spec §3). Update
         // both forms — the Resource is the source of truth for systems;
@@ -85,6 +89,25 @@ pub fn run_one_cadence_window(
     world
         .get_resource::<sim_components::MatchClock>()
         .map_or(0, |c| c.elapsed_ticks)
+}
+
+/// Install the resources that `player_decision_system` requires as
+/// required `Res<T>` parameters. Call this in each test after
+/// `World::new()` so the system doesn't panic on missing resources.
+pub fn install_ai_test_resources(world: &mut World) {
+    world.insert_resource(PitchControlGrid::build_standard());
+    // Only install a default Ball if the test hasn't already set one
+    // (tests that need a specific possessor insert Ball themselves).
+    if world.get_resource::<Ball>().is_none() {
+        world.insert_resource(Ball {
+            spin: 0.0,
+            state: BallState::Free,
+            possessor: None,
+            last_touch: None,
+            touch_history: [None, None],
+            kick_velocity: None,
+        });
+    }
 }
 
 /// Phase E PR 4b: the string labels produced by `intent_kind` must

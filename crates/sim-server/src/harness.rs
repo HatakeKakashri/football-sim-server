@@ -384,29 +384,6 @@ mod tests {
         assert_eq!(TICK_CAP, 400_000);
     }
 
-    /// A8 event ordering: `seq` must be strictly gapless-monotonic
-    /// across the whole match (PRD §13.1 A8, §9.1).
-    ///
-    /// This is the A8 check surfaced as a `SeedReport` field; the
-    /// harness writes `true` when the final event log passes
-    /// `check_gapless_seq`, and the field is otherwise `false`.
-    ///
-    /// `#[ignore]`'d (PRD §14: full-match tests run manually in
-    /// release). Run with:
-    ///
-    /// ```text
-    /// cargo test --release -p sim-server --lib -- --ignored event_order
-    /// ```
-    #[test]
-    #[ignore = "full-match test is minutes-long; run explicitly when verifying the A8 metric"]
-    fn seed_report_has_event_order_ok_field() {
-        let report = play_one(12345);
-        // The field exists and is a bool. Whether `true` or `false`
-        // depends on the run; the field's mere presence proves the
-        // harness carries the A8 measurement.
-        let _ = report.0.event_order_ok;
-    }
-
     /// `event_order_ok` is true for the canonical seed (12345), since
     /// the event-log invariant holds across the existing tests.
     /// The seed's score / state are deterministic.

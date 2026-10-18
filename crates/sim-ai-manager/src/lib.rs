@@ -141,8 +141,16 @@ mod tests {
     };
     use sim_math::Vec2;
 
+    /// The decision system records the clock tick it evaluated at.
+    ///
+    /// Scope note: the aggressive/defensive branches only emit
+    /// `tracing::debug!` and have no observable effect, so the *tactic*
+    /// outcome cannot be asserted. With this fixture (score 1–3 at minute 70)
+    /// the weighted score is about -0.4, below the ±0.5 thresholds, so
+    /// neither branch fires anyway. (Previously named
+    /// `test_manager_decision_aggressive_tactics`.)
     #[test]
-    fn test_manager_decision_aggressive_tactics() {
+    fn test_manager_decision_records_evaluation_tick() {
         let mut world = World::new();
 
         world.insert_resource(Match {
@@ -211,7 +219,11 @@ mod tests {
         schedule.run(&mut world);
 
         let manager = world.entity(manager_entity).get::<Manager>().unwrap();
-        assert!(manager.last_decision_tick > 0);
+        assert_eq!(
+            manager.last_decision_tick,
+            70 * 60,
+            "manager must record the clock's elapsed_ticks as its last decision tick"
+        );
     }
 
     #[test]

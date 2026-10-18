@@ -1096,9 +1096,24 @@ mod tests {
 
     #[test]
     fn test_chebyshev_distance_gk_sentinel() {
-        // GK returns (0,0) which should give non-zero distance to any other slot
-        // This is expected behavior since GK is not on the grid.
-        assert!(chebyshev_distance(PositionSlot::GK, PositionSlot::DC) > 0);
+        // GK maps to the off-grid sentinel (0,0), so it must be at non-zero
+        // distance from every other slot (in both directions) and at distance
+        // 0 from itself.
+        assert_eq!(chebyshev_distance(PositionSlot::GK, PositionSlot::GK), 0);
+        for slot in [
+            PositionSlot::DL, PositionSlot::DC, PositionSlot::DR,
+            PositionSlot::DML, PositionSlot::DMC, PositionSlot::DMR,
+            PositionSlot::ML, PositionSlot::MC, PositionSlot::MR,
+            PositionSlot::AML, PositionSlot::AMC, PositionSlot::AMR,
+            PositionSlot::ST,
+        ] {
+            assert!(chebyshev_distance(PositionSlot::GK, slot) > 0, "GK -> {slot:?}");
+            assert_eq!(
+                chebyshev_distance(PositionSlot::GK, slot),
+                chebyshev_distance(slot, PositionSlot::GK),
+                "distance must be symmetric for {slot:?}"
+            );
+        }
     }
 
     #[test]

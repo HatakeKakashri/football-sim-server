@@ -10,6 +10,7 @@
 - [ ] Single-consideration actions score identically to before.
 - [ ] Golden tests updated with a PR table of old vs new winner and score; no unexplained winner flips.
 - [ ] Trace consideration entries carry the weight used by the aggregate (trace test).
+- [ ] The ChaseBall aggregate literal in the trace tests (ticket 25) moves from about 0.527 to about 0.428; the PR shows the hand calculation.
 - [ ] Tactic signature tests in `sim-core` still pass (press count, pass length, line height).
 - [ ] `cargo test --workspace` green; `cargo clippy --workspace --all-targets -- -D warnings` clean.
 - [ ] Ignored playability gate re-run in release (`cargo test --release -p sim-core -- --ignored phase_0_playability_gate --nocapture`) and its four metrics reported in the PR; no regression versus the pre-change run.

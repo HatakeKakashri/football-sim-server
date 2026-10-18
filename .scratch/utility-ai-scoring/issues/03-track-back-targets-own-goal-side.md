@@ -9,5 +9,6 @@
 - [ ] Steering test: home player first half, away player first half, and both after the swap each move towards their own goal side.
 - [ ] Steering returns a target for every team and half; speed unchanged from today.
 - [ ] Existing steering tests for other intents unchanged.
+- [ ] The existing `steer_target` test that pins the `TrackBack` target to the literal (0, 34) is rewritten: it must assert the new own-goal-side behaviour, not the old constant (TDD audit).
 - [ ] No literal pitch coordinate for the target remains in the dispatch table.
 - [ ] `cargo test --workspace` green; `cargo clippy --workspace --all-targets -- -D warnings` clean.

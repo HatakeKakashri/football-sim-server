@@ -7,7 +7,7 @@
 **Status:** ready-for-agent
 
 - [ ] Table-driven unit test covers every ball relation (self possesses, nobody possesses, other possesses) against all 11 intent kinds.
-- [ ] No ball resource present keeps today's 'everything permitted' behaviour (test).
+- [ ] The function takes the possessor relation as input; 'no ball' is not representable, because `Ball` is a required resource since the WorldInstaller change (that case is already covered by the required-resource tests).
 - [ ] Golden tests from ticket 05 pass unchanged.
 - [ ] Decision system no longer contains the permission logic inline.
 - [ ] `cargo test --workspace` green; `cargo clippy --workspace --all-targets -- -D warnings` clean.

@@ -42,7 +42,7 @@ fn events_emitted_in_short_window_have_gapless_seq() {
 #[test]
 fn pass_event_has_correct_kick_tick_and_success() {
     // Build a pass event directly to pin the payload shape.
-    let mut world = bevy_ecs::prelude::World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(sim_components::MatchClock {
         elapsed_ticks: 1_000,
         half: 1,
@@ -81,7 +81,7 @@ fn pass_event_has_correct_kick_tick_and_success() {
 
 #[test]
 fn possession_change_event_has_cause_and_teams() {
-    let mut world = bevy_ecs::prelude::World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(sim_components::MatchClock {
         elapsed_ticks: 2_000,
         half: 1,
@@ -199,11 +199,11 @@ fn goal_running_score_equals_fold_over_short_window() {
 /// `goal` to the conceding team.
 #[test]
 fn goal_emitter_attributes_scorer_and_possession_change() {
-    use bevy_ecs::prelude::{Schedule, World};
+    use bevy_ecs::prelude::Schedule;
     use sim_components::{LastTouch, MatchClock, TouchKind};
     use sim_rules::{CurrentTick, GoalForEmit, GoalResolved};
 
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(MatchClock {
         elapsed_ticks: 4_500,
         half: 1,
@@ -255,7 +255,7 @@ fn goal_emitter_attributes_scorer_and_possession_change() {
 /// caught.
 #[test]
 fn shot_resolves_to_saved_with_catch_for_slow_ball() {
-    use bevy_ecs::prelude::{Schedule, World};
+    use bevy_ecs::prelude::Schedule;
     use sim_components::{
         Ball, BallMarker, BallState, LastTouch, MatchClock, Player, Position, Role, RoleComponent,
         TeamIdComponent, TouchKind, Velocity,
@@ -264,7 +264,7 @@ fn shot_resolves_to_saved_with_catch_for_slow_ball() {
     use sim_physics::SimRng;
     use sim_rules::{CurrentTick, GoalForEmit, OobRestartForEmit, PendingShot, PendingShotState};
 
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(MatchClock {
         elapsed_ticks: 5_000,
         half: 1,
@@ -350,7 +350,7 @@ fn shot_resolves_to_saved_with_catch_for_slow_ball() {
 /// `header` event on the next `seq` (same tick).
 #[test]
 fn cross_resolves_to_cross_and_header_events() {
-    use bevy_ecs::prelude::{Schedule, World};
+    use bevy_ecs::prelude::Schedule;
     use sim_components::{MatchClock, PlayerId, TeamId};
     use sim_rules::CurrentTick;
     use sim_math::Vec2;
@@ -360,7 +360,7 @@ fn cross_resolves_to_cross_and_header_events() {
     };
     use crate::simulation::events::{CrossOutcome, HeaderKind, HeaderOutcome};
 
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(MatchClock {
         elapsed_ticks: 7_000,
         half: 1,
@@ -421,7 +421,7 @@ fn cross_resolves_to_cross_and_header_events() {
 /// event with no companion `header`.
 #[test]
 fn cross_without_header_emits_only_cross() {
-    use bevy_ecs::prelude::{Schedule, World};
+    use bevy_ecs::prelude::Schedule;
     use sim_components::{MatchClock, PlayerId, TeamId};
     use sim_rules::CurrentTick;
     use sim_math::Vec2;
@@ -431,7 +431,7 @@ fn cross_without_header_emits_only_cross() {
     };
     use crate::simulation::events::CrossOutcome;
 
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(MatchClock {
         elapsed_ticks: 7_000,
         half: 1,
@@ -475,7 +475,7 @@ fn goal_detection_and_emission_compose_in_one_schedule() {
         Position, TouchKind, Velocity,
     };
 
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(MatchClock {
         elapsed_ticks: 4_500,
         half: 1,
@@ -551,11 +551,11 @@ fn goal_detection_and_emission_compose_in_one_schedule() {
 /// no attack directions.
 #[test]
 fn kickoff_restart_emits_after_goal_without_attack_directions() {
-    use bevy_ecs::prelude::{Schedule, World};
+    use bevy_ecs::prelude::Schedule;
     use sim_components::MatchClock;
     use sim_rules::{CurrentTick, KickoffForEmit, KickoffResolved};
 
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(MatchClock {
         elapsed_ticks: 5_100,
         half: 1,

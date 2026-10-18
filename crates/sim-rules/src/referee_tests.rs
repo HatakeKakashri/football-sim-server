@@ -11,21 +11,14 @@ use sim_components::{
 };
 use sim_math::Vec2;
 
+use crate::tests::rules_world;
 use crate::CurrentTick;
 use crate::foul_detection_system;
 use crate::referee::{DEAD_BALL_STOPPAGE_REASON, stoppage_tracking_system};
 
 #[test]
 fn test_foul_detection_dangerous_play() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -102,7 +95,7 @@ fn test_foul_detection_dangerous_play() {
 /// given state, a `Match` resource in the given state, one `Referee`
 /// entity, and the tick counter.
 fn stoppage_test_world(ball_state: BallState, match_state: MatchState) -> (World, Entity) {
-    let mut world = World::new();
+    let mut world = rules_world();
     world.insert_resource(Ball {
         spin: 0.0,
         state: ball_state,

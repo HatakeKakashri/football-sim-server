@@ -14,12 +14,15 @@ mod goals_tests;
 pub(crate) mod out_of_bounds;
 #[cfg(test)]
 mod out_of_bounds_tests;
+pub(crate) mod install;
 pub(crate) mod possession;
 #[cfg(test)]
 mod possession_tests;
 pub(crate) mod referee;
 #[cfg(test)]
 mod referee_tests;
+#[cfg(test)]
+mod required_resources_tests;
 #[cfg(test)]
 mod tests;
 pub(crate) mod touch;
@@ -31,6 +34,7 @@ pub use emit_state::{
     GoalForEmit, GoalResolved, KickoffForEmit, KickoffResolved, PendingShot, PendingShotState,
 };
 pub use goals::{goal_detection_system, restart_system};
+pub use install::install_rules_resources;
 pub use out_of_bounds::out_of_bounds_system;
 pub use possession::possession_resolution_system;
 pub use referee::{foul_detection_system, minimum_player_count_system, stoppage_tracking_system};
@@ -95,7 +99,7 @@ pub struct OutOfBoundsEvent {
 /// The out-of-bounds restart awaiting resolution, if any.
 ///
 /// Must be present in any world that runs `out_of_bounds_system` or
-/// `restart_system` (`Simulation::create_match` inserts it).
+/// `restart_system` (`install_rules_resources` inserts it).
 /// `out_of_bounds_system` writes it via [`Self::set`]; `restart_system`
 /// drains it via [`Self::take`].
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]

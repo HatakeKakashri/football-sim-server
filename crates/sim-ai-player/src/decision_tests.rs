@@ -1,6 +1,7 @@
 //! Integration tests for the decision cadence systems. Compiled only
 //! under `cfg(test)`.
 
+use crate::tests::ai_world;
 use crate::tests::run_one_cadence_window;
 use crate::{
     Consideration, DecisionEvaluationCount, PlayerAction, UtilityBrain,
@@ -16,7 +17,7 @@ use sim_math::Vec2;
 #[test]
 fn test_stamina_based_decision() {
     // Test that low stamina player conserves energy
-    let mut world = World::new();
+    let mut world = ai_world();
 
     // Create a player with low stamina
     let player_entity = world.spawn(()).id();
@@ -113,7 +114,7 @@ fn test_stamina_based_decision() {
 #[test]
 fn test_passing_option() {
     // Test that player considers teammates in better positions
-    let mut world = World::new();
+    let mut world = ai_world();
 
     // Create a player
     let player_entity = world.spawn(()).id();
@@ -225,7 +226,7 @@ fn test_passing_option() {
 #[test]
 fn test_defender_tackle() {
     // Test that defender attempts tackle when attacker shoots
-    let mut world = World::new();
+    let mut world = ai_world();
 
     // Create an attacker with shoot intent
     let attacker_entity = world.spawn(()).id();
@@ -356,8 +357,7 @@ fn test_defender_tackle() {
 #[test]
 fn test_decision_cadence_does_not_re_evaluate_every_tick() {
     use sim_ai_core::ResponseCurve as TestResponseCurve;
-    let mut world = World::new();
-    crate::tests::install_ai_test_resources(&mut world);
+    let mut world = ai_world();
 
     // Spawn a player + utility brain.
     let player_entity = world.spawn(()).id();
@@ -475,7 +475,7 @@ fn test_decision_cadence_does_not_re_evaluate_every_tick() {
 
 #[test]
 fn test_move_to_position_sentinel_resolves_to_home_slot() {
-    let mut world = World::new();
+    let mut world = ai_world();
 
     let player_entity = world.spawn(()).id();
     world.entity_mut(player_entity).insert(Player {
@@ -559,7 +559,7 @@ fn test_move_to_position_sentinel_resolves_to_home_slot() {
 #[test]
 fn test_shoot_at_goal_sentinel_resolves_to_directional_goal() {
     for direction in [1_i8, -1_i8] {
-        let mut world = World::new();
+        let mut world = ai_world();
 
         let player_entity = world
             .spawn((
@@ -603,6 +603,14 @@ fn test_shoot_at_goal_sentinel_resolves_to_directional_goal() {
                 },
             });
 
+        // The striker holds the ball (matching the perception snapshot
+        // above), so a kicking action is permitted.
+        {
+            let mut ball = world.resource_mut::<sim_components::Ball>();
+            ball.state = sim_components::BallState::Possessed;
+            ball.possessor = Some(player_entity);
+        }
+
         let match_entity = world.spawn(()).id();
         let clock = sim_components::MatchClock {
             elapsed_ticks: 0,
@@ -613,14 +621,6 @@ fn test_shoot_at_goal_sentinel_resolves_to_directional_goal() {
         world.insert_resource(clock.clone());
         world.entity_mut(match_entity).insert(clock);
         world.insert_resource(DecisionEvaluationCount::default());
-        world.insert_resource(sim_components::Ball {
-            spin: 0.0,
-            state: sim_components::BallState::Possessed,
-            possessor: Some(player_entity),
-            last_touch: None,
-            touch_history: [None, None],
-            kick_velocity: None,
-        });
 
         let mut schedule = Schedule::default();
         schedule.add_systems(player_decision_system);

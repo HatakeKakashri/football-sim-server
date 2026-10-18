@@ -74,6 +74,7 @@ pub fn player_decision_system(
     ball_res: Res<Ball>,
 ) {
     let tracing_decisions = gate.is_some_and(|g| g.decisions());
+    let grid = pitch_control.into_inner();
     // Snapshot the clock once per system run. Reading from `Res<MatchClock>`
     // is a single pointer indirection — faster than the previous
     // `Query<&MatchClock>::iter().next()` lookup and free of the silent
@@ -113,7 +114,7 @@ pub fn player_decision_system(
                     intent: &action.intent,
                     stamina: stamina.0,
                     skill: skill.0,
-                    grid: Some(&*pitch_control),
+                    grid: Some(grid),
                     team_id: Some(team_id.0),
                     is_possessor,
                 };
@@ -136,23 +137,20 @@ pub fn player_decision_system(
                 Intent::Action(ActionIntent::PassTo | ActionIntent::ShootAtGoal(_))
             );
 
-            let action_permitted = {
-                let ball = &*ball_res;
-                if is_possessor {
-                    is_kicking_action
-                } else if ball.possessor.is_none() {
-                    !is_kicking_action
-                        && !matches!(
-                            action.intent,
-                            Intent::Action(
-                                ActionIntent::Tackle(_)
-                                    | ActionIntent::Press(_)
-                                    | ActionIntent::MarkOpponent(_)
-                            )
+            let action_permitted = if is_possessor {
+                is_kicking_action
+            } else if ball_res.possessor.is_none() {
+                !is_kicking_action
+                    && !matches!(
+                        action.intent,
+                        Intent::Action(
+                            ActionIntent::Tackle(_)
+                                | ActionIntent::Press(_)
+                                | ActionIntent::MarkOpponent(_)
                         )
-                } else {
-                    !is_kicking_action
-                }
+                    )
+            } else {
+                !is_kicking_action
             };
 
             if consideration_scores.is_empty() {

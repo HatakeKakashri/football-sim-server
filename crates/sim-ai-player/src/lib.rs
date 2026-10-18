@@ -21,6 +21,8 @@ mod perception;
 #[cfg(test)]
 mod perception_tests;
 #[cfg(test)]
+mod required_resources_tests;
+#[cfg(test)]
 mod roster_tests;
 #[cfg(test)]
 mod tests;
@@ -52,6 +54,15 @@ pub const DECISION_CADENCE_TICKS: u64 = 6;
 /// via `get()`; gameplay code does not read this value.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct DecisionEvaluationCount(u64);
+
+/// Insert the resources the player AI systems require.
+///
+/// Perception and decision also read the physics and rules resources;
+/// install those with `sim_physics::install_physics_resources` and
+/// `sim_rules::install_rules_resources`.
+pub fn install_ai_player_resources(world: &mut World) {
+    world.insert_resource(DecisionEvaluationCount::default());
+}
 
 impl DecisionEvaluationCount {
     /// Current count of players that have cleared the cadence guard.

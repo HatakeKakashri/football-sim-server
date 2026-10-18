@@ -9,7 +9,7 @@ use sim_components::{
 };
 use sim_math::Vec2;
 
-use crate::tests::ball_fixture;
+use crate::tests::{ball_fixture, rules_world};
 use crate::{
     CurrentTick, OutOfBoundsEvent, PendingOutOfBounds, out_of_bounds_system,
     touch::apply_ball_touched_system,
@@ -29,7 +29,7 @@ fn ball_fixture_with_touch(toucher: bevy_ecs::prelude::Entity, team: TeamId) -> 
 
 #[test]
 fn test_out_of_bounds_detection_throw_in() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     // Toucher player on team 0 (set up so OOB has a `last_touch` to capture).
     let toucher = world.spawn(()).id();
@@ -77,7 +77,7 @@ fn test_out_of_bounds_detection_throw_in() {
 
 #[test]
 fn test_out_of_bounds_detection_corner() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {
@@ -117,7 +117,7 @@ fn test_out_of_bounds_detection_corner() {
 
 #[test]
 fn test_out_of_bounds_goal_kick() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {

@@ -477,6 +477,7 @@ pub fn kick_execution_system(
     current_tick: Res<CurrentTick>,
     match_clock: Res<MatchClock>,
     telemetry: Option<Res<TelemetryConfig>>,
+    // Ticket 21: pass-accuracy RNG and tuning.
     mut rng: ResMut<SimRng>,
     tuning: Res<Tuning>,
 ) {
@@ -529,22 +530,17 @@ pub fn kick_execution_system(
     // Ticket 21: Passing narrows the pass error spread. An inaccurate
     // pass is kicked slightly off-target, so it is less likely to reach
     // the intended receiver and the `pass` event's `to` field stays
-    // `None`. Only applied when RNG and tuning are present (real matches;
-    // legacy test worlds skip it).
+    // `None`. Skipped for a kicker without a `PlayerProfile`.
     if matches!(intent, Intent::Action(ActionIntent::PassTo))
         && kick_dir.length() > 0.01
         && let Some(passing_profile) = profile
         && let Some(passing) = passing_profile.get(Attribute::Passing)
     {
         let pass_error = pass_error_spread(passing, 1.0, &tuning);
-        let pass_rng = &mut *rng;
-        if pass_rng.gen_f32() < pass_error {
+        if rng.gen_f32() < pass_error {
             let dev = pass_error * (3.0 / 60.0);
             kick_dir = (kick_dir
-                + Vec2::new(
-                    pass_rng.gen_range_f32(-dev, dev),
-                    pass_rng.gen_range_f32(-dev, dev),
-                ))
+                + Vec2::new(rng.gen_range_f32(-dev, dev), rng.gen_range_f32(-dev, dev)))
             .normalized();
         }
     }
@@ -632,8 +628,7 @@ pub fn kick_execution_system(
         }
         // Emit a `pass` flow event when telemetry is on and this was a
         // pass. Shots / tackles don't carry identity of a "receiver", so
-        // we restrict to `PassTo`. `match_clock` is taken as `Option` so
-        // tests can omit it.
+        // we restrict to `PassTo`.
         if let (true, Some(receiver_entity)) = (
             telemetry.is_some() && matches!(intent, Intent::Action(ActionIntent::PassTo)),
             perception.nearby_teammates.first().map(|t| t.entity),
@@ -799,7 +794,7 @@ mod tests {
         // range (20 m). The kicker holds the ball and has `PassTo` as its
         // committed intent. We expect one `flow_start` on the kicker's
         // process and one `flow_end` on the receiver's, sharing an id.
-        let mut world = World::new();
+        let mut world = crate::tests::ai_world();
 
         let kicker = world
             .spawn((
@@ -852,10 +847,6 @@ mod tests {
         });
         world.insert_resource(TelemetryConfig::new(60, None).expect("valid"));
         world.insert_resource(sim_rules::PendingPass::default());
-        world.insert_resource(sim_rules::PendingShot::default());
-        world.insert_resource(sim_rules::CurrentTick(100));
-        world.insert_resource(sim_physics::SimRng::new(1));
-        world.insert_resource(sim_math::Tuning::default());
 
         let events: EventVec = capture_trace(|| {
             let mut schedule = Schedule::default();
@@ -880,7 +871,7 @@ mod tests {
     #[test]
     fn kick_execution_emits_no_flow_when_telemetry_is_off() {
         // Same setup but with telemetry disabled: no flow events.
-        let mut world = World::new();
+        let mut world = crate::tests::ai_world();
 
         let kicker = world
             .spawn((
@@ -923,17 +914,12 @@ mod tests {
             spin: 0.0,
         });
         world.insert_resource(PendingBallTouches::default());
-        world.insert_resource(sim_rules::PendingPass::default());
-        world.insert_resource(sim_rules::PendingShot::default());
         world.insert_resource(MatchClock {
-            elapsed_ticks: 100,
+            elapsed_ticks: 0,
             half: 1,
             added_time_ticks: 0,
             is_running: true,
         });
-        world.insert_resource(sim_rules::CurrentTick(100));
-        world.insert_resource(sim_physics::SimRng::new(1));
-        world.insert_resource(sim_math::Tuning::default());
         // No TelemetryConfig: telemetry fully off.
 
         let events: EventVec = capture_trace(|| {

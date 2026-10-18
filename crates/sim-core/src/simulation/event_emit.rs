@@ -120,10 +120,9 @@ pub struct HeaderResolved {
 /// `Shooting` attribute feeds [`shot_accuracy`] (response curve plus fit
 /// multiplier) and is compared against an RNG roll.
 ///
-/// Returns `None` when the tuning resource or the shooter's profile is
-/// unavailable (e.g. sparse test worlds), in which case the caller keeps
-/// the placeholder behaviour (on-target). `None` is also returned when the
-/// RNG resource is missing, since a roll cannot be drawn.
+/// Returns `None` when the shooter has no profile (or no `Shooting`
+/// attribute), in which case the caller keeps the placeholder behaviour
+/// (on-target).
 #[must_use]
 fn shot_on_target(
     shooter: Entity,
@@ -133,14 +132,13 @@ fn shot_on_target(
         Option<&RoleComponent>,
         Option<&PlayerProfile>,
     )>,
-    tuning: Option<&Tuning>,
-    rng: Option<&mut SimRng>,
+    tuning: &Tuning,
+    rng: &mut SimRng,
 ) -> Option<bool> {
-    let tuning = tuning?;
     let (_, _, _, profile) = team_query.iter().find(|(e, _, _, _)| *e == shooter)?;
     let shooting = profile.and_then(|profile| profile.get(Attribute::Shooting))?;
     let accuracy = shot_accuracy(shooting, 1.0, tuning);
-    let roll = rng.map_or(0.5, SimRng::gen_f32);
+    let roll = rng.gen_f32();
     Some(roll < accuracy)
 }
 
@@ -188,7 +186,9 @@ pub fn resolve_pass_events(
     // OOB arm: the OOB detector set `PendingOutOfBounds` on this
     // tick. Resolve the pending pass with `to = None` and
     // `success = false`, then drain the OOB signal.
-    if pending_oob.get().is_some() && let Some(pass) = pending_pass.take() {
+    if pending_oob.get().is_some()
+        && let Some(pass) = pending_pass.take()
+    {
         let event = build_pass_event(
             event_log.next_seq,
             tick,
@@ -209,7 +209,9 @@ pub fn resolve_pass_events(
     // Goal arm (ticket 10): the ball crossed the line while a pass
     // was in flight. Resolve with `to = None` and `success = false`
     // — the pass never reached a teammate.
-    if goal_for_emit.0.is_some() && let Some(pass) = pending_pass.take() {
+    if goal_for_emit.0.is_some()
+        && let Some(pass) = pending_pass.take()
+    {
         let event = build_pass_event(
             event_log.next_seq,
             tick,
@@ -347,11 +349,7 @@ pub fn emit_possession_change_on_oob(
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let oob = pending_oob;
-    let Some(_oob_event) = oob.get() else {
-        return;
-    };
-    let Some(_oob_event) = oob.get() else {
+    let Some(_oob_event) = pending_oob.get() else {
         return;
     };
     let Some(last_touch) = ball.last_touch else {
@@ -406,8 +404,7 @@ pub fn emit_goal_events(
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let slot = &goal_for_emit;
-    let Some(resolved) = slot.0 else {
+    let Some(resolved) = goal_for_emit.0 else {
         return;
     };
     let tick = current_tick.0;
@@ -463,8 +460,7 @@ pub fn emit_kickoff_restart_events(
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let slot = &mut kickoff_for_emit;
-    let Some(resolved) = slot.0 else {
+    let Some(resolved) = kickoff_for_emit.0 else {
         return;
     };
     let tick = current_tick.0;
@@ -487,7 +483,7 @@ pub fn emit_kickoff_restart_events(
         None,
     );
     event_log.append(event);
-    slot.0 = None;
+    kickoff_for_emit.0 = None;
 }
 
 /// `shot` (plus `save`) resolution (PRD §9.2, ticket 10).
@@ -534,8 +530,7 @@ pub fn resolve_shot_events(
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let slot = &mut pending_shot;
-    let Some(shot_state) = slot.0 else {
+    let Some(shot_state) = pending_shot.0 else {
         return;
     };
     let tick = current_tick.0;
@@ -553,7 +548,7 @@ pub fn resolve_shot_events(
             ShotOutcome::Goal,
         );
         event_log.append(event);
-        slot.0 = None;
+        pending_shot.0 = None;
         return;
     }
 
@@ -575,7 +570,7 @@ pub fn resolve_shot_events(
             outcome,
         );
         event_log.append(event);
-        slot.0 = None;
+        pending_shot.0 = None;
         return;
     }
 
@@ -609,8 +604,8 @@ pub fn resolve_shot_events(
             let on_target = shot_on_target(
                 shot_state.shooter,
                 &team_query,
-                Some(&*tuning),
-                Some(&mut *rng),
+                &tuning,
+                &mut rng,
             )
             .unwrap_or(true);
             (on_target, ShotOutcome::Saved)
@@ -647,7 +642,7 @@ pub fn resolve_shot_events(
             );
             event_log.append(save);
         }
-        slot.0 = None;
+        pending_shot.0 = None;
     }
 }
 
@@ -663,8 +658,7 @@ pub fn emit_tackle_events(
     clock: Res<MatchClock>,
     team_query: Query<(Entity, &sim_components::TeamIdComponent)>,
 ) {
-    let slot = &mut pending_tackle;
-    let Some(attempt) = slot.take() else {
+    let Some(attempt) = pending_tackle.take() else {
         return;
     };
     let tick = current_tick.0;
@@ -700,8 +694,7 @@ pub fn emit_cross_header_events(
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let slot = &mut pending_cross;
-    let Some(resolved) = slot.take() else {
+    let Some(resolved) = pending_cross.take() else {
         return;
     };
     let tick = current_tick.0;
@@ -766,8 +759,7 @@ pub fn emit_oob_and_restart_events(
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let slot = &mut oob_for_emit;
-    let Some(resolved) = slot.0 else {
+    let Some(resolved) = oob_for_emit.0 else {
         return;
     };
     let tick = current_tick.0;
@@ -811,7 +803,7 @@ pub fn emit_oob_and_restart_events(
     // Clear so the next emitter run is a no-op until the next OOB
     // restart. Defensive: leave the resource cleared if the run
     // was somehow re-entered (Bevy schedules a single run per tick).
-    slot.0 = None;
+    oob_for_emit.0 = None;
 }
 
 /// Register the event-emission systems into the simulation

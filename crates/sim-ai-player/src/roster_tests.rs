@@ -1,6 +1,7 @@
 //! Integration tests for the decision cadence under a full 22-player roster.
 //! Compiled only under `cfg(test)`.
 
+use crate::tests::ai_world;
 use crate::{
     Consideration, DecisionEvaluationCount, PlayerAction, UtilityBrain, player_decision_system,
 };
@@ -21,7 +22,7 @@ use sim_physics::PitchControlGrid;
 #[test]
 fn test_cadence_full_roster_load_distribution() {
     use sim_ai_core::ResponseCurve as TestResponseCurve;
-    let mut world = World::new();
+    let mut world = ai_world();
 
     // Insert Match as Resource (Phase C §4.3).
     world.insert_resource(sim_components::Match {

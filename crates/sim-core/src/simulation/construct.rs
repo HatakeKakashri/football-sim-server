@@ -168,11 +168,6 @@ impl Simulation {
         away_setup: sim_components::TeamSetup,
     ) -> Self {
         let mut world = World::new();
-        // Install every resource the simulation's systems require as
-        // required `Res<T>` / `ResMut<T>`. After this, no system
-        // needs an `Option<Res<T>>` fallback — missing resources fail
-        // loudly instead of silently defaulting.
-        crate::world_installer::install_all_resources(&mut world, seed);
 
         let mut schedule = Schedule::default();
         let original_seed = seed;
@@ -215,9 +210,15 @@ impl Simulation {
         };
         use sim_math::Vec2;
 
-        // All resources are pre-installed by `install_all_resources`
-        // (called from `new_with_setup`). `create_match` only spawns
-        // entities and attaches components.
+        // Every resource the systems require comes from the installer;
+        // only `Match` / `MatchClock` (which refer to the entities spawned
+        // below) are inserted here.
+        super::installer::WorldInstaller::new(seed).install_resources(world);
+
+        // Create ball entity. Phase C §4.3: `Ball` is a Resource, so the
+        // ball entity carries only `Position`, `Velocity`, and a
+        // `BallMarker` component (so systems can find it via Query without
+        // an `iter_entities` scan).
         let ball_entity = world.spawn(()).id();
         world.entity_mut(ball_entity).insert(BallMarker);
         world
@@ -429,10 +430,7 @@ impl Simulation {
         // backwards compatibility with tests + external code that builds
         // worlds by hand; the Resource form is the source of truth.
         world.insert_resource(match_resource);
-        // MatchClock resource is pre-installed by `install_all_resources`;
-        // the Component form is preserved on the match entity for
-        // backwards compatibility with tests + external code that builds
-        // worlds by hand.
+        world.insert_resource(initial_clock.clone());
         world.entity_mut(match_entity).insert(initial_clock);
 
         // The referee lives for the whole match so `added_time_calculation_system`

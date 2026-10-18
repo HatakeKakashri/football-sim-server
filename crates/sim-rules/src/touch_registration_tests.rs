@@ -21,6 +21,7 @@ use sim_core::Simulation;
 use sim_math::Vec2;
 use smallvec::smallvec;
 
+use crate::tests::{cross_crate_world, rules_world};
 use crate::{
     CurrentTick, PendingOutOfBounds, PendingPass, goal_detection_system, out_of_bounds_system,
     possession_resolution_system, restart_system, touch::apply_ball_touched_system,
@@ -36,8 +37,7 @@ fn pos(x: f32, y: f32) -> Vec2 {
 /// non-trivial (`kick_dir.length() > 0.01`).
 #[test]
 fn kick_execution_registers_play_touch() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
+    let mut world = cross_crate_world();
     world.insert_resource(crate::PendingPass::default());
 
     // Kicker at (50, 34), facing a teammate 15 m away.
@@ -111,17 +111,7 @@ fn kick_execution_registers_play_touch() {
 /// single schedule run.
 #[test]
 fn test_kick_pushes_to_buffer_and_consumer_applies() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
     world.insert_resource(PendingBallTouches::default());
 
     // Stand-in kicker — the consumer does not consult the entity, but
@@ -166,17 +156,7 @@ fn test_kick_pushes_to_buffer_and_consumer_applies() {
 /// `Ball.last_touch`.
 #[test]
 fn test_two_consecutive_kicks_update_record() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
     world.insert_resource(PendingBallTouches::default());
 
     let kicker_a = world.spawn(()).id();
@@ -219,17 +199,7 @@ fn test_two_consecutive_kicks_update_record() {
 /// later-pushed entry — never undefined behaviour.
 #[test]
 fn test_same_tick_double_kick_resolves_deterministically() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
 
     let kicker = world.spawn(()).id();
     world.insert_resource(Ball {
@@ -280,17 +250,7 @@ fn test_same_tick_double_kick_resolves_deterministically() {
 /// `Ball.last_touch`.
 #[test]
 fn test_possession_acquisition_pushes_play_touch() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
     world.insert_resource(PendingBallTouches::default());
 
     let ball_entity = world.spawn(()).id();
@@ -389,17 +349,7 @@ fn test_kickoff_registers_restart_touch() {
 /// tick's run.
 #[test]
 fn test_oob_restart_registers_restart_touch() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
 
     // Touchline OOB: ball at (20.0, 0.0), settled.
     let ball_entity = world.spawn(()).id();
@@ -484,17 +434,7 @@ fn test_oob_restart_registers_restart_touch() {
 /// credit an OOB restart would accrue nothing.
 #[test]
 fn test_oob_restart_credits_one_stoppage_tick() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
 
     // Touchline OOB: ball at (20.0, 0.0), settled.
     let ball_entity = world.spawn(()).id();
@@ -578,17 +518,7 @@ fn test_oob_restart_credits_one_stoppage_tick() {
 /// ball for replay data; it is not cleared when the event fires.
 #[test]
 fn test_oob_event_carries_full_touch() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
 
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {
@@ -648,17 +578,7 @@ fn test_oob_event_carries_full_touch() {
 /// post-goal kickoff taker resolution.
 #[test]
 fn test_goal_event_carries_full_touch() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
 
     world.insert_resource(Match {
         id: 1,
@@ -750,17 +670,7 @@ fn test_goal_event_carries_full_touch() {
 /// touched the ball, while scorer attribution follows ball position.
 #[test]
 fn test_own_goal_attribution_preserved() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
 
     world.insert_resource(Match {
         id: 1,
@@ -854,7 +764,7 @@ fn test_own_goal_attribution_preserved() {
 fn test_pre_touch_oob_logs_error_and_skips() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
@@ -908,17 +818,7 @@ fn test_pre_touch_oob_logs_error_and_skips() {
 /// consumer runs, the `PendingBallTouches` buffer must be drained.
 #[test]
 fn test_pending_ball_touches_resource_registered() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = cross_crate_world();
     world.insert_resource(PendingBallTouches::default());
     world.insert_resource(PendingPass::default());
 
@@ -968,17 +868,7 @@ fn test_pending_ball_touches_resource_registered() {
 /// Rules writers).
 #[test]
 fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = cross_crate_world();
     world.insert_resource(PendingPass::default());
 
     // Kicker near the center; ball at (60, 34) inside the goal
@@ -1073,17 +963,7 @@ fn test_apply_ball_touched_consumer_registered_first_in_rules_set() {
 /// entity is later despawned, so OOB restart payloads survive."*
 #[test]
 fn test_touch_record_survives_toucher_despawn() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = cross_crate_world();
     world.insert_resource(PendingPass::default());
 
     // Toucher on team 0, registered by a real kick.
@@ -1171,17 +1051,7 @@ fn test_touch_record_survives_toucher_despawn() {
 /// despawns.
 #[test]
 fn test_oob_restart_taker_resolves_after_toucher_despawn() {
-    let mut world = World::new();
-    crate::tests::install_rule_test_resources(&mut world);
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::KickoffForEmit::default());
-    world.insert_resource(crate::CurrentTick(0));
-    world.insert_resource(crate::PendingPass::default());
-    world.insert_resource(crate::GoalForEmit::default());
-    world.insert_resource(crate::OobRestartForEmit::default());
-    world.insert_resource(crate::PendingRestart::default());
-
-    world.insert_resource(crate::CurrentTick(0));
+    let mut world = rules_world();
 
     // Toucher on team 0. Ball settled on the touchline → ThrowIn, whose
     // taker team is the opposite of the toucher (Law 9) → team 1.

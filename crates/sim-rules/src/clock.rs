@@ -90,12 +90,7 @@ pub fn match_duration_enforcement_system(
             );
         }
         if telemetry.is_some() {
-            sim_telemetry::emit::half_time(
-                current_tick.0,
-                score_home,
-                score_away,
-                is_full_time,
-            );
+            sim_telemetry::emit::half_time(current_tick.0, score_home, score_away, is_full_time);
         }
     }
 }

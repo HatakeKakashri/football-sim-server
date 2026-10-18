@@ -2,6 +2,15 @@ use bevy_ecs::prelude::*;
 use sim_components::{Player, Position, Velocity};
 use sim_math::{PitchDimensions, Vec2};
 
+/// Insert the resources the physics and perception systems require: the
+/// standard pitch, its pitch-control grid, and the match RNG seeded from
+/// `seed`.
+pub fn install_physics_resources(world: &mut World, seed: u64) {
+    world.insert_resource(PitchDimensions::standard());
+    world.insert_resource(PitchControlGrid::build_standard());
+    world.insert_resource(SimRng::new(seed));
+}
+
 /// Phase 2: RNG resource wrapper for stochastic gameplay outcomes.
 ///
 /// Inserted as a Bevy Resource so systems can access it via `ResMut<SimRng>`.

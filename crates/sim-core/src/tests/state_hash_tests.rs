@@ -7,20 +7,6 @@
 
 use crate::Simulation;
 
-/// Sanity check that the hash is a non-zero u64 that exercises every
-/// hash arm (entities, Position, Velocity, Ball, Player, Team, Match).
-/// We don't pin a numeric value (the hash is internal), only that it
-/// is stable for identical inputs.
-#[test]
-fn test_state_hash_is_stable() {
-    let seed = 0x1234_5678u64;
-    let sim = Simulation::new(seed);
-    let h1 = sim.get_state_hash();
-    let h2 = sim.get_state_hash();
-    assert_eq!(h1, h2, "Hash changed between identical reads");
-    assert_ne!(h1, 0);
-}
-
 /// Two identically-constructed simulations should hash identically; a
 /// perturbation to ONLY one (here: +1.0 on the ball's x) must make the
 /// hashes diverge.

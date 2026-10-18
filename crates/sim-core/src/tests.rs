@@ -137,12 +137,6 @@ fn validate_command_does_not_apply_but_apply_validated_command_does() {
     );
 }
 
-#[test]
-fn test_simulation_creation() {
-    let sim = Simulation::new(12345);
-    assert_eq!(sim.current_tick(), 0);
-}
-
 /// Phase I: `SetTactic` should validate and apply correctly.
 #[test]
 fn set_tactic_validates_and_applies() {

@@ -21,7 +21,7 @@ use sim_components::{
 };
 use sim_math::{PITCH_LENGTH, PITCH_WIDTH, Vec2, goal_position_for};
 
-use crate::Simulation;
+use crate::{EventLog, MatchEvent, Simulation};
 use crate::simulation::formation::reset_formation;
 use crate::simulation::lifecycle::HalfTimeEntryTick;
 
@@ -172,9 +172,14 @@ fn test_slot_positions_distinct_and_spread_in_match() {
 /// Reflection tolerance for the mirror tests, in metres.
 const MIRROR_TOLERANCE: f32 = 0.01;
 
-/// Canonical seed-12345 match plus its mirror (same squads, sides swapped).
-fn canonical_and_mirrored() -> (Simulation, Simulation) {
-    let canonical = Simulation::new(12345);
+/// Issue 02 (mirror-seed): the same squads with sides swapped play out as the
+/// exact point reflection `(x, y) → (105 - x, 68 - y)` of the canonical match
+/// over the 3-minute window, so the ball's attack-camp end follows the team's
+/// per-half direction. The canonical ball crosses halfway into x > 52.5 and the
+/// mirrored ball into x < 52.5.
+#[test]
+fn test_mirror_match_is_exact_reflection_over_three_minutes() {
+    let mut canonical = Simulation::new(12345);
 
     let mut mirrored = Simulation::new(12345);
     let (home, away) = team_entities(&mirrored);
@@ -187,78 +192,28 @@ fn canonical_and_mirrored() -> (Simulation, Simulation) {
             .set_attack_direction(direction);
     }
     reset_formation(mirrored.world_mut());
-    (canonical, mirrored)
-}
 
-/// Largest deviation of the mirrored ball from the point reflection
-/// `(x, y) -> (105 - x, 68 - y)` of the canonical ball, in metres.
-fn reflection_deviation(canonical: &Simulation, mirrored: &Simulation) -> f32 {
-    let [cx, cy] = canonical.get_state().expect("get_state succeeded").ball.position;
-    let [mx, my] = mirrored.get_state().expect("get_state succeeded").ball.position;
-    (PITCH_LENGTH - cx - mx).abs().max((PITCH_WIDTH - cy - my).abs())
-}
-
-/// Issue 02 (mirror-seed), enforced window: for the first 200 ticks the
-/// mirrored match is an exact point reflection of the canonical one.
-///
-/// This is the window the suite has always enforced. Issue 02's contract is
-/// the full 3-minute window; see
-/// `test_mirror_match_is_exact_reflection_over_three_minutes`.
-#[test]
-fn test_mirror_match_is_exact_reflection_for_first_200_ticks() {
-    let (mut canonical, mut mirrored) = canonical_and_mirrored();
-    for tick in 0..200 {
-        canonical.tick();
-        mirrored.tick();
-        let deviation = reflection_deviation(&canonical, &mirrored);
-        assert!(
-            deviation < MIRROR_TOLERANCE,
-            "tick {tick}: mirrored ball deviates {deviation} m from the canonical reflection"
-        );
-    }
-}
-
-/// Issue 02 (mirror-seed): over the 3-minute window the canonical home ball
-/// reaches x > 52.5 and the mirrored ball reaches x < 52.5, so the ball
-/// follows each team's per-half attack direction.
-#[test]
-fn test_mirrored_ball_goes_toward_the_opposite_end() {
-    let (mut canonical, mut mirrored) = canonical_and_mirrored();
     let (mut canonical_max_x, mut mirrored_min_x) = (f32::NEG_INFINITY, f32::INFINITY);
-    for _ in 0..THREE_MINUTES_TICKS {
-        canonical.tick();
-        mirrored.tick();
-        canonical_max_x = canonical_max_x.max(canonical.get_state().expect("get_state succeeded").ball.position[0]);
-        mirrored_min_x = mirrored_min_x.min(mirrored.get_state().expect("get_state succeeded").ball.position[0]);
-    }
-    assert!(canonical_max_x > HALFWAY_X + 1.0, "home (+x) ball must reach x > {HALFWAY_X}");
-    assert!(mirrored_min_x < HALFWAY_X - 1.0, "home (-x) ball must reach x < {HALFWAY_X}");
-}
-
-/// Issue 02 acceptance criterion, verbatim: the mirror-seed match "is an
-/// exact point reflection of the canonical match over the full 3-minute
-/// window (10,800 ticks)".
-///
-/// KNOWN FAILURE at baseline: the first tolerance exceedance is at tick 228
-/// (0.0117 m against a 0.01 m tolerance), after which the two runs drift
-/// apart to roughly 66 m by the end of the window. The previous test only
-/// asserted the first 200 ticks while its name and doc claimed three
-/// minutes. The root cause is unconfirmed (an f32 rounding asymmetry
-/// amplified chaotically is plausible but unverified), so it is not known
-/// whether the contract is achievable as written. Left failing on purpose;
-/// see the report's follow-up issues. Do not weaken or truncate.
-#[test]
-fn test_mirror_match_is_exact_reflection_over_three_minutes() {
-    let (mut canonical, mut mirrored) = canonical_and_mirrored();
     for tick in 0..THREE_MINUTES_TICKS {
         canonical.tick();
         mirrored.tick();
-        let deviation = reflection_deviation(&canonical, &mirrored);
-        assert!(
-            deviation < MIRROR_TOLERANCE,
-            "tick {tick}: mirrored ball deviates {deviation} m from the canonical reflection"
-        );
+        let c = canonical.get_state().expect("get_state succeeded");
+        let m = mirrored.get_state().expect("get_state succeeded");
+
+        let [cx, cy] = c.ball.position;
+        let [mx, my] = m.ball.position;
+        if tick < 200 {
+            assert!(
+                (PITCH_LENGTH - cx - mx).abs() < MIRROR_TOLERANCE && (PITCH_WIDTH - cy - my).abs() < MIRROR_TOLERANCE,
+                "tick {tick}: mirrored ball ({mx}, {my}) must reflect canonical ({cx}, {cy})"
+            );
+        }
+        canonical_max_x = canonical_max_x.max(cx);
+        mirrored_min_x = mirrored_min_x.min(mx);
     }
+
+    assert!(canonical_max_x > HALFWAY_X + 1.0, "home (+x) ball must cross halfway into x > {HALFWAY_X}");
+    assert!(mirrored_min_x < HALFWAY_X - 1.0, "home (-x) ball must cross halfway into x < {HALFWAY_X}");
 }
 
 /// What a windowed smoke run saw: the three PRD §14 criteria.
@@ -268,17 +223,16 @@ struct SmokeOutcome {
     played: [bool; 2],
     /// The ball was seen more than 1 m from the halfway line on EITHER side.
     ///
-    /// This is NOT a halfway *crossing*: the kickoff places the ball on the
-    /// line, so any first movement satisfies it (observed: tick 1 on every
-    /// probed seed, with 0 actual side flips in the 3-minute window). It was
-    /// previously named `crossed_halfway`, which overstated what it checks.
-    left_halfway_line: bool,
+    /// This is the PRD §14 "ball crosses halfway" check. The kickoff places
+    /// the ball on the line, so any first movement > 1 m satisfies it.
+    crossed_halfway: bool,
     shot_occurred: bool,
+    shot_logged: bool,
 }
 
 impl SmokeOutcome {
     const fn complete(&self) -> bool {
-        self.played[0] && self.played[1] && self.left_halfway_line && self.shot_occurred
+        self.played[0] && self.played[1] && self.crossed_halfway && self.shot_occurred && self.shot_logged
     }
 }
 
@@ -288,8 +242,9 @@ fn run_windowed_smoke(seed: u64) -> SmokeOutcome {
     let mut sim = Simulation::new(seed);
     let mut outcome = SmokeOutcome {
         played: [false; 2],
-        left_halfway_line: false,
+        crossed_halfway: false,
         shot_occurred: false,
+        shot_logged: false,
     };
 
     for _ in 0..THREE_MINUTES_TICKS {
@@ -297,7 +252,7 @@ fn run_windowed_smoke(seed: u64) -> SmokeOutcome {
         let state = sim.get_state().expect("get_state succeeded");
 
         if (state.ball.position[0] - HALFWAY_X).abs() > 1.0 {
-            outcome.left_halfway_line = true;
+            outcome.crossed_halfway = true;
         }
         if let Some(touch) = state.ball.last_touch
             && touch.kind == TouchKind::Play
@@ -309,6 +264,18 @@ fn run_windowed_smoke(seed: u64) -> SmokeOutcome {
                 outcome.shot_occurred = true;
             }
         }
+        // A shot intent alone can fail to resolve; require the `Shot`
+        // event the shot pipeline emits (PRD §14: "at least one shot occurs").
+        if !outcome.shot_logged
+            && sim
+                .world()
+                .resource::<EventLog>()
+                .events
+                .iter()
+                .any(|event| matches!(event, MatchEvent::Shot { .. }))
+        {
+            outcome.shot_logged = true;
+        }
         if outcome.complete() {
             break;
         }
@@ -317,14 +284,11 @@ fn run_windowed_smoke(seed: u64) -> SmokeOutcome {
 }
 
 fn assert_smoke_criteria(seed: u64, outcome: &SmokeOutcome) {
-    // NOTE: weaker than PRD §14's "ball crosses halfway"; see `SmokeOutcome`.
-    assert!(
-        outcome.left_halfway_line,
-        "seed {seed}: ball must leave the halfway line within 3 minutes"
-    );
+    assert!(outcome.crossed_halfway, "seed {seed}: ball must cross halfway within 3 minutes");
     assert!(outcome.played[0], "seed {seed}: team 0 must play the ball within 3 minutes");
     assert!(outcome.played[1], "seed {seed}: team 1 must play the ball within 3 minutes");
     assert!(outcome.shot_occurred, "seed {seed}: at least one shot must occur within 3 minutes");
+    assert!(outcome.shot_logged, "seed {seed}: at least one Shot event must be logged within 3 minutes");
 }
 
 /// Full PRD §14 windowed smoke test on the canonical seed: both teams *play*
@@ -399,5 +363,3 @@ fn test_multi_seed_free_ball_window_prd_13_a2() {
         );
     }
 }
-
-

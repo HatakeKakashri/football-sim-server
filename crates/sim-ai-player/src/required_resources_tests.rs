@@ -40,6 +40,19 @@ fn installed_world() -> World {
     world
 }
 
+/// True when `message` contains `full` as a whole type path. A plain
+/// `contains` would let a panic about `sim_components::BallAirborne`
+/// satisfy a check for `sim_components::Ball`, so the match must not be
+/// followed by another identifier character.
+fn names_resource(message: &str, full: &str) -> bool {
+    message.match_indices(full).any(|(start, _)| {
+        message[start + full.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+    })
+}
+
 /// Run `system` once in a world that lacks `T`; assert it panics and the
 /// panic names `T`. The single-threaded executor keeps the original panic
 /// payload (the multi-threaded one replaces it with a generic message).
@@ -57,10 +70,10 @@ fn assert_requires<T: Resource, M>(system: impl IntoSystemConfigs<M>) {
         .cloned()
         .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
         .unwrap_or_default();
-    let short = type_name::<T>().rsplit("::").next().unwrap_or_default();
+    let full = type_name::<T>();
     assert!(
-        message.contains(short),
-        "panic should name `{short}`, got: {message}"
+        names_resource(&message, full),
+        "panic should name `{full}`, got: {message}"
     );
 }
 

@@ -13,11 +13,11 @@ use sim_components::{Ball, MatchClock};
 use sim_math::Tuning;
 use sim_physics::SimRng;
 use sim_rules::{
-    CurrentTick, GoalForEmit, KickoffForEmit, OobRestartForEmit, PendingOutOfBounds, PendingShot,
-    PendingTackle,
+    CurrentTick, GoalForEmit, KickoffForEmit, OobRestartForEmit, PendingOutOfBounds, PendingPass,
+    PendingShot, PendingTackle,
 };
 
-use crate::WorldInstaller;
+use crate::{EventLog, WorldInstaller};
 use crate::simulation::event_emit::{
     PendingCross, emit_cross_header_events, emit_goal_events, emit_kickoff_restart_events,
     emit_oob_and_restart_events, emit_possession_change_on_acquisition,
@@ -40,6 +40,19 @@ fn installed_world() -> World {
     world
 }
 
+/// True when `message` contains `full` as a whole type path. A plain
+/// `contains` would let a panic about `sim_components::BallAirborne`
+/// satisfy a check for `sim_components::Ball`, so the match must not be
+/// followed by another identifier character.
+fn names_resource(message: &str, full: &str) -> bool {
+    message.match_indices(full).any(|(start, _)| {
+        message[start + full.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+    })
+}
+
 /// Run `system` once in a world that lacks `T`; assert it panics and the
 /// panic names `T`. The single-threaded executor keeps the original panic
 /// payload (the multi-threaded one replaces it with a generic message).
@@ -57,10 +70,10 @@ fn assert_requires<T: Resource, M>(system: impl IntoSystemConfigs<M>) {
         .cloned()
         .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
         .unwrap_or_default();
-    let short = type_name::<T>().rsplit("::").next().unwrap_or_default();
+    let full = type_name::<T>();
     assert!(
-        message.contains(short),
-        "panic should name `{short}`, got: {message}"
+        names_resource(&message, full),
+        "panic should name `{full}`, got: {message}"
     );
 }
 
@@ -99,5 +112,36 @@ requires! {
     cross_events_need_tick: emit_cross_header_events needs CurrentTick;
     oob_restart_events_need_oob_slot: emit_oob_and_restart_events needs OobRestartForEmit;
     oob_restart_events_need_tick: emit_oob_and_restart_events needs CurrentTick;
+    pass_events_need_pending_pass: resolve_pass_events needs PendingPass;
+    pass_events_need_ball: resolve_pass_events needs Ball;
+    pass_events_need_event_log: resolve_pass_events needs EventLog;
+    pass_events_need_clock: resolve_pass_events needs MatchClock;
+    possession_acquisition_needs_ball: emit_possession_change_on_acquisition needs Ball;
+    possession_acquisition_needs_event_log: emit_possession_change_on_acquisition needs EventLog;
+    possession_acquisition_needs_clock: emit_possession_change_on_acquisition needs MatchClock;
+    possession_oob_needs_ball: emit_possession_change_on_oob needs Ball;
+    possession_oob_needs_event_log: emit_possession_change_on_oob needs EventLog;
+    possession_oob_needs_clock: emit_possession_change_on_oob needs MatchClock;
+    goal_events_need_event_log: emit_goal_events needs EventLog;
+    goal_events_need_clock: emit_goal_events needs MatchClock;
+    kickoff_events_need_event_log: emit_kickoff_restart_events needs EventLog;
+    kickoff_events_need_clock: emit_kickoff_restart_events needs MatchClock;
+    shot_events_need_ball: resolve_shot_events needs Ball;
+    shot_events_need_event_log: resolve_shot_events needs EventLog;
+    shot_events_need_clock: resolve_shot_events needs MatchClock;
+    tackle_events_need_event_log: emit_tackle_events needs EventLog;
+    tackle_events_need_clock: emit_tackle_events needs MatchClock;
+    cross_events_need_event_log: emit_cross_header_events needs EventLog;
+    cross_events_need_clock: emit_cross_header_events needs MatchClock;
+    oob_restart_events_need_event_log: emit_oob_and_restart_events needs EventLog;
+    oob_restart_events_need_clock: emit_oob_and_restart_events needs MatchClock;
     trace_emission_needs_ball: trace_emission_system needs Ball;
+}
+
+#[test]
+fn names_resource_rejects_longer_type_names() {
+    assert!(names_resource("does not exist: sim_components::Ball", "sim_components::Ball"));
+    assert!(names_resource("does not exist: sim_components::Ball (x)", "sim_components::Ball"));
+    assert!(!names_resource("does not exist: sim_components::BallAirborne", "sim_components::Ball"));
+    assert!(!names_resource("does not exist: sim_components::PendingBallTouches", "sim_components::Ball"));
 }

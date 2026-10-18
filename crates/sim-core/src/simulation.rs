@@ -6,6 +6,7 @@ mod construct;
 pub mod event_emit;
 pub mod events;
 pub mod formation;
+pub mod installer;
 pub mod invariants;
 pub mod lifecycle;
 mod snapshot;

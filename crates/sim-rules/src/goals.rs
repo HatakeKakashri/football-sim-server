@@ -55,9 +55,9 @@ pub fn goal_detection_system(
     team_query: Query<&Team>,
     mut match_res: ResMut<Match>,
     mut ball: ResMut<Ball>,
-    current_tick: Option<Res<CurrentTick>>,
+    current_tick: Res<CurrentTick>,
     telemetry: Option<Res<TelemetryConfig>>,
-    mut goal_for_emit: Option<ResMut<GoalForEmit>>,
+    mut goal_for_emit: ResMut<GoalForEmit>,
 ) {
     // First pass: collect goal events (avoid borrow conflicts).
     // Tuple: (ball_entity, scorer_team, final_score, last_touch).
@@ -92,7 +92,7 @@ pub fn goal_detection_system(
             );
             if ball.last_touch.is_none() {
                 tracing::error!(
-                    tick = current_tick.as_deref().map_or(0, |t| t.0),
+                    tick = current_tick.0,
                     ball_pos = ?ball_pos.0,
                     "goal_detection_system fired with no `last_touch` (desync); \
                      skipping goal"
@@ -123,17 +123,15 @@ pub fn goal_detection_system(
             // in-flight pass, and emit the `possession_change` with
             // cause `goal`. The emitter runs in the same `Rules` set
             // after this system, then drains the resource.
-            if let Some(ref mut slot) = goal_for_emit {
-                slot.0 = Some(GoalResolved {
-                    scorer_team,
-                    score: final_score,
-                    last_touch: ball.last_touch,
-                    prev_touch: ball.touch_history[0],
-                    older_touch: ball.touch_history[1],
-                    goal_tick: current_tick.as_deref().map_or(0, |t| t.0),
-                    ball_pos: ball_pos.0,
-                });
-            }
+            goal_for_emit.0 = Some(GoalResolved {
+                scorer_team,
+                score: final_score,
+                last_touch: ball.last_touch,
+                prev_touch: ball.touch_history[0],
+                older_touch: ball.touch_history[1],
+                goal_tick: current_tick.0,
+                ball_pos: ball_pos.0,
+            });
             tracing::info!(
                 "GOAL scored by team {}! Score: {}-{}",
                 scorer_team.0,
@@ -142,7 +140,7 @@ pub fn goal_detection_system(
             );
             if telemetry.is_some() {
                 sim_telemetry::emit::goal(
-                    current_tick.as_deref().map_or(0, |t| t.0),
+                    current_tick.0,
                     scorer_team.0,
                     final_score.0,
                     final_score.1,
@@ -164,8 +162,7 @@ pub fn goal_detection_system(
         });
         commands.insert_resource(PendingRestart {
             event: Some(RuleEvent::KickoffRestart),
-            restart_tick: current_tick.as_deref().map_or(0, |t| t.0)
-                + crate::constants::KICKOFF_RESTART_TICKS,
+            restart_tick: current_tick.0 + crate::constants::KICKOFF_RESTART_TICKS,
             // Law 8 / Law 10: the post-goal kickoff is taken by the
             // team that *conceded* the goal. The conceded team is
             // the opposite of `scorer_team`. Restart consumers read
@@ -204,22 +201,22 @@ pub fn restart_system(
     mut commands: Commands,
     mut ball_query: Query<(&mut Position, &mut Velocity), With<BallMarker>>,
     player_query: Query<(Entity, &TeamIdComponent), With<Player>>,
-    current_tick: Option<Res<CurrentTick>>,
+    current_tick: Res<CurrentTick>,
     pending_restart: Option<Res<PendingRestart>>,
     mut ball: ResMut<Ball>,
     mut pending_touches: ResMut<PendingBallTouches>,
     telemetry: Option<Res<TelemetryConfig>>,
     mut pending_oob: ResMut<PendingOutOfBounds>,
-    mut oob_for_emit: Option<ResMut<OobRestartForEmit>>,
-    mut kickoff_for_emit: Option<ResMut<KickoffForEmit>>,
+    mut oob_for_emit: ResMut<OobRestartForEmit>,
+    mut kickoff_for_emit: ResMut<KickoffForEmit>,
     mut referee_query: Query<&mut Referee>,
 ) {
-    let tick = current_tick.as_deref().map_or(0, |t| t.0);
+    let tick = current_tick.0;
     // Handle KickoffRestart from goal (delayed by 60 ticks)
     if let Some(pr) = pending_restart
         && let Some(event) = &pr.event
         && matches!(event, RuleEvent::KickoffRestart)
-        && current_tick.as_deref().map_or(0, |t| t.0) >= pr.restart_tick
+        && current_tick.0 >= pr.restart_tick
     {
         // Place ball at center spot
         if let Ok((mut pos, mut vel)) = ball_query.get_single_mut() {
@@ -260,15 +257,13 @@ pub fn restart_system(
             // can write the `kickoff` event (`reason = after_goal`).
             // The emitter runs in the same `Rules` set after this
             // system, then drains the resource.
-            if let Some(ref mut slot) = kickoff_for_emit {
-                slot.0 = Some(KickoffResolved {
-                    taker_team: conceded_team,
-                    taker,
-                    at: Vec2::new(CENTER_SPOT.0, CENTER_SPOT.1),
-                });
-            }
+            kickoff_for_emit.0 = Some(KickoffResolved {
+                taker_team: conceded_team,
+                taker,
+                at: Vec2::new(CENTER_SPOT.0, CENTER_SPOT.1),
+            });
             if telemetry.is_some() {
-                sim_telemetry::emit::kickoff(current_tick.as_deref().map_or(0, |t| t.0));
+                sim_telemetry::emit::kickoff(current_tick.0);
             }
         }
         // Clear pending restart
@@ -311,7 +306,7 @@ pub fn restart_system(
         let (taker_team, taker) = last_touch.as_ref().map_or_else(
             || {
                 tracing::error!(
-                    tick = current_tick.as_deref().map_or(0, |t| t.0),
+                    tick = current_tick.0,
                     "restart_system OOB arm: last_touch is None (touch \
                      entity desync); defaulting to home"
                 );
@@ -343,16 +338,14 @@ pub fn restart_system(
         // back-to-back with the correct fields (PRD §9.2, ticket
         // 09). The emitter runs in the same `Rules` set after this
         // system, then clears the resource.
-        if let Some(ref mut emit) = oob_for_emit {
-            emit.0 = Some(OobRestartResolved {
-                oob_type,
-                exit_point,
-                last_touch,
-                taker_team,
-                taker,
-                restart_pos,
-            });
-        }
+        oob_for_emit.0 = Some(OobRestartResolved {
+            oob_type,
+            exit_point,
+            last_touch,
+            taker_team,
+            taker,
+            restart_pos,
+        });
         // PRD §8.4: the OOB restart itself counts toward stoppage. The
         // ball is `Dead` for less than a full tick here (detection and
         // restart settle in the same tick), so `stoppage_tracking_system`
@@ -371,12 +364,7 @@ pub fn restart_system(
             sim_components::BallOutOfBoundsType::Corner => "corner",
         };
         if telemetry.is_some() {
-            sim_telemetry::emit::restart(
-                current_tick.as_deref().map_or(0, |t| t.0),
-                kind,
-                restart_pos.x,
-                restart_pos.y,
-            );
+            sim_telemetry::emit::restart(current_tick.0, kind, restart_pos.x, restart_pos.y);
         }
     }
 }

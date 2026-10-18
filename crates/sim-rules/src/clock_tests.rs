@@ -10,10 +10,11 @@ use sim_components::{MatchClock, Referee, StoppageEvent};
 
 use crate::added_time_calculation_system;
 use crate::match_duration_enforcement_system;
+use crate::tests::rules_world;
 
 #[test]
 fn test_match_duration_enforcement() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -46,7 +47,7 @@ fn test_match_duration_enforcement() {
 /// holding `stoppage_ticks` dead-ball entries plus a `MatchClock`
 /// resource starting at `added_before`.
 fn added_time_test_world(stoppage_ticks: u64, added_before: u64) -> World {
-    let mut world = World::new();
+    let mut world = rules_world();
     let events = (0..stoppage_ticks)
         .map(|tick| StoppageEvent {
             tick,

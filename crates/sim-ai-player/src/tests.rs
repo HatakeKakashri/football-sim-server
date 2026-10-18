@@ -17,6 +17,27 @@ use sim_ai_core::ResponseCurve;
 use sim_components::{ActionIntent, Intent, MovementIntent};
 use sim_math::Vec2;
 
+/// A fresh world holding every resource the player AI systems require,
+/// built from the crate-level installers (the physics, rules and AI
+/// layers) plus a free ball and the default `Tuning`. Tests insert their
+/// own values on top.
+pub fn ai_world() -> World {
+    let mut world = World::new();
+    sim_physics::install_physics_resources(&mut world, 1);
+    sim_rules::install_rules_resources(&mut world);
+    crate::install_ai_player_resources(&mut world);
+    world.insert_resource(sim_components::Ball {
+        spin: 0.0,
+        state: sim_components::BallState::Free,
+        possessor: None,
+        last_touch: None,
+        touch_history: [None, None],
+        kick_velocity: None,
+    });
+    world.insert_resource(sim_math::Tuning::default());
+    world
+}
+
 /// Exhaustiveness guard: if a new `Consideration` variant is added without
 /// updating the F1 macro, this const-assertion fails to compile, forcing
 /// the developer to add the variant to the macro's `$( ... )*` list.

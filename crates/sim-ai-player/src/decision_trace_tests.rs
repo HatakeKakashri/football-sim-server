@@ -6,6 +6,7 @@
     reason = "tests compare traced values against the identical arithmetic they were derived from"
 )]
 
+use crate::tests::ai_world;
 use bevy_ecs::prelude::*;
 use serde_json::Value;
 use sim_ai_core::{ResponseCurve, geometric_mean};
@@ -81,7 +82,7 @@ fn brain() -> UtilityBrain {
 }
 
 fn world_with_player() -> (World, Entity) {
-    let mut world = World::new();
+    let mut world = ai_world();
     let player = world
         .spawn((
             Player {

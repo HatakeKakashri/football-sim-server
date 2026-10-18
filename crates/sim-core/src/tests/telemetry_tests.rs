@@ -262,7 +262,7 @@ fn stoppages_queued_on_different_recorded_ticks_are_all_reported() {
     // a running "already seen" count so each recorded tick reports only
     // what was queued since the last one. Every entry must reach the
     // trace, not just the first.
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     let referee = world
         .spawn(Referee {
             stoppage_events: vec![StoppageEvent {
@@ -304,7 +304,7 @@ fn stoppages_queued_on_different_recorded_ticks_are_all_reported() {
 
 #[test]
 fn ball_change_events_fire_only_when_state_or_possessor_changes() {
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(Ball {
         spin: 0.0,
         state: BallState::Free,

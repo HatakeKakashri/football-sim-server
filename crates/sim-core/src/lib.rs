@@ -11,6 +11,7 @@ mod simulation;
 #[cfg(test)]
 mod tests;
 
+pub use simulation::installer::WorldInstaller;
 pub use simulation::{Simulation, SimulationSet, lifecycle_system};
 pub use simulation::events::{
     EventEnvelope, EventLog, EventType, FullTimePayload, GoalAttribution, GoalEventPayload,

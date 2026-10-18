@@ -23,6 +23,14 @@
     reason = "tests compare outputs of identical arithmetic against the inputs they were derived from"
 )]
 
+/// A fresh world holding every resource the schedule's systems require,
+/// installed by `WorldInstaller`. Tests insert their own values on top.
+pub fn installed_world() -> bevy_ecs::prelude::World {
+    let mut world = bevy_ecs::prelude::World::new();
+    crate::WorldInstaller::new(1).install_resources(&mut world);
+    world
+}
+
 #[cfg(test)]
 mod determinism_tests;
 #[cfg(test)]
@@ -37,6 +45,8 @@ mod lifecycle_tests;
 mod playability_gate_tests;
 #[cfg(test)]
 mod referee_spawn_tests;
+#[cfg(test)]
+mod required_resources_tests;
 #[cfg(test)]
 mod smoke_tests;
 #[cfg(test)]

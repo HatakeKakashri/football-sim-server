@@ -64,7 +64,7 @@ pub fn possession_resolution_system(
     player_query: Query<(Entity, &Player, &Position, &Velocity, &Skill), With<Player>>,
     mut ball: ResMut<Ball>,
     mut pending: ResMut<PendingBallTouches>,
-    current_tick: Option<Res<CurrentTick>>,
+    current_tick: Res<CurrentTick>,
 ) {
     let Ok((ball_pos, ball_vel)) = ball_query.get_single() else {
         return;
@@ -139,7 +139,7 @@ pub fn possession_resolution_system(
         // Push to `PendingBallTouches`; the consumer
         // `apply_ball_touched_system` applies it to `Ball.last_touch`
         // at the start of the Rules set.
-        let tick = current_tick.as_deref().map_or(0, |t| t.0);
+        let tick = current_tick.0;
         pending.0.push(
             LastTouch::by_player(team, entity, TouchKind::Play).with_tick(tick),
         );

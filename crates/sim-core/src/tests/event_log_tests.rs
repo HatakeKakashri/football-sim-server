@@ -268,7 +268,7 @@ fn possession_change_fires_on_team_change() {
     // transfer possession to team 1 via direct resource writes.
     // This bypasses the per-tick possession-resolution system to
     // pin the event emission on a clean team change.
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
     world.entity_mut(ball_entity).insert(Position(pos(50.0, 34.0)));
@@ -353,7 +353,7 @@ fn possession_change_fires_on_team_change() {
 /// path: the cache stays at the same team, no event.
 #[test]
 fn possession_change_does_not_fire_on_same_team() {
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
     world.entity_mut(ball_entity).insert(Position(pos(50.0, 34.0)));
@@ -408,7 +408,7 @@ fn possession_change_does_not_fire_on_same_team() {
 #[test]
 fn pass_event_emits_correct_envelope_and_payload() {
     use sim_components::PlayerId;
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(Ball {
         state: BallState::Free,
         possessor: None,
@@ -467,7 +467,7 @@ fn pass_event_emits_correct_envelope_and_payload() {
 /// `carrier` and `success` (PRD §9.2, ticket 21).
 #[test]
 fn tackle_event_emitted_with_tackler_carrier_and_success() {
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(sim_components::MatchClock {
         elapsed_ticks: 200,
         half: 1,
@@ -523,7 +523,7 @@ fn tackle_event_emitted_with_tackler_carrier_and_success() {
 /// `possession_change` events have the right fields when built.
 #[test]
 fn possession_change_event_emits_correct_envelope_and_payload() {
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(sim_components::MatchClock {
         elapsed_ticks: 100,
         half: 1,
@@ -561,7 +561,7 @@ fn possession_change_event_emits_correct_envelope_and_payload() {
 #[test]
 fn event_wire_shape_matches_prd() {
     use sim_components::PlayerId;
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
     world.insert_resource(sim_components::MatchClock {
         elapsed_ticks: 7421,
         half: 1,
@@ -627,7 +627,7 @@ fn run_oob_scenario(
 ) -> EventLog {
     use crate::simulation::SimulationSet;
 
-    let mut world = World::new();
+    let mut world = crate::tests::installed_world();
 
     // Ball entity + position / velocity / marker.
     let ball_entity = world.spawn(()).id();

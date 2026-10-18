@@ -26,6 +26,35 @@ use crate::{
     touch::apply_ball_touched_system,
 };
 
+/// A fresh world holding every resource the rule systems require, via
+/// the crate installer. Tests insert their own values on top.
+pub fn rules_world() -> World {
+    let mut world = World::new();
+    crate::install_rules_resources(&mut world);
+    world
+}
+
+/// A world for tests that schedule this crate's systems *together with*
+/// systems from `sim-ai-player` or `sim-core`.
+///
+/// Unit tests here compile `sim-rules` a second time, so `crate::PendingPass`
+/// (and every other `sim-rules` resource) is a different type from the
+/// `sim_rules::PendingPass` those other crates' systems require. This world
+/// therefore holds both sets: this crate's via `install_rules_resources`, and
+/// the library copy's via `WorldInstaller`. Shared `sim-components`
+/// resources (`Ball`, `MatchClock`, ...) are a single type either way.
+pub fn cross_crate_world() -> World {
+    let mut world = rules_world();
+    sim_core::WorldInstaller::new(1).install_resources(&mut world);
+    world.insert_resource(sim_components::MatchClock {
+        elapsed_ticks: 0,
+        half: 1,
+        added_time_ticks: 0,
+        is_running: true,
+    });
+    world
+}
+
 /// Produces a test `Ball` resource with the given `state`.
 /// All other fields are zeroed; `possessor` and `last_touch` are `None`.
 ///
@@ -50,7 +79,7 @@ pub fn ball_fixture(_pos: Vec2, state: BallState) -> Ball {
 /// `tests.rs` because it touches both submodules' public systems.
 #[test]
 fn test_kickoff_restart_places_ball_at_center() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     world.insert_resource(sim_components::Match {
         id: 1,

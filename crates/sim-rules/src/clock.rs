@@ -52,7 +52,7 @@ pub fn added_time_calculation_system(
 pub fn match_duration_enforcement_system(
     mut match_res: ResMut<Match>,
     mut clock_query: Query<&mut MatchClock>,
-    current_tick: Option<Res<CurrentTick>>,
+    current_tick: Res<CurrentTick>,
     telemetry: Option<Res<TelemetryConfig>>,
 ) {
     // First check if clock is running
@@ -90,12 +90,7 @@ pub fn match_duration_enforcement_system(
             );
         }
         if telemetry.is_some() {
-            sim_telemetry::emit::half_time(
-                current_tick.map_or(0, |t| t.0),
-                score_home,
-                score_away,
-                is_full_time,
-            );
+            sim_telemetry::emit::half_time(current_tick.0, score_home, score_away, is_full_time);
         }
     }
 }

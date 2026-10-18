@@ -34,7 +34,7 @@ pub fn stoppage_tracking_system(
     mut referee_query: Query<&mut Referee>,
     ball: Res<Ball>,
     match_res: Res<Match>,
-    current_tick: Option<Res<CurrentTick>>,
+    current_tick: Res<CurrentTick>,
 ) {
     if match_res.state != MatchState::InPlay {
         return;
@@ -42,7 +42,7 @@ pub fn stoppage_tracking_system(
     if ball.state != BallState::Dead {
         return;
     }
-    let tick = current_tick.as_deref().map_or(0, |t| t.0);
+    let tick = current_tick.0;
     for mut referee in &mut referee_query {
         referee.stoppage_events.push(StoppageEvent {
             tick,
@@ -64,7 +64,7 @@ pub fn foul_detection_system(
     mut commands: Commands,
     player_query: Query<(Entity, &Player, &Position, &Velocity)>,
     match_res: Res<Match>,
-    current_tick: Option<Res<CurrentTick>>,
+    current_tick: Res<CurrentTick>,
     telemetry: Option<Res<TelemetryConfig>>,
 ) {
     // Skip if match is not in play
@@ -115,7 +115,7 @@ pub fn foul_detection_system(
                     });
                     if telemetry.is_some() {
                         sim_telemetry::emit::foul(
-                            current_tick.as_deref().map_or(0, |t| t.0),
+                            current_tick.0,
                             e1.to_bits(),
                             e2.to_bits(),
                         );
@@ -128,7 +128,7 @@ pub fn foul_detection_system(
 
 pub fn minimum_player_count_system(
     team_query: Query<&Team>,
-    current_tick: Option<Res<CurrentTick>>,
+    current_tick: Res<CurrentTick>,
     telemetry: Option<Res<TelemetryConfig>>,
 ) {
     for team in team_query.iter() {
@@ -141,7 +141,7 @@ pub fn minimum_player_count_system(
             );
             if telemetry.is_some() {
                 sim_telemetry::emit::low_player_count(
-                    current_tick.as_deref().map_or(0, |t| t.0),
+                    current_tick.0,
                     &team.name,
                     player_count,
                 );

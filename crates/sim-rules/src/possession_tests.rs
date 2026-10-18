@@ -9,12 +9,13 @@ use sim_components::{
 };
 use sim_math::Vec2;
 
+use crate::tests::rules_world;
 use crate::possession_resolution_system;
 use crate::touch::apply_ball_touched_system;
 
 #[test]
 fn test_possession_resolution() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
@@ -66,7 +67,7 @@ fn test_possession_resolution() {
 /// `Entity::PLACEHOLDER`.
 #[test]
 fn test_possession_resolved_to_real_entity() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
@@ -127,7 +128,7 @@ fn test_possession_resolved_to_real_entity() {
 /// Test that possession is cleared when no player is within 1.5 m.
 #[test]
 fn test_possession_cleared_when_ball_free() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
@@ -183,7 +184,7 @@ fn test_possession_cleared_when_ball_free() {
 /// becomes the `LastTouch` entity with `kind = Play`.
 #[test]
 fn test_possession_change_registers_play_touch() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);
@@ -294,7 +295,7 @@ fn test_possession_change_registers_play_touch() {
 /// `kind = Play`.
 #[test]
 fn test_interception_registers_play_touch_on_new_possessor() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let ball_entity = world.spawn(()).id();
     world.entity_mut(ball_entity).insert(BallMarker);

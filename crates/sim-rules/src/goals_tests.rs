@@ -11,7 +11,7 @@ use sim_components::{
 };
 use sim_math::Vec2;
 
-use crate::tests::ball_fixture;
+use crate::tests::{ball_fixture, rules_world};
 use crate::{
     CurrentTick, GoalForEmit, PendingOutOfBounds, PendingRestart, goal_detection_system,
     out_of_bounds_system, restart_system, touch::apply_ball_touched_system,
@@ -19,7 +19,7 @@ use crate::{
 
 #[test]
 fn test_goal_scored_home_team() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     // Match is now a Resource (Phase C §4.3).
     world.insert_resource(sim_components::Match {
@@ -103,7 +103,7 @@ fn test_goal_scored_home_team() {
 /// event (with scorer / assister attribution) in the same tick.
 #[test]
 fn test_goal_detection_stashes_emit_slot() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -174,7 +174,7 @@ fn test_goal_detection_stashes_emit_slot() {
 
 #[test]
 fn test_goal_scored_away_team() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -242,7 +242,7 @@ fn test_goal_scored_away_team() {
 
 #[test]
 fn test_no_double_goal_when_ball_dead() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -285,7 +285,7 @@ fn test_no_double_goal_when_ball_dead() {
 /// as a `TouchKind::Restart` touch.
 #[test]
 fn test_kickoff_restart_registers_restart_touch() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -362,7 +362,7 @@ fn test_kickoff_restart_registers_restart_touch() {
 /// team 1.
 #[test]
 fn test_goal_scorer_threads_into_post_goal_kickoff_taker() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     world.insert_resource(sim_components::Match {
         id: 1,
@@ -418,7 +418,7 @@ fn test_goal_scorer_threads_into_post_goal_kickoff_taker() {
 /// velocity. Schedule `out_of_bounds_system` + `restart_system`.
 #[test]
 fn test_missed_shot_gives_goal_kick() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {
@@ -483,7 +483,7 @@ fn test_missed_shot_gives_goal_kick() {
 /// a corner is awarded. Ball settles at (104.9, 10.0), low velocity.
 #[test]
 fn test_deflected_shot_gives_corner() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {
@@ -549,7 +549,7 @@ fn test_deflected_shot_gives_corner() {
 /// new Restart touch is queued in `PendingBallTouches`.
 #[test]
 fn test_throw_in_to_opposite_team() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let toucher = world.spawn(()).id();
     world.entity_mut(toucher).insert(Player {
@@ -601,7 +601,7 @@ fn test_throw_in_to_opposite_team() {
     // OOB signal payload must carry the original toucher. We verify
     // this on a fresh schedule that excludes `restart_system` (which
     // takes the signal out of the resource after consuming it).
-    let mut world2 = World::new();
+    let mut world2 = rules_world();
     world2.insert_resource(Ball {
         kick_velocity: None,
         spin: 0.0,
@@ -655,7 +655,7 @@ fn test_throw_in_to_opposite_team() {
 /// no longer depends on deferred `Commands` being flushed.
 #[test]
 fn test_oob_restart_reads_signal_same_run_without_sync_point() {
-    let mut world = World::new();
+    let mut world = rules_world();
 
     let toucher = world.spawn((Player { team_id: TeamId(0), intent: None }, TeamIdComponent(TeamId(0)))).id();
     let taker = world.spawn((Player { team_id: TeamId(1), intent: None }, TeamIdComponent(TeamId(1)))).id();
@@ -730,7 +730,7 @@ fn spawn_teams(world: &mut World, home_direction: i8) {
 /// Run `goal_detection_system` once with the ball at `(ball_x, 34)` and
 /// return the resulting score plus the scorer carried by the goal event.
 fn score_for_ball_at(ball_x: f32, home_direction: i8) -> ((u8, u8), TeamId) {
-    let mut world = World::new();
+    let mut world = rules_world();
     world.insert_resource(sim_components::Match {
         id: 1,
         home_team: Entity::PLACEHOLDER,

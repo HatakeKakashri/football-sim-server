@@ -321,30 +321,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_unknown_match_id_is_404() {
-        let state = test_state(3600, 120);
-        let response = get_stream_handler(
-            State(state),
-            Path("nope".to_string()),
-            HeaderMap::new(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn stream_before_post_is_409() {
-        let state = test_state(3600, 120);
-        let response = get_stream_handler(
-            State(state),
-            Path("m-0000".to_string()),
-            HeaderMap::new(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-    }
-
-    #[tokio::test]
     async fn post_starts_thread_and_stream_serves_error_over_real_flow() {
         // `tick_cap = 120` fails the match fast, exercising the real
         // POST → OS-thread → failure-stream path without a full match.

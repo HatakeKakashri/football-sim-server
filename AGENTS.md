@@ -49,7 +49,7 @@ route any unsanctioned spawn to a mid-tier model — consider doing so.
 - Workspace: 11-crate Rust (`crates/sim-math`, `sim-components`, `sim-physics`, `sim-ai-core`, `sim-ai-player`, `sim-ai-manager`, `sim-rules`, `sim-core`, `sim-replay`, `sim-telemetry`, `sim-server`). Single binary: `target/{debug,release}/football-sim`.
 - Toolchain: `edition = "2024"`, `clippy::pedantic + nursery + all` (warn) workspace-wide, `unsafe_code = "forbid"`, `bevy_ecs 0.14` (no full Bevy, ECS only).
 - Build everything: `cargo build --release`.
-- Run all tests: `cargo test --workspace`. Two are `#[ignore]`'d (full-match end-to-end); run with `cargo test --workspace -- --ignored` only when needed — they take minutes.
+- Run all tests: `cargo test --workspace`. 13 are `#[ignore]`'d (9 in `sim-core`, 4 in `sim-server`: full-match end-to-end, tactic-signature, playability gate; list them with `cargo test --workspace -- --ignored --list`); run with `cargo test --workspace -- --ignored` only when needed — they take minutes.
 - Run a single test: `cargo test -p sim-core --lib test_pipeline_isolation_single_tick`.
 - Phase 0 playability gate (10 full matches, prints the four gate metrics): `cargo test --release -p sim-core -- --ignored phase_0_playability_gate --nocapture`.
 - Per-PR clippy (uses git diff against `origin/main`): `bash scripts/clippy-changed.sh`. Floor: `cargo clippy --workspace --all-targets -- -D warnings`.
@@ -234,7 +234,7 @@ Single-context: one `CONTEXT.md` at repo root, ADRs in `docs/adr/`. See `docs/ag
 - Workspace: 11-crate Rust (`crates/sim-math`, `sim-components`, `sim-physics`, `sim-ai-core`, `sim-ai-player`, `sim-ai-manager`, `sim-rules`, `sim-core`, `sim-replay`, `sim-telemetry`, `sim-server`). Single binary: `target/{debug,release}/football-sim`.
 - Toolchain: `edition = "2024"`, `clippy::pedantic + nursery + all` (warn) workspace-wide, `unsafe_code = "forbid"`, `bevy_ecs 0.14` (no full Bevy, ECS only).
 - Build everything: `cargo build --release`.
-- Run all tests: `cargo test --workspace`. Two are `#[ignore]`'d (full-match end-to-end); run with `cargo test --workspace -- --ignored` only when needed — they take minutes.
+- Run all tests: `cargo test --workspace`. 13 are `#[ignore]`'d (9 in `sim-core`, 4 in `sim-server`: full-match end-to-end, tactic-signature, playability gate; list them with `cargo test --workspace -- --ignored --list`); run with `cargo test --workspace -- --ignored` only when needed — they take minutes.
 - Run a single test: `cargo test -p sim-core --lib test_pipeline_isolation_single_tick`.
 - Phase 0 playability gate (10 full matches, prints the four gate metrics): `cargo test --release -p sim-core -- --ignored phase_0_playability_gate --nocapture`.
 - Per-PR clippy (uses git diff against `origin/main`): `bash scripts/clippy-changed.sh`. Floor: `cargo clippy --workspace --all-targets -- -D warnings`.

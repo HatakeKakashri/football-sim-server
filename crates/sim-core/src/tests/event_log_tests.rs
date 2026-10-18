@@ -87,9 +87,16 @@ fn event_log_is_deterministic_for_same_seed() {
         log_a.next_seq, log_b.next_seq,
         "same seed must produce the same number of events"
     );
+    // Compare the full event (kind and payload, not just the envelope):
+    // A6 requires an identical event log, and two runs that agree on
+    // `seq`/`tick` but differ in payload would otherwise pass.
+    assert_eq!(log_a.events.len(), log_b.events.len());
     for (i, (a, b)) in log_a.events.iter().zip(log_b.events.iter()).enumerate() {
-        assert_eq!(a.envelope().seq, b.envelope().seq, "seq at {i} differs");
-        assert_eq!(a.envelope().tick, b.envelope().tick, "tick at seq {i}");
+        assert_eq!(
+            format!("{a:?}"),
+            format!("{b:?}"),
+            "event at index {i} differs between identical-seed runs"
+        );
     }
 }
 

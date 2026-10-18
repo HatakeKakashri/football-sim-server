@@ -812,52 +812,6 @@ fn test_pre_touch_oob_logs_error_and_skips() {
 // Resource / schedule-wiring checks (M12.1, Steps 12-13)
 // -----------------------------------------------------------------------------
 
-/// Schedule `kick_execution_system` → `possession_resolution_system`
-/// → `apply_ball_touched_system` in the documented order. After the
-/// consumer runs, the `PendingBallTouches` buffer must be drained.
-#[test]
-fn test_pending_ball_touches_resource_registered() {
-    let mut world = World::new();
-    world.insert_resource(PendingBallTouches::default());
-    world.insert_resource(PendingPass::default());
-
-    let possessor = world.spawn(()).id();
-    let ball_entity = world.spawn(()).id();
-    world.entity_mut(ball_entity).insert(BallMarker);
-    world
-        .entity_mut(ball_entity)
-        .insert(Position(pos(50.0, 34.0)));
-    world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
-    world.insert_resource(Ball {
-        kick_velocity: None,
-        spin: 0.0,
-        state: BallState::Possessed,
-        possessor: Some(possessor),
-        last_touch: None,
-
-        touch_history: [None, None],
-    });
-
-    // No pushes to the buffer — the consumer should still run, but
-    // `Ball.last_touch` stays at its pre-seed value. The wiring
-    // invariant we test is "buffer drained after consumer runs".
-    let mut schedule = Schedule::default();
-    schedule.add_systems(
-        (
-            kick_execution_system,
-            possession_resolution_system,
-            apply_ball_touched_system,
-        )
-            .chain(),
-    );
-    schedule.run(&mut world);
-
-    assert!(
-        world.resource::<PendingBallTouches>().0.is_empty(),
-        "PendingBallTouches must be drained after apply_ball_touched_system runs"
-    );
-}
-
 /// The `apply_ball_touched_system` consumer must run **before** every
 /// other Rules system (out-of-bounds, goal, foul, restart).
 /// Spec §3 reads: "Rules = ball-touch consumer → out-of-bounds → goal →

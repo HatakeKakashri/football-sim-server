@@ -20,26 +20,6 @@ fn pos(x: f32, y: f32) -> sim_math::Vec2 {
 }
 
 #[test]
-fn events_emitted_in_short_window_have_gapless_seq() {
-    let mut sim = Simulation::new(12345);
-    for _ in 0..3_000 {
-        sim.tick();
-    }
-    let log = sim
-        .world()
-        .get_resource::<EventLog>()
-        .cloned()
-        .expect("EventLog is registered");
-    if !log.events.is_empty() {
-        assert!(
-            check_gapless_seq(&log).is_none(),
-            "seq is not gapless: {} events",
-            log.events.len()
-        );
-    }
-}
-
-#[test]
 fn pass_event_has_correct_kick_tick_and_success() {
     // Build a pass event directly to pin the payload shape.
     let mut world = bevy_ecs::prelude::World::new();

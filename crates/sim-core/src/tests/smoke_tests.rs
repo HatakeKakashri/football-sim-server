@@ -21,7 +21,7 @@ use sim_components::{
 };
 use sim_math::{PITCH_LENGTH, PITCH_WIDTH, Vec2, goal_position_for};
 
-use crate::Simulation;
+use crate::{EventLog, MatchEvent, Simulation};
 use crate::simulation::formation::reset_formation;
 use crate::simulation::lifecycle::HalfTimeEntryTick;
 
@@ -222,11 +222,12 @@ struct SmokeOutcome {
     played: [bool; 2],
     crossed_halfway: bool,
     shot_occurred: bool,
+    shot_logged: bool,
 }
 
 impl SmokeOutcome {
     const fn complete(&self) -> bool {
-        self.played[0] && self.played[1] && self.crossed_halfway && self.shot_occurred
+        self.played[0] && self.played[1] && self.crossed_halfway && self.shot_occurred && self.shot_logged
     }
 }
 
@@ -238,6 +239,7 @@ fn run_windowed_smoke(seed: u64) -> SmokeOutcome {
         played: [false; 2],
         crossed_halfway: false,
         shot_occurred: false,
+        shot_logged: false,
     };
 
     for _ in 0..THREE_MINUTES_TICKS {
@@ -257,6 +259,18 @@ fn run_windowed_smoke(seed: u64) -> SmokeOutcome {
                 outcome.shot_occurred = true;
             }
         }
+        // A shot intent alone can fail to resolve; require the `Shot`
+        // event the shot pipeline emits (PRD §14: "at least one shot occurs").
+        if !outcome.shot_logged
+            && sim
+                .world()
+                .resource::<EventLog>()
+                .events
+                .iter()
+                .any(|event| matches!(event, MatchEvent::Shot { .. }))
+        {
+            outcome.shot_logged = true;
+        }
         if outcome.complete() {
             break;
         }
@@ -269,6 +283,7 @@ fn assert_smoke_criteria(seed: u64, outcome: &SmokeOutcome) {
     assert!(outcome.played[0], "seed {seed}: team 0 must play the ball within 3 minutes");
     assert!(outcome.played[1], "seed {seed}: team 1 must play the ball within 3 minutes");
     assert!(outcome.shot_occurred, "seed {seed}: at least one shot must occur within 3 minutes");
+    assert!(outcome.shot_logged, "seed {seed}: at least one Shot event must be logged within 3 minutes");
 }
 
 /// Full PRD §14 windowed smoke test on the canonical seed: both teams *play*

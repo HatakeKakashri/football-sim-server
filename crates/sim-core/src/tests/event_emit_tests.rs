@@ -30,13 +30,18 @@ fn events_emitted_in_short_window_have_gapless_seq() {
         .get_resource::<EventLog>()
         .cloned()
         .expect("EventLog is registered");
-    if !log.events.is_empty() {
-        assert!(
-            check_gapless_seq(&log).is_none(),
-            "seq is not gapless: {} events",
-            log.events.len()
-        );
-    }
+    // Precondition: the check below is only meaningful on a non-empty log.
+    // (It used to be skipped when the log was empty, so an emitter that
+    // stopped producing events would have passed silently.)
+    assert!(
+        !log.events.is_empty(),
+        "no events emitted in 3,000 ticks; gapless-seq check would be vacuous"
+    );
+    assert!(
+        check_gapless_seq(&log).is_none(),
+        "seq is not gapless: {} events",
+        log.events.len()
+    );
 }
 
 #[test]

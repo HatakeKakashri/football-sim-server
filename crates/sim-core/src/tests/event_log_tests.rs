@@ -242,22 +242,30 @@ fn full_match_lifecycle_events_and_score_fold() {
 /// Every event has the envelope fields populated (PRD §9.1).
 #[test]
 fn events_have_populated_envelope() {
-    let (_, log) = play_to_tick(12345, 5_000);
+    const TICKS: u64 = 5_000;
+    let (_, log) = play_to_tick(12345, TICKS);
+    // Precondition: a loop over an empty log would pass vacuously.
+    assert!(!log.events.is_empty(), "no events emitted in {TICKS} ticks");
     for event in &log.events {
         let env = event.envelope();
         // `half` is 1 or 2.
         assert!(env.half == 1 || env.half == 2, "half must be 1 or 2");
-        // `minute` is 45 or 90.
+        // `minute` is 45 or 90, and tracks the half (45 ↔ 1, 90 ↔ 2).
+        // NOTE: this pins the implementation's reading of PRD §8.3. PRD §9.1's
+        // example envelope shows `"minute": 2`, which contradicts it; see the
+        // report's follow-up issues. The expectation is deliberately unchanged.
         assert!(
-            env.minute == 45 || env.minute == 90,
-            "minute must be 45 or 90"
+            (env.half == 1 && env.minute == 45) || (env.half == 2 && env.minute == 90),
+            "minute must be 45 in half 1 and 90 in half 2, got half {} minute {}",
+            env.half,
+            env.minute
         );
         // `added_minute` is None or a positive integer.
         if let Some(n) = env.added_minute {
             assert!(n >= 1, "added_minute must be ≥ 1 when present");
             assert!(n <= 10, "added_minute must be ≤ 10 per PRD §8.4");
         }
-        assert!(env.tick <= 400_000, "tick must be within the cap");
+        assert!(env.tick <= TICKS, "tick {} must not exceed the {TICKS} ticks played", env.tick);
     }
 }
 

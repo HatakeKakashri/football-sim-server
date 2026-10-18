@@ -13,9 +13,17 @@ use sim_components::{
 };
 use sim_math::Vec2;
 
+/// A player whose brain holds a single action with no considerations adopts
+/// exactly that action's intent after one cadence window, even at low
+/// stamina.
+///
+/// This pins the decision system's *selection plumbing* only. It does NOT
+/// verify that stamina influences decisions: the brain has no
+/// stamina-dependent consideration, so stamina is inert here. (Previously
+/// named `test_stamina_based_decision` and described as "low stamina player
+/// conserves energy", which the assertion never checked.)
 #[test]
-fn test_stamina_based_decision() {
-    // Test that low stamina player conserves energy
+fn test_sole_action_is_adopted_regardless_of_low_stamina() {
     let mut world = World::new();
 
     // Create a player with low stamina
@@ -105,14 +113,27 @@ fn test_stamina_based_decision() {
     // slot their entity id hashes into.
     run_one_cadence_window(&mut world, &mut schedule, match_entity);
 
-    // Check that player has an intent
     let player = world.entity(player_entity).get::<Player>().unwrap();
-    assert!(player.intent.is_some());
+    assert_eq!(
+        player.intent,
+        Some(sim_components::Intent::Movement(
+            sim_components::MovementIntent::MoveToPosition(Vec2::new(100.0, 34.0))
+        )),
+        "the sole action's intent must be adopted unchanged"
+    );
 }
 
+/// A player whose brain holds a single `PassTo` action adopts a `PassTo`
+/// intent after one cadence window.
+///
+/// Scope note: the perception snapshot has no nearby teammates (the
+/// `teammate_entity` below is not referenced by perception), so this does
+/// NOT test teammate evaluation or pass-target selection. It pins that the
+/// decision system installs the pass action. (Previously named
+/// `test_passing_option`, described as "considers teammates in better
+/// positions".)
 #[test]
-fn test_passing_option() {
-    // Test that player considers teammates in better positions
+fn test_sole_pass_action_is_adopted() {
     let mut world = World::new();
 
     // Create a player
@@ -217,14 +238,22 @@ fn test_passing_option() {
     // slot their entity id hashes into.
     run_one_cadence_window(&mut world, &mut schedule, match_entity);
 
-    // Check that player has a pass intent
     let player = world.entity(player_entity).get::<Player>().unwrap();
-    assert!(player.intent.is_some());
+    assert_eq!(
+        player.intent,
+        Some(sim_components::Intent::Action(sim_components::ActionIntent::PassTo)),
+        "the sole PassTo action must be adopted as the player's intent"
+    );
 }
 
+/// A defender whose brain holds a single `Tackle(attacker)` action adopts a
+/// tackle intent targeting that exact attacker after one cadence window.
+///
+/// Scope note: the brain has no considerations, so this does NOT verify that
+/// a defender *chooses* to tackle in response to the attacker's shot intent;
+/// it pins that the target entity is carried through the decision system.
 #[test]
-fn test_defender_tackle() {
-    // Test that defender attempts tackle when attacker shoots
+fn test_sole_tackle_action_keeps_its_target() {
     let mut world = World::new();
 
     // Create an attacker with shoot intent
@@ -338,9 +367,14 @@ fn test_defender_tackle() {
     // slot their entity id hashes into.
     run_one_cadence_window(&mut world, &mut schedule, match_entity);
 
-    // Check that defender has tackle intent
     let defender = world.entity(defender_entity).get::<Player>().unwrap();
-    assert!(defender.intent.is_some());
+    assert_eq!(
+        defender.intent,
+        Some(sim_components::Intent::Action(sim_components::ActionIntent::Tackle(
+            attacker_entity
+        ))),
+        "tackle intent must target the attacker entity"
+    );
 }
 
 /// Phase D (`CODEBASE_REVIEW` §7): per-player decision cadence.

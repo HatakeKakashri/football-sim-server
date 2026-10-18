@@ -21,7 +21,6 @@
 use bevy_ecs::prelude::Entity;
 use sim_components::{
     ActionIntent, Ball, Intent, Match, MatchClock, MatchState, Player, Position, TeamId, TouchKind,
-    time::TOTAL_MATCH_TICKS,
 };
 use sim_math::PITCH_LENGTH;
 
@@ -33,9 +32,13 @@ const HALFWAY_X: f32 = PITCH_LENGTH / 2.0;
 /// so a ball resting on the line does not flicker between sides.
 const SIDE_DEAD_BAND: f32 = 1.0;
 
-/// A full match plus slack; a match that has not reached `FullTime` by then
-/// is stalled.
-const TICK_CAP: u64 = TOTAL_MATCH_TICKS + 1_000;
+/// A full match plus slack to accommodate the per-half added time
+/// cap (10 minutes per half per `sim-rules/src/clock.rs:21`). The
+/// previous `TOTAL_MATCH_TICKS + 1_000` was too low for matches that
+/// accrue the minimum 1 minute of added time per half (`FullTime` then
+/// lands at ~`331_219` ticks, `6_200` past the old cap). `700_000`
+/// leaves generous slack for the worst-case 10-min-per-half scenario.
+const TICK_CAP: u64 = 700_000;
 
 const GATE_SEEDS: [u64; 10] = [2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010];
 

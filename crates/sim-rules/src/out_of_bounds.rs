@@ -22,11 +22,21 @@ use crate::{OutOfBoundsEvent, PendingOutOfBounds};
 /// will be at the boundary with reduced (possibly near-zero) velocity.
 ///
 /// This system detects OOB by checking if a ball is:
-///   1. At/near the boundary (within `OOB_TOLERANCE`)
-///   2. Has low velocity (not actively moving toward play)
+///   1. At/near any boundary (within `OOB_TOLERANCE`), OR
+///   2. Settled inside one of the four corner zones (within `CORNER_TOLERANCE`
+///      of both a goal line and a touchline).
+///
+/// And has low velocity (not actively moving toward play).
 ///
 /// This correctly handles: ball kicked out → physics bounces it back → OOB detects
 /// it settled at the boundary → classifies restart type.
+///
+/// Phase 0 fix: a ball stuck inside a corner (e.g. settled at (104, 1) after
+/// multiple bounces) does not satisfy `OOB_TOLERANCE` against either boundary
+/// (it sits 1 m inside the goal line and 1 m above the touchline). Without the
+/// corner-zone branch below, such balls oscillate at the corner for hundreds
+/// of ticks and stall the match. The corner-zone branch uses a wider tolerance
+/// and emits the appropriate `Corner` / `GoalKick` so play restarts.
 ///
 /// Does NOT reset ball position — that belongs to `restart_system`.
 ///
@@ -36,6 +46,10 @@ use crate::{OutOfBoundsEvent, PendingOutOfBounds};
 /// same tick. A resource is used instead of a `Commands` component
 /// insert because deferred commands are not visible to later systems
 /// until a sync point runs.
+#[allow(
+    clippy::similar_names,
+    reason = "the four `in_corner_tl/tr/bl/br` locals are intentionally parallel (corner-quadrant suffix)"
+)]
 pub fn out_of_bounds_system(
     ball_query: Query<(&Position, &Velocity), With<BallMarker>>,
     current_tick: Res<crate::CurrentTick>,
@@ -44,6 +58,14 @@ pub fn out_of_bounds_system(
 ) {
     // Tolerance for "at boundary" detection (physics clamps to boundary)
     const OOB_TOLERANCE: f32 = 0.15;
+    // Wider tolerance for the corner-zone detection. A ball can settle up
+    // to ~1 m inside the corner after the physics bounce (damping +
+    // half-velocity wall bounce leaves the ball a few ticks' worth
+    // inside the pitch). `OOB_TOLERANCE = 0.15` would miss this;
+    // `CORNER_TOLERANCE = 2.0` catches the stuck-corner case without
+    // false-positiveing legitimate play (which is filtered out by the
+    // velocity check + the `Possessed` skip below).
+    const CORNER_TOLERANCE: f32 = 2.0;
     // Velocity threshold below which ball is considered "settled"
     const VELOCITY_THRESHOLD: f32 = 0.5;
 
@@ -51,8 +73,10 @@ pub fn out_of_bounds_system(
         return;
     };
 
-    // Skip balls already dead or in flight (unless settling from flight)
-    if ball.state == BallState::Dead {
+    // Skip balls already dead, in flight, or possessed by a player.
+    // Possessed = a player is actively carrying / dribbling; that is
+    // in-play, not out of play, regardless of where on the pitch.
+    if ball.state == BallState::Dead || ball.state == BallState::Possessed {
         return;
     }
 
@@ -72,13 +96,30 @@ pub fn out_of_bounds_system(
     let at_goal_line = at_left || at_right;
     let at_touchline = at_bottom || at_top;
 
-    if !at_goal_line && !at_touchline {
-        return; // Not at any boundary
+    // Corner-zone check: settled ball near one of the four corners.
+    let in_corner_tl = x <= CORNER_TOLERANCE && y <= CORNER_TOLERANCE;
+    let in_corner_tr =
+        x >= PITCH_LENGTH - CORNER_TOLERANCE && y <= CORNER_TOLERANCE;
+    let in_corner_bl =
+        x <= CORNER_TOLERANCE && y >= PITCH_WIDTH - CORNER_TOLERANCE;
+    let in_corner_br =
+        x >= PITCH_LENGTH - CORNER_TOLERANCE && y >= PITCH_WIDTH - CORNER_TOLERANCE;
+    let at_corner_zone = in_corner_tl || in_corner_tr || in_corner_bl || in_corner_br;
+
+    if !at_goal_line && !at_touchline && !at_corner_zone {
+        return; // Not at any boundary and not in any corner zone
     }
 
-    let oob_type = if at_goal_line && at_touchline {
-        // Corner: ball at intersection of goal line and touchline.
-        // Check goal area first → GoalKick; otherwise → Corner.
+    let oob_type = if at_corner_zone {
+        // Corner zone: classify by y against the goal area.
+        if (GOAL_Y_MIN..=GOAL_Y_MAX).contains(&y) {
+            BallOutOfBoundsType::GoalKick
+        } else {
+            BallOutOfBoundsType::Corner
+        }
+    } else if at_goal_line && at_touchline {
+        // Goal line + touchline (within OOB_TOLERANCE of both): classify
+        // by y against the goal area.
         if (GOAL_Y_MIN..=GOAL_Y_MAX).contains(&y) {
             BallOutOfBoundsType::GoalKick
         } else {

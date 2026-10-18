@@ -284,10 +284,21 @@ pub fn pitch_control_system(
     }
 }
 
+#[allow(
+    clippy::type_complexity,
+    reason = "Bevy Query signature: the player-position query carries (Entity, &Position) plus With<Player>/Without<BallMarker> filters; extracting a type alias adds noise without clarifying intent"
+)]
 pub fn ball_physics_system(
     pitch: Res<PitchDimensions>,
     mut ball_query: Query<(&mut Position, &mut Velocity), With<sim_components::BallMarker>>,
     mut ball: ResMut<sim_components::Ball>,
+    // Bevy `Query` conflict: ball_physics_system already borrows the ball
+    // entity's `Position` mutably, so the player query must NOT match the
+    // ball entity. `Without<BallMarker>` keeps the queries disjoint.
+    player_query: Query<
+        (Entity, &sim_components::Position),
+        (With<sim_components::Player>, Without<sim_components::BallMarker>),
+    >,
 ) {
     let Ok((mut pos, mut vel)) = ball_query.get_single_mut() else {
         return;
@@ -325,6 +336,25 @@ pub fn ball_physics_system(
         ball.state = sim_components::BallState::Possessed;
     } else {
         ball.state = sim_components::BallState::Free;
+    }
+
+    // Phase 0 fix: when the ball is Possessed (low velocity, has a
+    // possessor), snap the ball's position to the possessor's position so
+    // the ball follows the player. Without this, a player who Possesses
+    // the ball near the corner can drift away from it while the ball
+    // stays put — the player then either kicks a stationary ball back
+    // toward the corner or is left "Possessing" a ball several metres
+    // behind them. Both cases cause the ball to oscillate near the
+    // corner and stall the match.
+    if ball.state == sim_components::BallState::Possessed
+        && let Some(possessor_entity) = ball.possessor
+        && let Ok((_, player_pos)) = player_query.get(possessor_entity)
+    {
+        pos.0 = player_pos.0;
+        // Zero velocity — the ball is glued to the player until the
+        // player kicks. Without this, residual velocity from a recent
+        // bounce would continue to drift the ball off the player.
+        vel.0 = Vec2::zero();
     }
 }
 

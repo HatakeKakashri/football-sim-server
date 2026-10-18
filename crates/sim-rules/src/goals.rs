@@ -198,12 +198,28 @@ pub fn goal_detection_system(
     clippy::too_many_lines,
     reason = "two restart arms (goal kickoff + OOB) plus their emit-slot writes; splitting would scatter Law 8/9/10 placement across systems"
 )]
+#[allow(
+    clippy::type_complexity,
+    reason = "Bevy Query signatures: the position-bearing player query carries (Entity, &TeamIdComponent, &Position) plus With<Player>/Without<BallMarker> filters; extracting a type alias adds noise without clarifying intent"
+)]
 pub fn restart_system(
     mut commands: Commands,
     mut ball_query: Query<(&mut Position, &mut Velocity), With<BallMarker>>,
-    player_query: Query<(Entity, &TeamIdComponent), With<Player>>,
+    // `Without<BallMarker>` keeps the queries disjoint: `ball_query`
+    // already borrows the ball entity's `Position` mutably, so a player
+    // query that also matches `BallMarker` would conflict.
+    player_query: Query<
+        (Entity, &TeamIdComponent, &sim_components::Position),
+        (With<Player>, Without<BallMarker>),
+    >,
+    // Player-only (no Position) fallback query for sparse test worlds
+    // that spawn `Player` entities without a `Position` component. The
+    // Bevy query system treats each `Query` parameter as independent
+    // (disjoint-filter rules don't apply), so this can coexist with
+    // `player_query` above.
+    any_player_query: Query<(Entity, &TeamIdComponent), With<Player>>,
     current_tick: Res<CurrentTick>,
-    pending_restart: Res<PendingRestart>,
+    pending_restart: Option<Res<PendingRestart>>,
     mut ball: ResMut<Ball>,
     mut pending_touches: ResMut<PendingBallTouches>,
     telemetry: Option<Res<TelemetryConfig>>,
@@ -213,7 +229,16 @@ pub fn restart_system(
     mut referee_query: Query<&mut Referee>,
 ) {
     let tick = current_tick.0;
-    // Handle KickoffRestart from goal (delayed by 60 ticks)
+    // Handle KickoffRestart from goal (delayed by 60 ticks). The
+    // resource is optional: `commands.remove_resource::<PendingRestart>()`
+    // clears it after the kickoff settles, and the next tick must not
+    // panic waiting for it to come back. `goal_detection_system` (in the
+    // same `Rules` chain as this system) inserts the resource again on
+    // the next goal, which becomes visible after the deferred commands
+    // flush at the end of that tick.
+    let Some(pending_restart) = pending_restart else {
+        return;
+    };
     if let Some(event) = &pending_restart.event
         && matches!(event, RuleEvent::KickoffRestart)
         && current_tick.0 >= pending_restart.restart_tick
@@ -241,7 +266,7 @@ pub fn restart_system(
                     TeamId(0)
                 }
             });
-            let taker = first_player_on_team(&player_query, conceded_team);
+            let taker = first_player_on_team(&any_player_query, conceded_team);
             // `first_player_on_team` returns `Entity::PLACEHOLDER`
             // when the team has no players (sparse test worlds);
             // `from_taker` collapses the placeholder case to a
@@ -303,31 +328,98 @@ pub fn restart_system(
         // `player: None` rather than inventing a taker, and the
         // desync is flagged via `tracing::error!` in release
         // builds too.
-        let (taker_team, taker) = last_touch.as_ref().map_or_else(
-            || {
-                tracing::error!(
-                    tick = current_tick.0,
-                    "restart_system OOB arm: last_touch is None (touch \
-                     entity desync); defaulting to home"
-                );
-                (TeamId(0), Entity::PLACEHOLDER)
-            },
-            |last| {
-                // Opposite team: 0 ↔ 1.
-                let team = if last.team == TeamId(0) {
-                    TeamId(1)
-                } else {
-                    TeamId(0)
-                };
-                (team, first_player_on_team(&player_query, team))
-            },
-        );
+        // Law-correct taker team = opposite of last toucher. Used for the
+        // event-envelope `team` (PRD §9.2, Law 17 — the restart belongs
+        // to the defending team). Always recorded; the wire invariant
+        // `envelope.team = opposite(last_touch.team)` holds regardless
+        // of which player actually takes the kick.
+        let law_taker_team = last_touch.as_ref().map_or(TeamId(0), |last| {
+            if last.team == TeamId(0) {
+                TeamId(1)
+            } else {
+                TeamId(0)
+            }
+        });
+        // Resolve the entity that actually takes the kick. Falls
+        // through a sequence of fallbacks when the law-correct team
+        // has no reachable player at the restart spot:
+        //   1. nearest player on the law-correct team (with or
+        //      without a position; `nearest_player_to` falls back
+        //      internally to `first_player_on_team` when no entity
+        //      carries `Position`)
+        //   2. if that nearest player is too far from the restart
+        //      spot (corner kick to a defender 100 m away), the kick
+        //      cannot be taken and the match stalls with the ball
+        //      parked at the flag. Hand the kick to whoever is
+        //      closest from either team so play restarts. This
+        //      deviates from Law 17 (corner kick goes to the
+        //      defending team); it is gated on the law-correct team's
+        //      nearest player having a position AND being too far
+        //      away.
+        //   3. `Entity::PLACEHOLDER` only if no player on either
+        //      team can be identified at all.
+        let taker = last_touch.as_ref().map_or(Entity::PLACEHOLDER, |_last| {
+            const RESTART_REACH_M: f32 = 15.0;
+            let nearest_on_law_team = nearest_player_to(
+                &player_query,
+                &any_player_query,
+                law_taker_team,
+                restart_pos,
+            );
+            // The position-bearing query returns the law team's
+            // nearest player only when that entity has a `Position`
+            // component. Without a position we can't measure distance
+            // to the restart spot, so assume "reachable" — the test
+            // worlds that omit `Position` would otherwise fall through
+            // to the other team and pick the wrong entity.
+            let reachable_check = player_query
+                .get(nearest_on_law_team)
+                .ok()
+                .map(|(_, _, pos)| (pos.0 - restart_pos).length() <= RESTART_REACH_M);
+            match reachable_check {
+                // No position on the nearest-on-law-team player:
+                // cannot measure distance. Keep that player (it is
+                // the right team per Law 9).
+                //
+                // Within reach: kick can actually be taken.
+                None | Some(true) => nearest_on_law_team,
+                // Out of reach and reachable information is sound:
+                // hand the kick to whoever on either team is
+                // closest. Phase 0 stall-break.
+                Some(false) => {
+                    let other_team = if law_taker_team == TeamId(0) {
+                        TeamId(1)
+                    } else {
+                        TeamId(0)
+                    };
+                    let nearest_other = nearest_player_to(
+                        &player_query,
+                        &any_player_query,
+                        other_team,
+                        restart_pos,
+                    );
+                    if nearest_other == Entity::PLACEHOLDER {
+                        // No player on either team has a position
+                        // (sparse test world); keep the law-correct
+                        // entity so existing assertions on
+                        // `restart.taker.is_some()` continue to hold.
+                        nearest_on_law_team
+                    } else {
+                        nearest_other
+                    }
+                }
+            }
+        });
         // `first_player_on_team` returns `Entity::PLACEHOLDER`
         // when the team has no players (sparse test worlds);
         // `from_taker` collapses the placeholder case to a
-        // team-only touch so the check lives in one place.
+        // team-only touch so the check lives in one place. Use
+        // `law_taker_team` here too — the touch record is the
+        // seed of `Ball.last_touch`, which subsequent OOB events
+        // would otherwise classify by the fallback team, breaking
+        // the wire invariant.
         let touch = sim_components::LastTouch::from_taker(
-            taker_team,
+            law_taker_team,
             taker,
             sim_components::TouchKind::Restart,
         )
@@ -337,12 +429,15 @@ pub fn restart_system(
         // (sim-core) can write `out_of_bounds` and `restart`
         // back-to-back with the correct fields (PRD §9.2, ticket
         // 09). The emitter runs in the same `Rules` set after this
-        // system, then clears the resource.
+        // system, then clears the resource. `taker_team` is always
+        // the law-correct team (opposite of the last toucher) so the
+        // wire invariant `envelope.team = opposite(last_touch.team)`
+        // holds regardless of which entity actually took the kick.
         oob_for_emit.0 = Some(OobRestartResolved {
             oob_type,
             exit_point,
             last_touch,
-            taker_team,
+            taker_team: law_taker_team,
             taker,
             restart_pos,
         });
@@ -378,14 +473,56 @@ pub fn restart_system(
 /// Returns `Entity::PLACEHOLDER` if the team has no players in the
 /// query (e.g. a test world with no `TeamIdComponent` matches).
 fn first_player_on_team(
-    player_query: &Query<(Entity, &TeamIdComponent), With<Player>>,
+    any_player_query: &Query<(Entity, &TeamIdComponent), With<Player>>,
     team_id: TeamId,
 ) -> Entity {
     let mut best: Option<Entity> = None;
-    for (e, t) in player_query.iter() {
+    for (e, t) in any_player_query.iter() {
         if t.0 == team_id && best.is_none_or(|b| e.to_bits() < b.to_bits()) {
             best = Some(e);
         }
     }
     best.unwrap_or(Entity::PLACEHOLDER)
+}
+
+/// Find the player on `team_id` closest to `target` (Euclidean). Falls
+/// back to `first_player_on_team` if no player on `team_id` carries
+/// `Position` (sparse test worlds) and to `Entity::PLACEHOLDER` if the
+/// team is empty. Ties broken by lowest entity id (deterministic).
+#[allow(
+    clippy::type_complexity,
+    reason = "Bevy Query reference parameter: positional query type mirrors the system signature (see restart_system)"
+)]
+fn nearest_player_to(
+    player_query: &Query<
+        (Entity, &TeamIdComponent, &sim_components::Position),
+        (With<Player>, Without<BallMarker>),
+    >,
+    any_player_query: &Query<(Entity, &TeamIdComponent), With<Player>>,
+    team_id: TeamId,
+    target: Vec2,
+) -> Entity {
+    let mut best: Option<(Entity, f32)> = None;
+    for (e, t, pos) in player_query.iter() {
+        if t.0 != team_id {
+            continue;
+        }
+        let d = (pos.0 - target).length_squared();
+        match best {
+            Some((_, bd)) if d > bd => {}
+            Some((be, _)) => {
+                if e.to_bits() < be.to_bits() {
+                    best = Some((e, d));
+                }
+            }
+            None => best = Some((e, d)),
+        }
+    }
+    match best {
+        Some((e, _)) => e,
+        // Sparse worlds omit `Position` from their player entities, so
+        // the position-bearing query finds no candidates. Fall back to
+        // a Player-only query to keep the taker-record non-empty.
+        None => first_player_on_team(any_player_query, team_id),
+    }
 }

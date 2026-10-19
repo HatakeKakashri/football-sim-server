@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
-use sim_components::{Ball, BallState, FormationSlot, Match, MatchClock, Player, Position, Team};
-use sim_core::{EventLog, InvariantCounters, MatchEvent, Simulation, check_invariants};
+use sim_components::{Ball, FormationSlot, Match, MatchClock, Player, Position, Team};
+use sim_core::{EventLog, MatchEvent, Simulation, Termination, TickHook, run_match_driver};
 
 use super::stream::{
     CompletedMatch, FrameBall, FramePlayer, HalfBoundaries, RosterEntry, StreamFrame,
@@ -33,74 +33,73 @@ pub enum MatchOutcome {
     },
 }
 
+/// Per-tick hook for the API runner: captures 10 Hz frames every 6 ticks.
+struct RunnerHook<'a> {
+    roster_ids: &'a HashMap<u64, String>,
+    frames: &'a mut Vec<StreamFrame>,
+}
+
+impl TickHook for RunnerHook<'_> {
+    fn on_tick(&mut self, sim: &Simulation) -> Result<(), String> {
+        if sim.current_tick().is_multiple_of(6) {
+            self.frames.push(capture_frame(sim, self.roster_ids));
+        }
+        Ok(())
+    }
+}
+
 /// Run one match on the calling thread.
 ///
 /// Drives the simulation to `FullTime` (or the tick cap), enforces
 /// the six PRD §12 invariants per tick via [`check_invariants`],
 /// captures 10 Hz frames, and assembles the [`CompletedMatch`].
+///
+/// # Panics
+///
+/// Panics if `RunnerHook::on_tick` returns `Err`, which it never does
+/// (it only captures frames). The `.expect()` is a defensive guard.
 #[must_use]
-#[allow(
-    clippy::too_many_lines,
-    reason = "single match-driving loop: invariant bookkeeping mirrors the harness play_one loop; splitting the loop from its counters would scatter the per-tick contract"
-)]
 pub fn run_match_blocking(match_id: &str, seed: u64, tick_cap: u64) -> MatchOutcome {
     let mut sim = Simulation::new(seed);
     let attack_start = attack_directions(&sim);
     let roster = build_roster(&sim);
 
-    let mut counters = InvariantCounters::default();
     let mut frames: Vec<StreamFrame> = Vec::new();
-    let mut events_seen = 0_usize;
-    let mut failure: Option<MatchOutcome> = None;
+    let mut hook = RunnerHook {
+        roster_ids: &roster.ids,
+        frames: &mut frames,
+    };
+    let result = run_match_driver(&mut sim, tick_cap, &mut hook)
+        .expect("invariant: RunnerHook never errors");
 
-    for _ in 0..tick_cap {
-        sim.tick();
+    if let Some(violation) = result.violation {
+        return MatchOutcome::Failed {
+            code: violation.code().to_string(),
+            message: violation.message(),
+            last_good_tick: violation.last_good_tick(),
+        };
+    }
+
+    if result.termination == Termination::TickCap {
         let world = sim.world();
-        let ball_state = world.get_resource::<Ball>().map(|ball| ball.state);
-        let clock = world.get_resource::<MatchClock>().cloned();
-        let match_state = world.get_resource::<Match>().map(|m| m.state);
-        let full_time_now = match_state == Some(sim_components::MatchState::FullTime);
-
-        counters.last_elapsed_ticks = clock.map(|c| c.elapsed_ticks);
-        counters.last_state = match_state;
-        if matches!(ball_state, Some(BallState::Dead)) {
-            counters.current_dead_window += 1;
-        } else {
-            counters.current_dead_window = 0;
-        }
-        if let Some(log) = world.get_resource::<EventLog>() {
-            for event in log.events.iter().skip(events_seen) {
-                if let MatchEvent::Goal { envelope, .. } = event {
-                    if envelope.team == Some(sim_components::TeamId(0)) {
-                        counters.goals_observed.0 += 1;
-                    } else {
-                        counters.goals_observed.1 += 1;
-                    }
-                }
-            }
-            events_seen = log.events.len();
-        }
-
-        if sim.current_tick().is_multiple_of(6) {
-            frames.push(capture_frame(&sim, &roster.ids));
-        }
-
-        if let Some(violation) = check_invariants(&sim, &counters) {
-            failure = Some(MatchOutcome::Failed {
-                code: violation.code().to_string(),
-                message: violation.message(),
+        let match_res = world.get_resource::<Match>().cloned();
+        let Some(match_res) = match_res else {
+            return MatchOutcome::Failed {
+                code: "no_match_resource".to_string(),
+                message: "Match resource missing after simulation".to_string(),
                 last_good_tick: sim.current_tick(),
-            });
-            break;
-        }
-        if full_time_now {
-            break;
-        }
+            };
+        };
+        return MatchOutcome::Failed {
+            code: "tick_cap_exceeded".to_string(),
+            message: format!(
+                "match did not reach FullTime within {tick_cap} ticks (state {:?})",
+                match_res.state
+            ),
+            last_good_tick: sim.current_tick(),
+        };
     }
 
-    if let Some(outcome) = failure {
-        return outcome;
-    }
     let world = sim.world();
     let match_res = world.get_resource::<Match>().cloned();
     let Some(match_res) = match_res else {

@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
 
-use sim_core::Simulation;
+use sim_core::{Simulation, Termination, TickHook, run_match_driver, TICK_CAP};
 use sim_telemetry::TraceMetadata;
 
 use crate::telemetry_cli::{TraceOptions, plan_trace};
@@ -31,6 +31,23 @@ pub struct SimulateReport {
     pub final_state_hash: u64,
     /// `Simulation::current_tick` at the end of the run.
     pub ticks_run: u64,
+}
+
+/// Per-tick hook for `simulate`: writes one `MatchSnapshot` per tick to
+/// the JSONL writer when an output path is provided.
+struct SimulateHook<'a> {
+    writer: Option<&'a mut BufWriter<File>>,
+}
+
+impl TickHook for SimulateHook<'_> {
+    fn on_tick(&mut self, sim: &Simulation) -> Result<(), String> {
+        if let Some(w) = &mut self.writer {
+            let state = sim.get_state()?;
+            serde_json::to_writer(&mut *w, &state).map_err(|e| e.to_string())?;
+            w.write_all(b"\n").map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
 }
 
 /// Run a deterministic simulation, optionally recording a Chrome trace.
@@ -77,39 +94,14 @@ pub fn run_simulate(
         .map(|path| Ok::<_, Box<dyn std::error::Error>>(BufWriter::new(File::create(path)?)))
         .transpose()?;
 
-    if options.full_match {
-        loop {
-            sim.tick();
-            if let Some(w) = &mut writer {
-                let state = sim.get_state()?;
-                serde_json::to_writer(&mut *w, &state)?;
-                w.write_all(b"\n")?;
-            }
-            let m_state = sim.world().resource::<sim_components::Match>().state;
-            if m_state == sim_components::MatchState::FullTime {
-                tracing::info!("[Tick {:06}] FullTime reached", sim.current_tick());
-                break;
-            }
-            // Safety net
-            if sim.current_tick() > 400_000 {
-                tracing::warn!("Exceeded 400k ticks without reaching FullTime");
-                break;
-            }
-        }
-    } else {
-        for _ in 0..options.ticks {
-            sim.tick();
-            if let Some(w) = &mut writer {
-                let state = sim.get_state()?;
-                serde_json::to_writer(&mut *w, &state)?;
-                w.write_all(b"\n")?;
-            }
-            if sim.world().resource::<sim_components::Match>().state
-                == sim_components::MatchState::FullTime
-            {
-                break;
-            }
-        }
+    let tick_cap = if options.full_match { TICK_CAP } else { options.ticks };
+    let mut hook = SimulateHook { writer: writer.as_mut() };
+    let result = run_match_driver(&mut sim, tick_cap, &mut hook)?;
+    if result.termination == Termination::TickCap && options.full_match {
+        tracing::warn!("Exceeded {tick_cap} ticks without reaching FullTime");
+    }
+    if result.termination == Termination::FullTime {
+        tracing::info!("[Tick {:06}] FullTime reached", sim.current_tick());
     }
     let duration = start.elapsed();
 

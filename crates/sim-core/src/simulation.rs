@@ -9,6 +9,7 @@ pub mod formation;
 pub mod installer;
 pub mod invariants;
 pub mod lifecycle;
+pub mod match_driver;
 mod snapshot;
 pub mod state_hash;
 mod tick;

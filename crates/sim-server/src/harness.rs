@@ -30,9 +30,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use sim_components::{Ball, BallState, Match, MatchState};
+use sim_components::Match;
 use sim_core::{
-    InvariantCounters, InvariantViolation, Simulation as SimResult, TICK_CAP, check_invariants,
+    InvariantViolation, Simulation, Termination, TickHook, run_match_driver, TICK_CAP,
 };
 
 /// Hard cap on how many ticks the harness will drive a single match
@@ -250,87 +250,21 @@ fn run_seed_with_invariants(seed: u64) -> (SeedReport, std::time::Duration) {
 
 /// Play one seed. Returns the per-seed metrics and the final hash.
 fn play_one(seed: u64) -> (SeedReport, u64) {
-    let mut sim = SimResult::new(seed);
-    let mut counters = InvariantCounters::default();
+    let mut sim = Simulation::new(seed);
+    let mut hook = HarnessHook;
+    let result = run_match_driver(&mut sim, HARNESS_TICK_CAP, &mut hook)
+        .expect("invariant: HarnessHook never errors");
+
     let mut report = SeedReport {
         seed,
         ..SeedReport::default()
     };
-
-    let mut reached_full_time = false;
-    let mut last_violation: Option<InvariantViolation> = None;
-    // High-water mark into the `EventLog` for incremental goal
-    // counting (only events appended since the last tick are
-    // scanned, so the per-tick cost stays constant).
-    let mut events_seen = 0_usize;
-
-    for _ in 0..HARNESS_TICK_CAP {
-        sim.tick();
-        let reached_full_time_now;
-        let ball_state;
-        let elapsed_ticks;
-        let match_state;
-        {
-            let world = sim.world();
-            ball_state = world.get_resource::<Ball>().map(|b| b.state);
-            elapsed_ticks = world
-                .get_resource::<sim_components::MatchClock>()
-                .map(|c| c.elapsed_ticks);
-            match_state = world.get_resource::<Match>().map(|m| m.state);
-            reached_full_time_now = match_state == Some(MatchState::FullTime);
-        }
-
-        // Per-tick invariant inputs.
-        counters.last_elapsed_ticks = elapsed_ticks;
-        counters.last_state = match_state;
-        if matches!(ball_state, Some(BallState::Dead)) {
-            counters.current_dead_window += 1;
-            if counters.current_dead_window > report.max_dead_ball_window {
-                report.max_dead_ball_window = counters.current_dead_window;
-            }
-        } else {
-            counters.current_dead_window = 0;
-        }
-        // Count goals: fold the `goal` events in the `EventLog`
-        // (ticket 10 — the log is the source of truth for the score,
-        // PRD §9.3). Invariant 1 then checks `Match.score` against
-        // this count every tick, which is the A7 gate.
-        {
-            let world = sim.world();
-            if let Some(log) = world.get_resource::<sim_core::EventLog>() {
-                for event in log.events.iter().skip(events_seen) {
-                    if let sim_core::MatchEvent::Goal { envelope, .. } = event {
-                        if envelope.team == Some(sim_components::TeamId(0)) {
-                            counters.goals_observed.0 += 1;
-                        } else {
-                            counters.goals_observed.1 += 1;
-                        }
-                    }
-                }
-                events_seen = log.events.len();
-            }
-        }
-
-        // Run invariants.
-        if let Some(violation) = check_invariants(&sim, &counters) {
-            last_violation = Some(violation);
-            break;
-        }
-
-        if reached_full_time_now {
-            reached_full_time = true;
-            break;
-        }
-    }
-
-    let final_score = sim
-        .world()
-        .get_resource::<Match>()
-        .map_or((0, 0), |m| m.score);
+    let final_score = sim.world().get_resource::<Match>().map_or((0, 0), |m| m.score);
     report.final_score = final_score;
-    report.ticks_run = sim.current_tick();
-    report.reached_full_time = reached_full_time;
-    if let Some(v) = last_violation {
+    report.ticks_run = result.ticks_run;
+    report.reached_full_time = result.termination == Termination::FullTime;
+    report.max_dead_ball_window = result.max_dead_ball_window;
+    if let Some(v) = result.violation {
         report.violations.push(v);
     }
     // A8 event ordering (PRD §13.1 A8): seq strictly increasing and
@@ -344,6 +278,16 @@ fn play_one(seed: u64) -> (SeedReport, u64) {
         .is_some_and(|log| sim_core::check_gapless_seq(log).is_none());
     let hash = sim.get_state_hash();
     (report, hash)
+}
+
+/// Per-tick hook for the harness: no per-tick side effects; all metrics
+/// are collected from `MatchResult` after the run.
+struct HarnessHook;
+
+impl TickHook for HarnessHook {
+    fn on_tick(&mut self, _sim: &Simulation) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

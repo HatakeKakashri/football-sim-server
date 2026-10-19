@@ -7,7 +7,7 @@
 pub(crate) mod clock;
 #[cfg(test)]
 mod clock_tests;
-pub mod emit_state;
+pub mod outcome;
 pub(crate) mod goals;
 #[cfg(test)]
 mod goals_tests;
@@ -30,8 +30,9 @@ pub(crate) mod touch;
 mod touch_registration_tests;
 
 pub use clock::{added_time_calculation_system, match_duration_enforcement_system};
-pub use emit_state::{
-    GoalForEmit, GoalResolved, KickoffForEmit, KickoffResolved, PendingShot, PendingShotState,
+pub use outcome::{
+    GoalResolved, KickoffResolved, OobRestartResolved, PendingPassState, PendingRuleOutcome,
+    PendingShotState, TackleAttempt,
 };
 pub use goals::{goal_detection_system, restart_system};
 pub use install::install_rules_resources;
@@ -41,8 +42,7 @@ pub use referee::{foul_detection_system, minimum_player_count_system, stoppage_t
 pub use touch::apply_ball_touched_system;
 
 use bevy_ecs::prelude::*;
-use sim_components::{BallOutOfBoundsType, LastTouch, PlayerId, RuleEvent, Team, TeamId};
-use sim_math::Vec2;
+use sim_components::{BallOutOfBoundsType, LastTouch, RuleEvent, Team, TeamId};
 
 /// Shared constants used by every rule system. Kept in one place so the
 /// pitch geometry has a single source of truth.
@@ -124,54 +124,6 @@ impl PendingOutOfBounds {
     }
 }
 
-/// Resolved OOB restart data, written by `restart_system` after it
-/// has placed the ball and selected a taker (PRD §8.2 / ticket 09).
-///
-/// Consumed by the `emit_oob_and_restart_events` system in `sim-core`
-/// to emit the `out_of_bounds` and `restart` events back-to-back
-/// (the OOB event carries the field-restart kind; the restart event
-/// follows with the placement). The pair shares the same tick; the
-/// invariant `out_of_bounds.seq + 1 == restart.seq` (issue 09) is
-/// preserved by emitting them in a single call from one emitter.
-///
-/// `None` means no OOB restart is awaiting emission on this tick.
-/// `restart_system` clears the resource after writing so the next
-/// emitter run sees `None` until the next OOB.
-#[derive(Resource, Debug, Clone, Copy, Default)]
-pub struct OobRestartForEmit(pub Option<OobRestartResolved>);
-
-/// Snapshot of an OOB restart's resolved data.
-///
-/// Holds enough information to emit both the `out_of_bounds` and
-/// `restart` events without re-querying the world (the ball has
-/// already been moved to its restart position by `restart_system`).
-#[derive(Debug, Clone, Copy)]
-pub struct OobRestartResolved {
-    /// Concrete restart kind (positional: throw-in / goal-kick /
-    /// corner). The `out_of_bounds` event's `restart` field and the
-    /// matching `restart` event's `kind` field both come from here.
-    pub oob_type: sim_components::BallOutOfBoundsType,
-    /// Ball position when the OOB detector fired. The OOB detector
-    /// reads the position *after* physics has clamped the ball to the
-    /// boundary; this is the clamped position (the "exit point" on
-    /// the wire).
-    pub exit_point: sim_math::Vec2,
-    /// Full `LastTouch` at the moment of the OOB. `None` only in the
-    /// desync case the rule engine flags with `tracing::error!`.
-    pub last_touch: Option<sim_components::LastTouch>,
-    /// Team that takes the restart (Law 9: opposite of the last
-    /// toucher). Carries through to the `restart` event's envelope
-    /// `team`.
-    pub taker_team: sim_components::TeamId,
-    /// Player who takes the restart. `Entity::PLACEHOLDER` for test
-    /// worlds without players on the taker team.
-    pub taker: bevy_ecs::prelude::Entity,
-    /// Restart placement position, computed by
-    /// `out_of_bounds::calculate_oob_restart_position` using
-    /// `exit_point` and `oob_type`.
-    pub restart_pos: sim_math::Vec2,
-}
-
 /// Team that attacks the goal at the given end of the pitch in the
 /// current half, read from each team's per-half `attack_direction`
 /// (`+1` attacks `x = PITCH_LENGTH`, `-1` attacks `x = 0`).
@@ -200,147 +152,3 @@ pub const fn referee_advantage_system(
     // Phase N: real advantage window logic
     let _ = (ball_res, match_res);
 }
-
-/// In-flight pass awaiting resolution (PRD §9.3).
-///
-/// A `pass` event is emitted at the resolution tick — the ball's
-/// next acquisition, OOB, or goal. The kick site (e.g.
-/// `kick_execution_system`) writes this resource with the kicker
-/// identity, the intended receiver, the kick tick, and the
-/// ball position at the kick. The resolver (acquisition, OOB,
-/// goal) reads it, emits the `pass` event, and clears the
-/// resource. If the ball transitions out of `InFlight` (e.g. the
-/// physics system resets it) without any of those triggers
-/// firing, the resource must be cleared by `cancel_pending_pass`
-/// so stale state doesn't leak into a later event.
-#[derive(Resource, Debug, Clone, Copy)]
-pub struct PendingPass {
-    /// `true` when a pass is in flight and the resource holds
-    /// meaningful data.
-    pub active: bool,
-    /// Kicker (last `Play` touch at the kick). The receiving
-    /// `pass` event stamps this onto the `from` field.
-    pub from: PlayerId,
-    /// Team of the kicker at the kick. Used for `success` (true
-    /// when the receiver is on the same team) and `to` (the
-    /// intended receiver identity).
-    pub from_team: TeamId,
-    /// Intended receiver. `None` when the kick was directed at
-    /// "space" or a generic teammate slot, or when the
-    /// AI brain emitted `PassTo` without a real teammate to
-    /// target.
-    pub intended_to: Option<PlayerId>,
-    /// Tick at which the kick happened (PRD §9.2 `kick_tick`).
-    pub kick_tick: u64,
-    /// Ball position at the kick (PRD §9.2 `start`).
-    pub kick_position: Vec2,
-}
-
-impl PendingPass {
-    /// `true` when there is an in-flight pass awaiting resolution.
-    #[must_use]
-    pub const fn is_active(&self) -> bool {
-        self.active
-    }
-
-    /// Resource default: inactive, with the inner fields zeroed
-    /// via the same primitives `Bevy` resource storage uses.
-    /// `Vec2::zero` and `TeamId(0)` and `PlayerId(0)` are valid
-    /// placeholder values for an inactive pending pass.
-    #[must_use]
-    pub const fn default_inactive() -> Self {
-        Self {
-            active: false,
-            from: PlayerId::from_bits(0),
-            from_team: TeamId(0),
-            intended_to: None,
-            kick_tick: 0,
-            kick_position: Vec2::zero(),
-        }
-    }
-
-    /// Mark the resource as having a pending pass. Writers fill
-    /// the rest of the fields directly; this method only flips
-    /// `active` so a partially-constructed value is never
-    /// reported as active.
-    pub const fn set(&mut self) {
-        self.active = true;
-    }
-
-    /// Clear the resource, leaving it inactive. Returns the
-    /// previously-active state so callers can branch on whether
-    /// a pass actually fired.
-    #[must_use]
-    pub const fn cancel(&mut self) -> bool {
-        let was_active = self.active;
-        self.active = false;
-        was_active
-    }
-
-    /// Take the pending pass (clears it). Used by resolvers that
-    /// need the value to emit a `pass` event.
-    #[must_use]
-    pub const fn take(&mut self) -> Option<Self> {
-        if self.active {
-            Some(Self {
-                active: false,
-                from: self.from,
-                from_team: self.from_team,
-                intended_to: self.intended_to,
-                kick_tick: self.kick_tick,
-                kick_position: self.kick_position,
-            })
-        } else {
-            None
-        }
-    }
-}
-
-impl Default for PendingPass {
-    fn default() -> Self {
-        Self::default_inactive()
-    }
-}
-
-/// A tackle attempt awaiting event emission (PRD §9.2 `tackle`).
-///
-/// Written by `sim-ai-player::execution::player_action_execution_system`
-/// when a player executes a `Tackle` intent against a ball carrier;
-/// drained by `sim-core::simulation::event_emit::emit_tackle_events`
-/// in the `Rules` set, which emits the `tackle` event with `tackler`,
-/// `carrier` and `success`. Carried by a resource rather than deferred
-/// commands so the emitter sees it in the same system run (see the
-/// `PendingOutOfBounds` contract).
-#[derive(Resource, Debug, Clone, Copy, Default)]
-pub struct PendingTackle(pub Option<TackleAttempt>);
-
-/// One resolved tackle attempt.
-#[derive(Debug, Clone, Copy)]
-pub struct TackleAttempt {
-    /// The player attempting the tackle.
-    pub tackler: Entity,
-    /// The ball carrier being challenged.
-    pub carrier: Entity,
-    /// `true` when the tackle won the ball.
-    pub success: bool,
-}
-
-impl PendingTackle {
-    /// Record a tackle attempt for the event emitter to drain this tick.
-    pub const fn set(&mut self, attempt: TackleAttempt) {
-        self.0 = Some(attempt);
-    }
-
-    /// Take the pending tackle attempt, leaving `None` for next time.
-    #[must_use]
-    pub const fn take(&mut self) -> Option<TackleAttempt> {
-        self.0.take()
-    }
-
-    /// Peek at the pending tackle attempt without consuming it.
-    #[must_use]
-    pub const fn get(&self) -> Option<&TackleAttempt> {
-        self.0.as_ref()
-    }
-}
-

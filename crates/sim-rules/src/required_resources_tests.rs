@@ -13,7 +13,7 @@ use sim_math::Vec2;
 
 use crate::tests::ball_fixture;
 use crate::{
-    CurrentTick, GoalForEmit, KickoffForEmit, OobRestartForEmit, foul_detection_system,
+    CurrentTick, PendingRuleOutcome, foul_detection_system,
     goal_detection_system, install_rules_resources, match_duration_enforcement_system,
     minimum_player_count_system, possession_resolution_system, restart_system,
     stoppage_tracking_system,
@@ -111,7 +111,7 @@ fn goal_detection_requires_current_tick() {
 
 #[test]
 fn goal_detection_requires_goal_slot() {
-    assert_requires::<GoalForEmit, _>(goal_detection_system);
+    assert_requires::<PendingRuleOutcome, _>(goal_detection_system);
 }
 
 #[test]
@@ -121,10 +121,10 @@ fn restart_requires_current_tick() {
 
 #[test]
 fn restart_requires_oob_restart_slot() {
-    assert_requires::<OobRestartForEmit, _>(restart_system);
+    assert_requires::<PendingRuleOutcome, _>(restart_system);
 }
 
 #[test]
 fn restart_requires_kickoff_slot() {
-    assert_requires::<KickoffForEmit, _>(restart_system);
+    assert_requires::<PendingRuleOutcome, _>(restart_system);
 }

@@ -1,11 +1,10 @@
 //! Event emission systems (PRD §9).
 //!
-//! These systems read the rule-engine state (`Ball`, `PendingPass`,
-//! `MatchClock`, the OOB/goal signals) and append events to the
-//! `EventLog` resource. They are the only writers to the log; rule
-//! crates (`sim-rules`) keep producing their existing
-//! `RuleEvent`-style component signals, and these systems translate
-//! them into the structured event log.
+//! These systems read the rule-engine state (`Ball`, `PendingRuleOutcome`,
+//! `MatchClock`) and append events to the `EventLog` resource. They are
+//! the only writers to the log; rule crates (`sim-rules`) keep producing
+//! their existing `RuleEvent`-style component signals, and these systems
+//! translate them into the structured event log.
 //!
 //! ## Why here, not in `sim-rules`?
 //!
@@ -17,11 +16,11 @@
 //!
 //! ## Writers
 //!
-//! - `resolve_pass_events`: emit `pass` events from `PendingPass`
+//! - `resolve_pass_events`: emit `pass` events from `RuleOutcome.pass`
 //!   whenever the ball is acquired (possession resolution), goes OOB,
-//!   or scores a goal. Clears `PendingPass` after emission, and
-//!   drains `GoalForEmit` last (it is the final reader in the chain).
-//! - `resolve_shot_events`: emit `shot` events from `PendingShot`
+//!   or scores a goal. Drains `RuleOutcome.pass` and clears
+//!   `RuleOutcome.goal` last (it is the final reader in the chain).
+//! - `resolve_shot_events`: emit `shot` events from `RuleOutcome.shot`
 //!   on the same three resolutions, plus a companion `save` event
 //!   when an opposing goalkeeper makes the stop.
 //! - `emit_goal_events`: emit `goal` (scorer / own-goal / assister
@@ -46,7 +45,7 @@ use sim_components::{
 };
 use sim_math::{Tuning, Vec2};
 use sim_physics::SimRng;
-use sim_rules::{GoalForEmit, KickoffForEmit, OobRestartForEmit, PendingOutOfBounds, PendingPass, PendingShot};
+use sim_rules::{PendingOutOfBounds, PendingRuleOutcome};
 use sim_components::shot_pipeline::shot_accuracy;
 
 use super::SimulationSet;
@@ -168,9 +167,8 @@ fn shot_on_target(
 )]
 pub fn resolve_pass_events(
     mut event_log: ResMut<EventLog>,
-    mut pending_pass: ResMut<PendingPass>,
+    mut outcome: ResMut<PendingRuleOutcome>,
     pending_oob: Res<PendingOutOfBounds>,
-    mut goal_for_emit: ResMut<GoalForEmit>,
     ball: Res<Ball>,
     ball_query: Query<&Position, With<BallMarker>>,
     clock: Res<MatchClock>,
@@ -187,7 +185,7 @@ pub fn resolve_pass_events(
     // tick. Resolve the pending pass with `to = None` and
     // `success = false`, then drain the OOB signal.
     if pending_oob.get().is_some()
-        && let Some(pass) = pending_pass.take()
+        && let Some(pass) = outcome.0.pass.take()
     {
         let event = build_pass_event(
             event_log.next_seq,
@@ -209,8 +207,8 @@ pub fn resolve_pass_events(
     // Goal arm (ticket 10): the ball crossed the line while a pass
     // was in flight. Resolve with `to = None` and `success = false`
     // — the pass never reached a teammate.
-    if goal_for_emit.0.is_some()
-        && let Some(pass) = pending_pass.take()
+    if outcome.0.goal.is_some()
+        && let Some(pass) = outcome.0.pass.take()
     {
         let event = build_pass_event(
             event_log.next_seq,
@@ -230,7 +228,7 @@ pub fn resolve_pass_events(
     // chain (`emit_goal_events` and `resolve_shot_events` ran
     // earlier), so clearing here keeps a stale signal from re-firing
     // on the next tick.
-    goal_for_emit.0 = None;
+    outcome.0.goal = None;
 
     // Acquisition arm: the ball is now Possessed and a pass was
     // in flight. Resolve it. The possessor's team is read from
@@ -238,7 +236,7 @@ pub fn resolve_pass_events(
     // `TeamIdComponent` is the canonical place).
     if ball.state == BallState::Possessed
         && let Some(possessor) = ball.possessor
-        && let Some(pass) = pending_pass.take()
+        && let Some(pass) = outcome.0.pass.take()
     {
         let possessor_team = team_query
             .iter()
@@ -395,16 +393,16 @@ pub fn emit_possession_change_on_oob(
 /// team (which takes the next kickoff, Law 10). The cache update keeps
 /// the later kickoff acquisition from double-emitting.
 ///
-/// Does **not** drain `GoalForEmit`: the pass and shot resolvers read
+/// Does **not** drain `RuleOutcome.goal`: the pass and shot resolvers read
 /// the same signal later in the chain, and `resolve_pass_events`
 /// (last) owns the drain.
 pub fn emit_goal_events(
     mut event_log: ResMut<EventLog>,
-    goal_for_emit: Res<GoalForEmit>,
+    outcome: Res<PendingRuleOutcome>,
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(resolved) = goal_for_emit.0 else {
+    let Some(resolved) = outcome.0.goal.as_ref() else {
         return;
     };
     let tick = current_tick.0;
@@ -456,11 +454,11 @@ pub fn emit_goal_events(
 /// world.
 pub fn emit_kickoff_restart_events(
     mut event_log: ResMut<EventLog>,
-    mut kickoff_for_emit: ResMut<KickoffForEmit>,
+    mut outcome: ResMut<PendingRuleOutcome>,
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(resolved) = kickoff_for_emit.0 else {
+    let Some(resolved) = outcome.0.kickoff.take() else {
         return;
     };
     let tick = current_tick.0;
@@ -483,7 +481,6 @@ pub fn emit_kickoff_restart_events(
         None,
     );
     event_log.append(event);
-    kickoff_for_emit.0 = None;
 }
 
 /// `shot` (plus `save`) resolution (PRD §9.2, ticket 10).
@@ -514,9 +511,7 @@ pub fn emit_kickoff_restart_events(
 )]
 pub fn resolve_shot_events(
     mut event_log: ResMut<EventLog>,
-    mut pending_shot: ResMut<PendingShot>,
-    goal_for_emit: Res<GoalForEmit>,
-    oob_for_emit: Res<OobRestartForEmit>,
+    mut outcome: ResMut<PendingRuleOutcome>,
     ball: Res<Ball>,
     ball_vel: Query<&Velocity, With<BallMarker>>,
     team_query: Query<(
@@ -530,14 +525,17 @@ pub fn resolve_shot_events(
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(shot_state) = pending_shot.0 else {
+    // Peek (don't consume) — the shot may need multiple ticks to resolve
+    // (goal / OOB / possession). Only clear when an arm fires.
+    let Some(shot_state) = outcome.0.shot.as_ref().copied() else {
         return;
     };
     let tick = current_tick.0;
     let shooter_id = PlayerId::from_entity(shot_state.shooter);
 
     // Goal arm: the shot went straight in.
-    if goal_for_emit.0.is_some() {
+    if outcome.0.goal.is_some() {
+        outcome.0.shot = None;
         let event = build_shot_event(
             event_log.next_seq,
             tick,
@@ -548,13 +546,13 @@ pub fn resolve_shot_events(
             ShotOutcome::Goal,
         );
         event_log.append(event);
-        pending_shot.0 = None;
         return;
     }
 
     // OOB arm: resolved restart kind decides on-target vs off-target.
-    if let Some(resolved) = oob_for_emit.0 {
-        let (on_target, outcome) = match resolved.oob_type {
+    if let Some(resolved) = outcome.0.oob_restart.as_ref().copied() {
+        outcome.0.shot = None;
+        let (on_target, shot_outcome) = match resolved.oob_type {
             BallOutOfBoundsType::Corner => (true, ShotOutcome::Blocked),
             BallOutOfBoundsType::ThrowIn | BallOutOfBoundsType::GoalKick => {
                 (false, ShotOutcome::OffTarget)
@@ -567,10 +565,9 @@ pub fn resolve_shot_events(
             shot_state.shooter_team,
             shooter_id,
             on_target,
-            outcome,
+            shot_outcome,
         );
         event_log.append(event);
-        pending_shot.0 = None;
         return;
     }
 
@@ -579,11 +576,12 @@ pub fn resolve_shot_events(
         && let Some(possessor) = ball.possessor
         && let Some((_, team, role, _)) = team_query.iter().find(|(e, _, _, _)| *e == possessor)
     {
+        outcome.0.shot = None;
         let possessor_team = team.0;
         let is_keeper = role.is_some_and(|r| r.0 == Role::Goalkeeper);
         // `team` and `role` are copied out above, ending their borrows of
         // `team_query` so `shot_on_target` can re-borrow it below.
-        let (on_target, outcome) = if possessor_team == shot_state.shooter_team {
+        let (on_target, shot_outcome) = if possessor_team == shot_state.shooter_team {
             // Own side gathered it: the shooter's keeper collecting a
             // back-heeled effort (off target); a teammate gathering a
             // rebound (blocked in spirit — it never reached the goal).
@@ -619,12 +617,12 @@ pub fn resolve_shot_events(
             shot_state.shooter_team,
             shooter_id,
             on_target,
-            outcome,
+            shot_outcome,
         );
         event_log.append(shot_event);
         // A goalkeeper stop earns the companion `save` event on the
         // next `seq` (same tick).
-        if outcome == ShotOutcome::Saved {
+        if shot_outcome == ShotOutcome::Saved {
             let ball_speed = ball_vel.iter().next().map_or(0.0, |v| v.0.length());
             let kind = if ball_speed <= SAVE_CATCH_MAX_SPEED {
                 SaveKind::Catch
@@ -642,7 +640,6 @@ pub fn resolve_shot_events(
             );
             event_log.append(save);
         }
-        pending_shot.0 = None;
     }
 }
 
@@ -653,12 +650,12 @@ pub fn resolve_shot_events(
 /// `tackle` event per attempt with `tackler`, `carrier`, `success`.
 pub fn emit_tackle_events(
     mut event_log: ResMut<EventLog>,
-    mut pending_tackle: ResMut<sim_rules::PendingTackle>,
+    mut outcome: ResMut<PendingRuleOutcome>,
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
     team_query: Query<(Entity, &sim_components::TeamIdComponent)>,
 ) {
-    let Some(attempt) = pending_tackle.take() else {
+    let Some(attempt) = outcome.0.tackle.take() else {
         return;
     };
     let tick = current_tick.0;
@@ -755,11 +752,11 @@ pub fn emit_cross_header_events(
 )]
 pub fn emit_oob_and_restart_events(
     mut event_log: ResMut<EventLog>,
-    mut oob_for_emit: ResMut<OobRestartForEmit>,
+    mut outcome: ResMut<PendingRuleOutcome>,
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(resolved) = oob_for_emit.0 else {
+    let Some(resolved) = outcome.0.oob_restart.take() else {
         return;
     };
     let tick = current_tick.0;
@@ -803,7 +800,6 @@ pub fn emit_oob_and_restart_events(
     // Clear so the next emitter run is a no-op until the next OOB
     // restart. Defensive: leave the resource cleared if the run
     // was somehow re-entered (Bevy schedules a single run per tick).
-    oob_for_emit.0 = None;
 }
 
 /// Register the event-emission systems into the simulation
@@ -814,20 +810,21 @@ pub fn register_event_systems(schedule: &mut Schedule) {
     // their signals. The order is:
     // 1. `out_of_bounds_system` (writes `PendingOutOfBounds`)
     // 2. `possession_resolution_system` (sets `Ball.possessor`)
-    // 3. `restart_system` (consumes OOB, stashes `OobRestartForEmit`;
-    //    consumes post-goal kickoff, stashes `KickoffForEmit`)
+    // 3. `restart_system` (consumes OOB, stashes `RuleOutcome.oob_restart`;
+    //    consumes post-goal kickoff, stashes `RuleOutcome.kickoff`)
     // 4. `goal_detection_system` (credits the score, stashes
-    //    `GoalForEmit`)
-    // 5. `resolve_shot_events` (reads `GoalForEmit` +
-    //    `OobRestartForEmit` + `Ball`; emits `shot`, then `save`)
-    // 6. `emit_goal_events` (reads `GoalForEmit`; emits `goal`, then
+    //    `RuleOutcome.goal`)
+    // 5. `resolve_shot_events` (reads `RuleOutcome.goal` +
+    //    `RuleOutcome.oob_restart` + `Ball`; emits `shot`, then `save`)
+    // 6. `emit_goal_events` (reads `RuleOutcome.goal`; emits `goal`, then
     //    `possession_change` with cause `goal`)
-    // 7. `emit_kickoff_restart_events` (drains `KickoffForEmit`;
+    // 7. `emit_kickoff_restart_events` (drains `RuleOutcome.kickoff`;
     //    emits `kickoff` with `reason = after_goal`)
-    // 8. `emit_oob_and_restart_events` (drains `OobRestartForEmit`)
+    // 8. `emit_oob_and_restart_events` (drains `RuleOutcome.oob_restart`)
     // 9. `emit_possession_change_on_oob` / `..._on_acquisition`
-    // 10. `resolve_pass_events` (reads both signals to resolve
-    //    the pending pass; drains `GoalForEmit` last).
+    // 10. `resolve_pass_events` (reads `RuleOutcome.pass` and
+    //    `RuleOutcome.goal`; drains `RuleOutcome.pass` and clears
+    //    `RuleOutcome.goal` last).
     //
     // Shot/goal ordering is causal: the resolving `shot` (+ `save`)
     // precedes the `goal` it produced. The OOB+restart pair is

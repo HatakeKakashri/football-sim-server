@@ -13,7 +13,7 @@ use sim_components::{
 use sim_math::{Tuning, Vec2};
 use sim_physics::{PLAYER_ARRIVAL_DECEL, PLAYER_MAX_ACCEL_PER_TICK, SimRng};
 use sim_rules::{
-    CurrentTick, PendingPass, PendingShot, PendingShotState, PendingTackle, TackleAttempt,
+    CurrentTick, PendingPassState, PendingRuleOutcome, PendingShotState, TackleAttempt,
 };
 use sim_telemetry::TelemetryConfig;
 
@@ -150,7 +150,7 @@ pub fn player_action_execution_system(
     ball: Res<Ball>,
     tuning: Res<Tuning>,
     team_query: Query<&Team>,
-    mut pending_tackle: ResMut<PendingTackle>,
+    mut pending_rule_outcome: ResMut<PendingRuleOutcome>,
 ) {
     // Phase 2: real steering for every action. Each arm turns the abstract
     // intent into a constant-velocity steer toward (or away from) the
@@ -386,7 +386,7 @@ pub fn player_action_execution_system(
         // Record the tackle attempt so the Rules set can emit the
         // `tackle` event (`tackler`, `carrier`, `success`).
         if let (Some(success), Some(carrier)) = (tackle_success, tackle_carrier) {
-            pending_tackle.set(TackleAttempt {
+            pending_rule_outcome.0.tackle = Some(TackleAttempt {
                 tackler: entity,
                 carrier,
                 success,
@@ -472,8 +472,7 @@ pub fn kick_execution_system(
     team_query: Query<&Team>,
     mut ball: ResMut<Ball>,
     mut pending: ResMut<PendingBallTouches>,
-    mut pending_pass: ResMut<PendingPass>,
-    mut pending_shot: ResMut<PendingShot>,
+    mut pending_rule_outcome: ResMut<PendingRuleOutcome>,
     current_tick: Res<CurrentTick>,
     match_clock: Res<MatchClock>,
     telemetry: Option<Res<TelemetryConfig>>,
@@ -564,8 +563,8 @@ pub fn kick_execution_system(
         );
         ball.possessor = None;
         // PRD §9.3: a `pass` event is emitted at resolution. The
-        // resolver (acquisition, OOB, goal) reads `PendingPass` and
-        // emits the event with `kick_tick` and `start` (kick
+        // resolver (acquisition, OOB, goal) reads `PendingRuleOutcome.pass`
+        // and emits the event with `kick_tick` and `start` (kick
         // position). Record the kick site now so the resolver
         // doesn't have to reconstruct the kick from history.
         //
@@ -585,13 +584,13 @@ pub fn kick_execution_system(
                 .iter()
                 .next()
                 .map_or(Vec2::zero(), |p| p.0);
-            pending_shot.0 = Some(PendingShotState {
+            pending_rule_outcome.0.shot = Some(PendingShotState {
                 shooter: possessor,
                 shooter_team: possessor_player.team_id,
                 kick_tick: tick,
                 kick_pos,
             });
-            let _ = pending_pass.cancel();
+            pending_rule_outcome.0.pass = None;
         } else if matches!(intent, Intent::Action(ActionIntent::PassTo)) {
             // Ball position at the kick (`start`). The position is
             // on the ball entity as a `Position` component; look it
@@ -603,28 +602,29 @@ pub fn kick_execution_system(
                 .next()
                 .map_or(Vec2::zero(), |p| p.0);
             let kick_tick = match_clock.elapsed_ticks;
-            pending_pass.active = true;
-            pending_pass.from = PlayerId::from_entity(possessor);
-            pending_pass.from_team = possessor_player.team_id;
-            pending_pass.intended_to = perception
-                .nearby_teammates
-                .first()
-                .map(|t| PlayerId::from_entity(t.entity));
-            pending_pass.kick_tick = kick_tick;
-            pending_pass.kick_position = kick_pos;
+            pending_rule_outcome.0.pass = Some(PendingPassState {
+                from: PlayerId::from_entity(possessor),
+                from_team: possessor_player.team_id,
+                intended_to: perception
+                    .nearby_teammates
+                    .first()
+                    .map(|t| PlayerId::from_entity(t.entity)),
+                kick_tick,
+                kick_position: kick_pos,
+            });
             // A pass kick supersedes any stale pending shot (defensive;
             // the shot resolver normally drains first — see above).
-            pending_shot.0 = None;
+            pending_rule_outcome.0.shot = None;
         } else {
             // Any non-pass kick cancels a stale pending pass. This
             // shouldn't happen in normal play (a player with the
             // ball has only one intent at a time) but the defensive
             // cancel keeps the resolver from emitting a `pass` for
             // a shot.
-            let _ = pending_pass.cancel();
+            pending_rule_outcome.0.pass = None;
             // Same for a stale pending shot (defensive; the shot
             // resolver normally drains first — see above).
-            pending_shot.0 = None;
+            pending_rule_outcome.0.shot = None;
         }
         // Emit a `pass` flow event when telemetry is on and this was a
         // pass. Shots / tackles don't carry identity of a "receiver", so
@@ -846,7 +846,7 @@ mod tests {
             is_running: true,
         });
         world.insert_resource(TelemetryConfig::new(60, None).expect("valid"));
-        world.insert_resource(sim_rules::PendingPass::default());
+        world.insert_resource(sim_rules::PendingRuleOutcome::default());
 
         let events: EventVec = capture_trace(|| {
             let mut schedule = Schedule::default();
@@ -955,7 +955,7 @@ mod tests {
             kick_velocity: None,
         });
         world.insert_resource(sim_math::Tuning::default());
-        world.insert_resource(sim_rules::PendingTackle::default());
+        world.insert_resource(sim_rules::PendingRuleOutcome::default());
 
         let player_pos = Vec2::new(50.0, 34.0);
         let ball_pos = Vec2::new(60.0, 34.0);
@@ -1038,7 +1038,7 @@ mod tests {
             kick_velocity: None,
         });
         world.insert_resource(sim_math::Tuning::default());
-        world.insert_resource(sim_rules::PendingTackle::default());
+        world.insert_resource(sim_rules::PendingRuleOutcome::default());
 
         // Player 0.05 m from a stationary ball (inside the 0.1 m deadband).
         let player_pos = Vec2::new(50.0, 34.0);
@@ -1122,7 +1122,7 @@ mod tests {
         );
     }
 
-    /// A tackle attempt against a carrier records a `PendingTackle`
+    /// A tackle attempt against a carrier records a `PendingRuleOutcome.tackle`
     /// (`tackler`, `carrier`, `success`) and, on failure, puts the tackler
     /// in a `tackle_recovery_ticks` recovery window and drains stamina.
     #[test]
@@ -1131,7 +1131,7 @@ mod tests {
         world.insert_resource(sim_math::PitchDimensions::standard());
         world.insert_resource(SimRng::new(1));
         world.insert_resource(sim_math::Tuning::default());
-        world.insert_resource(PendingTackle::default());
+        world.insert_resource(PendingRuleOutcome::default());
 
         let snap = |pos: Vec2, ball: Vec2| PerceptionSnapshot {
             self_position: pos,
@@ -1208,8 +1208,10 @@ mod tests {
 
         // The attempt was recorded with the right identities.
         let attempt = world
-            .resource::<PendingTackle>()
-            .get()
+            .resource::<PendingRuleOutcome>()
+            .0
+            .tackle
+            .as_ref()
             .expect("a tackle attempt is recorded");
         assert_eq!(attempt.tackler, tackler);
         assert_eq!(attempt.carrier, carrier);

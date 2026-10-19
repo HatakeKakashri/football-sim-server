@@ -11,7 +11,7 @@ use bevy_ecs::schedule::ExecutorKind;
 use sim_components::{Ball, MatchClock, PendingBallTouches};
 use sim_math::Tuning;
 use sim_physics::{PitchControlGrid, SimRng};
-use sim_rules::{CurrentTick, PendingPass, PendingShot};
+use sim_rules::{CurrentTick, PendingRuleOutcome};
 
 use crate::{install_ai_player_resources, kick_execution_system, player_decision_system};
 
@@ -89,12 +89,12 @@ fn decision_requires_ball() {
 
 #[test]
 fn kick_execution_requires_pending_pass() {
-    assert_requires::<PendingPass, _>(kick_execution_system);
+    assert_requires::<PendingRuleOutcome, _>(kick_execution_system);
 }
 
 #[test]
 fn kick_execution_requires_pending_shot() {
-    assert_requires::<PendingShot, _>(kick_execution_system);
+    assert_requires::<PendingRuleOutcome, _>(kick_execution_system);
 }
 
 #[test]

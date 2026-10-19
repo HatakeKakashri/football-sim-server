@@ -306,7 +306,7 @@ fn possession_change_fires_on_team_change() {
         added_time_ticks: 0,
         is_running: true,
     });
-    world.insert_resource(sim_rules::PendingPass::default());
+    world.insert_resource(sim_rules::PendingRuleOutcome::default());
     world.insert_resource(sim_rules::PendingOutOfBounds::default());
     world.insert_resource(sim_rules::CurrentTick(100));
     // Pre-seed the cache to team 0 so the first team change
@@ -490,7 +490,7 @@ fn tackle_event_emitted_with_tackler_carrier_and_success() {
         is_running: true,
     });
     world.insert_resource(sim_rules::CurrentTick(200));
-    world.insert_resource(sim_rules::PendingTackle::default());
+    world.insert_resource(sim_rules::PendingRuleOutcome::default());
     world.insert_resource(EventLog::new());
 
     let tackler = world
@@ -505,8 +505,8 @@ fn tackle_event_emitted_with_tackler_carrier_and_success() {
     let carrier = world.spawn(()).id();
 
     world
-        .resource_mut::<sim_rules::PendingTackle>()
-        .set(sim_rules::TackleAttempt {
+        .resource_mut::<sim_rules::PendingRuleOutcome>()
+        .0.tackle = Some(sim_rules::TackleAttempt {
             tackler,
             carrier,
             success: true,
@@ -694,11 +694,8 @@ fn run_oob_scenario(
     });
     world.insert_resource(sim_rules::CurrentTick(1_234));
     world.insert_resource(sim_rules::PendingOutOfBounds::default());
-    world.insert_resource(sim_rules::OobRestartForEmit::default());
-    world.insert_resource(sim_rules::PendingPass::default());
+    world.insert_resource(sim_rules::PendingRuleOutcome::default());
     world.insert_resource(sim_rules::PendingRestart::default());
-    world.insert_resource(sim_rules::KickoffForEmit::default());
-    world.insert_resource(sim_rules::GoalForEmit::default());
     world.insert_resource(sim_components::PendingBallTouches::default());
     world.insert_resource(sim_components::Match {
         id: 1,

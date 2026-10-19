@@ -206,7 +206,7 @@ fn goal_running_score_equals_fold_over_short_window() {
 fn goal_emitter_attributes_scorer_and_possession_change() {
     use bevy_ecs::prelude::Schedule;
     use sim_components::{LastTouch, MatchClock, TouchKind};
-    use sim_rules::{CurrentTick, GoalForEmit, GoalResolved};
+    use sim_rules::{CurrentTick, GoalResolved, PendingRuleOutcome};
 
     let mut world = crate::tests::installed_world();
     world.insert_resource(MatchClock {
@@ -221,7 +221,8 @@ fn goal_emitter_attributes_scorer_and_possession_change() {
     let assister_e = world.spawn(()).id();
     let scorer = LastTouch::by_player(TeamId(0), scorer_e, TouchKind::Play).with_tick(4_500);
     let assist = LastTouch::by_player(TeamId(0), assister_e, TouchKind::Play).with_tick(4_400);
-    world.insert_resource(GoalForEmit(Some(GoalResolved {
+    let mut outcome = PendingRuleOutcome::default();
+    outcome.0.goal = Some(GoalResolved {
         scorer_team: TeamId(0),
         score: (1, 0),
         last_touch: Some(scorer),
@@ -229,13 +230,14 @@ fn goal_emitter_attributes_scorer_and_possession_change() {
         older_touch: None,
         goal_tick: 4_500,
         ball_pos: sim_math::Vec2::new(105.0, 34.0),
-    })));
+    });
+    world.insert_resource(outcome);
 
     let mut schedule = Schedule::default();
     schedule.add_systems(crate::simulation::event_emit::emit_goal_events);
     schedule.run(&mut world);
     // Drain like the end-of-chain pass resolver does.
-    world.resource_mut::<GoalForEmit>().0 = None;
+    world.resource_mut::<PendingRuleOutcome>().0.goal = None;
 
     let log = world.resource::<EventLog>();
     assert_eq!(log.events.len(), 2, "goal + possession_change(goal)");
@@ -267,7 +269,7 @@ fn shot_resolves_to_saved_with_catch_for_slow_ball() {
     };
     use sim_math::Tuning;
     use sim_physics::SimRng;
-    use sim_rules::{CurrentTick, GoalForEmit, OobRestartForEmit, PendingShot, PendingShotState};
+    use sim_rules::{CurrentTick, PendingRuleOutcome, PendingShotState};
 
     let mut world = crate::tests::installed_world();
     world.insert_resource(MatchClock {
@@ -277,8 +279,6 @@ fn shot_resolves_to_saved_with_catch_for_slow_ball() {
         is_running: true,
     });
     world.insert_resource(CurrentTick(5_000));
-    world.insert_resource(GoalForEmit::default());
-    world.insert_resource(OobRestartForEmit::default());
     world.insert_resource(Tuning::default());
     world.insert_resource(SimRng::new(0));
     world.insert_resource(EventLog::new());
@@ -313,12 +313,14 @@ fn shot_resolves_to_saved_with_catch_for_slow_ball() {
         touch_history: [None, None],
         kick_velocity: None,
     });
-    world.insert_resource(PendingShot(Some(PendingShotState {
+    let mut outcome = PendingRuleOutcome::default();
+    outcome.0.shot = Some(PendingShotState {
         shooter,
         shooter_team: TeamId(0),
         kick_tick: 4_900,
         kick_pos: sim_math::Vec2::new(80.0, 34.0),
-    })));
+    });
+    world.insert_resource(outcome);
 
     let mut schedule = Schedule::default();
     schedule.add_systems(crate::simulation::event_emit::resolve_shot_events);
@@ -497,8 +499,7 @@ fn goal_detection_and_emission_compose_in_one_schedule() {
     });
     world.insert_resource(EventLog::new());
     world.insert_resource(PendingBallTouches::default());
-    world.insert_resource(sim_rules::PendingPass::default());
-    world.insert_resource(sim_rules::GoalForEmit::default());
+    world.insert_resource(sim_rules::PendingRuleOutcome::default());
     world.insert_resource(sim_rules::CurrentTick(4_500));
     world.insert_resource(sim_rules::PendingOutOfBounds::default());
     let toucher = world.spawn(()).id();
@@ -547,7 +548,7 @@ fn goal_detection_and_emission_compose_in_one_schedule() {
     assert!(!payload.own_goal);
     assert_eq!(payload.score, (1, 0), "running score after the goal");
     assert!(
-        world.resource::<sim_rules::GoalForEmit>().0.is_none(),
+        world.resource::<sim_rules::PendingRuleOutcome>().0.goal.is_none(),
         "goal signal drained by the end of the chain"
     );
 }
@@ -558,7 +559,7 @@ fn goal_detection_and_emission_compose_in_one_schedule() {
 fn kickoff_restart_emits_after_goal_without_attack_directions() {
     use bevy_ecs::prelude::Schedule;
     use sim_components::MatchClock;
-    use sim_rules::{CurrentTick, KickoffForEmit, KickoffResolved};
+    use sim_rules::{CurrentTick, KickoffResolved, PendingRuleOutcome};
 
     let mut world = crate::tests::installed_world();
     world.insert_resource(MatchClock {
@@ -570,11 +571,13 @@ fn kickoff_restart_emits_after_goal_without_attack_directions() {
     world.insert_resource(CurrentTick(5_100));
     world.insert_resource(EventLog::new());
     let taker = world.spawn(()).id();
-    world.insert_resource(KickoffForEmit(Some(KickoffResolved {
+    let mut outcome = PendingRuleOutcome::default();
+    outcome.0.kickoff = Some(KickoffResolved {
         taker_team: TeamId(1),
         taker,
         at: sim_math::Vec2::new(52.5, 34.0),
-    })));
+    });
+    world.insert_resource(outcome);
 
     let mut schedule = Schedule::default();
     schedule.add_systems(crate::simulation::event_emit::emit_kickoff_restart_events);

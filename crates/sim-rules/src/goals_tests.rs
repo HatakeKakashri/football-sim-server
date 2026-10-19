@@ -13,7 +13,7 @@ use sim_math::Vec2;
 
 use crate::tests::{ball_fixture, rules_world};
 use crate::{
-    CurrentTick, GoalForEmit, PendingOutOfBounds, PendingRestart, goal_detection_system,
+    CurrentTick, PendingOutOfBounds, PendingRestart, PendingRuleOutcome, goal_detection_system,
     out_of_bounds_system, restart_system, touch::apply_ball_touched_system,
 };
 
@@ -99,8 +99,8 @@ fn test_goal_scored_home_team() {
 }
 
 /// Ticket 10: `goal_detection_system` stashes the resolved goal on
-/// `GoalForEmit` so the `sim-core` emitter can write the `goal`
-/// event (with scorer / assister attribution) in the same tick.
+/// `PendingRuleOutcome.goal` so the `sim-core` emitter can write the
+/// `goal` event (with scorer / assister attribution) in the same tick.
 #[test]
 fn test_goal_detection_stashes_emit_slot() {
     let mut world = rules_world();
@@ -146,14 +146,14 @@ fn test_goal_detection_stashes_emit_slot() {
         .insert(Position(Vec2::new(105.5, 34.0)));
     world.entity_mut(ball_entity).insert(Velocity(Vec2::zero()));
 
-    world.insert_resource(GoalForEmit::default());
+    world.insert_resource(PendingRuleOutcome::default());
     world.insert_resource(CurrentTick(100));
     let mut schedule = Schedule::default();
     schedule.add_systems(goal_detection_system);
     schedule.run(&mut world);
 
-    let slot = world.resource::<GoalForEmit>();
-    let resolved = slot.0.expect("goal must stash emit data");
+    let slot = world.resource::<PendingRuleOutcome>();
+    let resolved = slot.0.goal.expect("goal must stash emit data");
     assert_eq!(
         resolved.scorer_team,
         sim_components::TeamId(0),

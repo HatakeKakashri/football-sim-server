@@ -13,8 +13,7 @@ use sim_components::{Ball, MatchClock};
 use sim_math::Tuning;
 use sim_physics::SimRng;
 use sim_rules::{
-    CurrentTick, GoalForEmit, KickoffForEmit, OobRestartForEmit, PendingOutOfBounds, PendingPass,
-    PendingShot, PendingTackle,
+    CurrentTick, PendingOutOfBounds, PendingRuleOutcome,
 };
 
 use crate::{EventLog, WorldInstaller};
@@ -91,28 +90,28 @@ macro_rules! requires {
 
 requires! {
     pass_events_need_pending_oob: resolve_pass_events needs PendingOutOfBounds;
-    pass_events_need_goal_slot: resolve_pass_events needs GoalForEmit;
+    pass_events_need_goal_slot: resolve_pass_events needs PendingRuleOutcome;
     pass_events_need_tick: resolve_pass_events needs CurrentTick;
     possession_acquisition_needs_tick: emit_possession_change_on_acquisition needs CurrentTick;
     possession_oob_needs_pending_oob: emit_possession_change_on_oob needs PendingOutOfBounds;
     possession_oob_needs_tick: emit_possession_change_on_oob needs CurrentTick;
-    goal_events_need_goal_slot: emit_goal_events needs GoalForEmit;
+    goal_events_need_goal_slot: emit_goal_events needs PendingRuleOutcome;
     goal_events_need_tick: emit_goal_events needs CurrentTick;
-    kickoff_events_need_kickoff_slot: emit_kickoff_restart_events needs KickoffForEmit;
+    kickoff_events_need_kickoff_slot: emit_kickoff_restart_events needs PendingRuleOutcome;
     kickoff_events_need_tick: emit_kickoff_restart_events needs CurrentTick;
-    shot_events_need_pending_shot: resolve_shot_events needs PendingShot;
-    shot_events_need_goal_slot: resolve_shot_events needs GoalForEmit;
-    shot_events_need_oob_slot: resolve_shot_events needs OobRestartForEmit;
+    shot_events_need_pending_shot: resolve_shot_events needs PendingRuleOutcome;
+    shot_events_need_goal_slot: resolve_shot_events needs PendingRuleOutcome;
+    shot_events_need_oob_slot: resolve_shot_events needs PendingRuleOutcome;
     shot_events_need_tuning: resolve_shot_events needs Tuning;
     shot_events_need_rng: resolve_shot_events needs SimRng;
     shot_events_need_tick: resolve_shot_events needs CurrentTick;
-    tackle_events_need_pending_tackle: emit_tackle_events needs PendingTackle;
+    tackle_events_need_pending_tackle: emit_tackle_events needs PendingRuleOutcome;
     tackle_events_need_tick: emit_tackle_events needs CurrentTick;
     cross_events_need_pending_cross: emit_cross_header_events needs PendingCross;
     cross_events_need_tick: emit_cross_header_events needs CurrentTick;
-    oob_restart_events_need_oob_slot: emit_oob_and_restart_events needs OobRestartForEmit;
+    oob_restart_events_need_oob_slot: emit_oob_and_restart_events needs PendingRuleOutcome;
     oob_restart_events_need_tick: emit_oob_and_restart_events needs CurrentTick;
-    pass_events_need_pending_pass: resolve_pass_events needs PendingPass;
+    pass_events_need_pending_pass: resolve_pass_events needs PendingRuleOutcome;
     pass_events_need_ball: resolve_pass_events needs Ball;
     pass_events_need_event_log: resolve_pass_events needs EventLog;
     pass_events_need_clock: resolve_pass_events needs MatchClock;

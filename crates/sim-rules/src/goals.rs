@@ -17,8 +17,8 @@ use crate::constants::{CENTER_SPOT, GOAL_Y_MAX, GOAL_Y_MIN, PITCH_LENGTH};
 use crate::out_of_bounds::calculate_oob_restart_position;
 use crate::referee::OOB_RESTART_STOPPAGE_REASON;
 use crate::{
-    CurrentTick, GoalForEmit, GoalResolved, KickoffForEmit, KickoffResolved, OobRestartForEmit,
-    OobRestartResolved, OutOfBoundsEvent, PendingOutOfBounds, PendingRestart, team_attacking_goal,
+    CurrentTick, GoalResolved, KickoffResolved, OobRestartResolved, OutOfBoundsEvent,
+    PendingOutOfBounds, PendingRuleOutcome, PendingRestart, team_attacking_goal,
 };
 
 /// Buffered goal event data collected in `goal_detection_system`'s first
@@ -57,7 +57,7 @@ pub fn goal_detection_system(
     mut ball: ResMut<Ball>,
     current_tick: Res<CurrentTick>,
     telemetry: Option<Res<TelemetryConfig>>,
-    mut goal_for_emit: ResMut<GoalForEmit>,
+    mut pending_rule_outcome: ResMut<PendingRuleOutcome>,
 ) {
     // First pass: collect goal events (avoid borrow conflicts).
     // Tuple: (ball_entity, scorer_team, final_score, last_touch).
@@ -123,7 +123,7 @@ pub fn goal_detection_system(
             // in-flight pass, and emit the `possession_change` with
             // cause `goal`. The emitter runs in the same `Rules` set
             // after this system, then drains the resource.
-            goal_for_emit.0 = Some(GoalResolved {
+            pending_rule_outcome.0.goal = Some(GoalResolved {
                 scorer_team,
                 score: final_score,
                 last_touch: ball.last_touch,
@@ -207,8 +207,7 @@ pub fn restart_system(
     mut pending_touches: ResMut<PendingBallTouches>,
     telemetry: Option<Res<TelemetryConfig>>,
     mut pending_oob: ResMut<PendingOutOfBounds>,
-    mut oob_for_emit: ResMut<OobRestartForEmit>,
-    mut kickoff_for_emit: ResMut<KickoffForEmit>,
+    mut pending_rule_outcome: ResMut<PendingRuleOutcome>,
     mut referee_query: Query<&mut Referee>,
 ) {
     let tick = current_tick.0;
@@ -257,7 +256,7 @@ pub fn restart_system(
             // can write the `kickoff` event (`reason = after_goal`).
             // The emitter runs in the same `Rules` set after this
             // system, then drains the resource.
-            kickoff_for_emit.0 = Some(KickoffResolved {
+            pending_rule_outcome.0.kickoff = Some(KickoffResolved {
                 taker_team: conceded_team,
                 taker,
                 at: Vec2::new(CENTER_SPOT.0, CENTER_SPOT.1),
@@ -338,7 +337,7 @@ pub fn restart_system(
         // back-to-back with the correct fields (PRD §9.2, ticket
         // 09). The emitter runs in the same `Rules` set after this
         // system, then clears the resource.
-        oob_for_emit.0 = Some(OobRestartResolved {
+        pending_rule_outcome.0.oob_restart = Some(OobRestartResolved {
             oob_type,
             exit_point,
             last_touch,

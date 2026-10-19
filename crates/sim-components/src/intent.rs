@@ -62,6 +62,9 @@ pub enum ActionIntent {
     Tackle(Entity),
     MarkOpponent(Entity),
     Press(Entity),
+    /// Dribble the ball toward the opponent's goal at pass speed.
+    /// CALIBRATED: helps move ball forward from defensive/middle third.
+    DribbleForward,
 }
 
 impl Intent {

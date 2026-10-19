@@ -398,11 +398,12 @@ pub fn emit_possession_change_on_oob(
 /// (last) owns the drain.
 pub fn emit_goal_events(
     mut event_log: ResMut<EventLog>,
-    outcome: Res<PendingRuleOutcome>,
+    mut outcome: ResMut<PendingRuleOutcome>,
     current_tick: Res<sim_rules::CurrentTick>,
     clock: Res<MatchClock>,
 ) {
-    let Some(resolved) = outcome.0.goal.as_ref() else {
+    // Take the goal signal to drain it immediately.
+    let Some(resolved) = outcome.0.goal.take() else {
         return;
     };
     let tick = current_tick.0;

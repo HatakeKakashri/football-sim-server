@@ -24,27 +24,13 @@ use sim_components::{
     pass_error_spread,
 };
 use sim_math::{Tuning, Vec2};
+use sim_physics::{KICK_SPEED_DRIBBLE, KICK_SPEED_PASS, KICK_SPEED_SHOT, PLAYER_MAX_ACCEL_PER_TICK, SimRng};
 use sim_rules::{CurrentTick, PendingRuleOutcome, PendingPassState, PendingShotState};
 use sim_telemetry::TelemetryConfig;
 
 /// Monotonic counter for `pass()` flow ids. Two passes share the same
 /// process and could otherwise collide on `(tick, from_pid)`; the atomic
-/// gives every pass a unique id regardless of order.
 static NEXT_PASS_FLOW_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Ball kick speed, in metres per tick.
-///
-/// Previously declared as m/s but stored directly into `ball.kick_velocity`
-/// and applied via `pos += vel` with no dt scaling. Rescaled to m/tick:
-/// `KICK_SPEED_SHOT` = 22 m/s ÷ 60 ≈ 0.3667 m/tick.
-pub const KICK_SPEED_SHOT: f32 = 22.0 / 60.0;
-
-/// Ball kick speed for passes, in metres per tick.
-///
-/// Rescaled from 14 m/s to m/tick: 14 / 60 ≈ 0.2333 m/tick.
-pub const KICK_SPEED_PASS: f32 = 14.0 / 60.0;
-
-/// Turns a possessing player's intent into actual ball velocity.
 ///
 /// Runs after `player_action_execution_system` in the same `Execution` set
 /// (so it sees this tick's resolved intent and velocity) and before the
@@ -124,6 +110,7 @@ pub fn kick_execution_system(
     };
     let kick_speed = match intent {
         Intent::Action(ActionIntent::ShootAtGoal(_)) => KICK_SPEED_SHOT,
+        Intent::Action(ActionIntent::DribbleForward) => KICK_SPEED_DRIBBLE,
         // `pass_length_factor` scales pass length: Possession < 1, CounterAttack > 1.
         _ => KICK_SPEED_PASS * pass_length_factor,
     };

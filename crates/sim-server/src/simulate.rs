@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use sim_core::{Simulation, Termination, TickHook, run_match_driver, TICK_CAP};
 use sim_telemetry::TraceMetadata;
+use tracing_subscriber::EnvFilter;
 
 use crate::telemetry_cli::{TraceOptions, plan_trace};
 
@@ -58,6 +59,13 @@ impl TickHook for SimulateHook<'_> {
 pub fn run_simulate(
     options: &SimulateOptions,
 ) -> Result<SimulateReport, Box<dyn std::error::Error>> {
+    // Initialize tracing subscriber if RUST_LOG is set (for debugging).
+    if std::env::var("RUST_LOG").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init();
+    }
+
     let seed = options.seed;
 
     // Validate trace flags before doing any work. A `--full-match` run has no
@@ -140,4 +148,23 @@ pub fn run_simulate(
         final_state_hash,
         ticks_run: sim.current_tick(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sim_core::Simulation;
+
+    #[test]
+    fn test_simulate_runs() {
+        let report = run_simulate(&SimulateOptions {
+            seed: 12345,
+            ticks: 100,
+            full_match: false,
+            output: None,
+            trace: TraceOptions::default(),
+        })
+        .expect("simulate should succeed");
+        assert_eq!(report.ticks_run, 100);
+    }
 }

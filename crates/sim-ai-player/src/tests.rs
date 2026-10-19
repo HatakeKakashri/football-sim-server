@@ -171,6 +171,10 @@ fn test_intent_kind_string_for_all_variants() {
             Intent::Action(ActionIntent::Press(Entity::PLACEHOLDER)),
             "Press",
         ),
+        (
+            Intent::Action(ActionIntent::DribbleForward),
+            "DribbleForward",
+        ),
     ];
     for (intent, expected) in cases {
         assert_eq!(intent_kind(&intent), expected);

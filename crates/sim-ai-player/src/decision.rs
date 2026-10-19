@@ -134,7 +134,7 @@ pub fn player_decision_system(
 
             let is_kicking_action = matches!(
                 action.intent,
-                Intent::Action(ActionIntent::PassTo | ActionIntent::ShootAtGoal(_))
+                Intent::Action(ActionIntent::PassTo | ActionIntent::ShootAtGoal(_) | ActionIntent::DribbleForward)
             );
 
             let action_permitted = if is_possessor {

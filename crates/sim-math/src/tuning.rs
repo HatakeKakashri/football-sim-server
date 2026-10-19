@@ -61,18 +61,18 @@ impl Tuning {
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // Positioning
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Heading
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Bravery
-                // Outfield attack.
-                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // Passing
+                // Outfield attack - CALIBRATED: encourage forward play.
+                CurveParams { midpoint: 90.0, steepness: 8.0, min: 0.05, max: 0.90, rising: false },   // Passing (easier, steeper)
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Dribbling
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Crossing
-                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // Shooting
-                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Finishing
-                // Physical & mental (outfield).
+                CurveParams { midpoint: 95.0, steepness: 8.0, min: 0.05, max: 0.90, rising: false },   // Shooting (easier, steeper)
+                CurveParams { midpoint: 95.0, steepness: 8.0, min: 0.05, max: 0.90, rising: true },    // Finishing (easier, steeper)
+                // Physical & mental (outfield) - CALIBRATED: encourage forward play.
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.02, max: 0.70, rising: false },  // OutfieldFitness
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // OutfieldStrength
-                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // OutfieldAggression
-                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // OutfieldSpeed
-                CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // OutfieldCreativity
+                CurveParams { midpoint: 95.0, steepness: 8.0, min: 0.05, max: 0.95, rising: true },    // OutfieldAggression (more aggressive)
+                CurveParams { midpoint: 95.0, steepness: 8.0, min: 0.05, max: 0.95, rising: true },    // OutfieldSpeed (faster)
+                CurveParams { midpoint: 90.0, steepness: 8.0, min: 0.05, max: 0.95, rising: true },    // OutfieldCreativity (more creative)
                 // Goalkeeping.
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Reflexes
                 CurveParams { midpoint: 100.0, steepness: 6.0, min: 0.05, max: 0.95, rising: true },   // Anticipation

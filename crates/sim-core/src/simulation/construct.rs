@@ -95,9 +95,11 @@ fn register_systems(schedule: &mut Schedule) {
             .after(SimulationSet::Physics),
     );
 
-    // Rules — ball-touch consumer → out-of-bounds → goal → foul → restart (spec §3).
-    // The consumer drains `PendingBallTouches` first so every downstream
-    // Rules system sees the latest touch in the same tick.
+    // Rules + Event emission (spec §3, issue 08).
+    // Single chain ensures correct order:
+    // 1. ball-touch consumer → 2. out-of-bounds → 3. goal detection
+    // 4. foul detection → 5. restart → 6. shot resolution
+    // 7. goal emission → 8. kickoff emission → 10. pass resolution.
     schedule.add_systems(
         (
             apply_ball_touched_system,
@@ -105,18 +107,20 @@ fn register_systems(schedule: &mut Schedule) {
             goal_detection_system,
             foul_detection_system,
             restart_system,
+            super::event_emit::resolve_shot_events,
+            super::event_emit::emit_goal_events,
+            super::event_emit::emit_kickoff_restart_events,
+            super::event_emit::emit_tackle_events,
+            super::event_emit::emit_cross_header_events,
+            super::event_emit::emit_oob_and_restart_events,
+            super::event_emit::emit_possession_change_on_oob,
+            super::event_emit::emit_possession_change_on_acquisition,
+            super::event_emit::resolve_pass_events,
         )
             .chain()
             .in_set(SimulationSet::Rules)
             .after(SimulationSet::Possession),
     );
-
-    // Event emission (issue 08). Runs in the same `Rules` set, after
-    // the rule writers have settled their signals. The order is:
-    // possession_change on OOB → possession_change on acquisition
-    // → pass-event resolution. The pass resolver reads both OOB and
-    // the live `Ball.possessor`, so it must run last.
-    super::event_emit::register_event_systems(schedule);
 
     // MatchAdmin — stoppage tracking → added time → minimum players →
     // substitutions → mentality. Stoppage tracking runs first so the

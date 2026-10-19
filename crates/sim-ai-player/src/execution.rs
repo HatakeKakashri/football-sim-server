@@ -152,8 +152,8 @@ pub fn player_action_execution_system(
         }
 
         match &intent {
-            Intent::Action(ActionIntent::PassTo) => {
-                // Pass completion: probability based on distance and skill.
+            Intent::Action(ActionIntent::PassTo | ActionIntent::DribbleForward) => {
+                // Pass/Dribble completion: probability based on distance and skill.
                 // The pass error spread (Passing attribute) is applied to
                 // the kick direction in `kick_execution_system`; this arm
                 // keeps the legacy movement deviation for the kicker.
@@ -161,11 +161,11 @@ pub fn player_action_execution_system(
                     .nearby_teammates
                     .first()
                     .map_or(15.0, |t| t.distance);
-                // Longer passes = lower completion probability
+                // Longer passes/dribbles = lower completion probability
                 let pass_prob = (1.0 - (pass_distance / 50.0).min(0.8)) * skill.0;
                 let roll: f32 = rng.gen_f32();
                 if roll > pass_prob {
-                    // Pass goes awry - add random deviation
+                    // Pass/Dribble goes awry - add random deviation
                     speed_modifier = 0.7;
                     // Deviation values are in m/s, converted to m/tick
                     let dev = 2.0 / 60.0;

@@ -68,7 +68,7 @@ pub fn goal_detection_system(
     };
 
     // BUG FIX: Do NOT score if ball is already Dead
-    if ball.state != BallState::Dead {
+    if ball.state == BallState::Dead {
         let in_goal_y = ball_pos.0.y >= GOAL_Y_MIN && ball_pos.0.y <= GOAL_Y_MAX;
         // A goal requires the ball to cross the goal line inside the
         // goal mouth. Gate the pre-touch guard on that condition so a
@@ -105,8 +105,10 @@ pub fn goal_detection_system(
             let scorer_team = team_attacking_goal(&team_query, ball_pos.0.x >= PITCH_LENGTH);
             if scorer_team == TeamId(0) {
                 match_res.score.0 += 1;
+                tracing::debug!("GOAL: team 0 scores, new score {:?}", match_res.score);
             } else {
                 match_res.score.1 += 1;
+                tracing::debug!("GOAL: team 1 scores, new score {:?}", match_res.score);
             }
             let final_score = match_res.score;
             goal_events.push(GoalEvent {
@@ -152,6 +154,7 @@ pub fn goal_detection_system(
     // Second pass: apply state changes and emit events
     for event in goal_events {
         ball.state = BallState::Dead;
+        ball.possessor = None; // Dead ball must not have a possessor (invariant)
         // `Ball.last_touch` is preserved (M8): the record stays on
         // the ball for replay data and is overwritten by the next
         // writer (kick / possession acquisition / restart placement).

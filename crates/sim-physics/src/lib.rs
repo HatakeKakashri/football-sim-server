@@ -66,6 +66,22 @@ impl SimRng {
 /// ticks/s ≈ 0.1417 m/tick.
 pub const MAX_PLAYER_SPEED: f32 = 10.0 / 60.0;
 
+/// Ball kick speed for dribbles, in metres per tick.
+///
+/// Set below max player speed so the dribbler can catch up after kicking.
+/// 8 m/s ÷ 60 ≈ 0.133 m/tick (vs player max 10 m/s = 0.167 m/tick).
+pub const KICK_SPEED_DRIBBLE: f32 = 8.0 / 60.0;
+
+/// Ball kick speed for passes, in metres per tick.
+///
+/// Rescaled from 14 m/s to m/tick: 14 / 60 = 0.2333 m/tick.
+pub const KICK_SPEED_PASS: f32 = 14.0 / 60.0;
+
+/// Ball kick speed for shots, in metres per tick.
+///
+/// Rescaled from 22 m/s to m/tick: 22 / 60 ≈ 0.3667 m/tick.
+pub const KICK_SPEED_SHOT: f32 = 22.0 / 60.0;
+
 /// Maximum ball velocity, in metres per tick.
 ///
 /// Rescaled from 30 m/s to m/tick: 30 / 60 = 0.5 m/tick.
@@ -73,10 +89,9 @@ pub const MAX_BALL_SPEED: f32 = 30.0 / 60.0;
 
 /// Ball velocity damping factor, applied per tick.
 ///
-/// A value of 0.99 means the ball retains 99% of its velocity each tick.
-/// Per-second damping equivalent would be 0.99^60 ≈ 54.9% per second (very
-/// lossy), which is intentional: empirically tuned as a per-tick decay.
-pub const BALL_DAMPING: f32 = 0.99;
+/// A value of 0.998 means the ball retains 99.8% of its velocity each tick.
+/// Per-second damping equivalent would be 0.998^60 ≈ 88.7% per second.
+pub const BALL_DAMPING: f32 = 0.998;
 
 /// Maximum player acceleration, in m/s².
 ///
@@ -339,7 +354,9 @@ pub fn ball_physics_system(
     }
 
     // Update ball state based on velocity (single writer: ResMut<Ball>).
-    if vel.0.length() > 0.1 {
+    /// Threshold for InFlight -> Free transition. Lower = ball becomes
+    /// InFlight at lower speeds. 0.05 m/tick = 3 m/s (10.8 km/h).
+    if vel.0.length() > 0.05 {
         ball.state = sim_components::BallState::InFlight;
     } else if ball.possessor.is_some() {
         ball.state = sim_components::BallState::Possessed;

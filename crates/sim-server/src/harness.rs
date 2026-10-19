@@ -550,6 +550,7 @@ mod tests {
 
         let mut total_shots = 0u64;
         let mut total_matches = 0u64;
+        let mut failures: Vec<String> = Vec::new();
 
         for (match_id, home_team_id, away_team_id, formation, mentality, tactic) in match_configs {
             let home_team = fixture_set.teams.get(home_team_id).expect("home team");
@@ -584,7 +585,10 @@ mod tests {
                 let result = run_match_driver(&mut sim, TICK_CAP, &mut hook)
                     .expect("invariant: HarnessHook never errors");
 
-                assert_eq!(result.termination, Termination::FullTime, "{match_id} seed={seed}: must reach FullTime");
+                if result.termination != Termination::FullTime {
+                    failures.push(format!("{match_id} seed={seed}: did not reach FullTime (termination={:?}, violation={:?})", result.termination, result.violation));
+                    continue;
+                }
 
                 // Check gate criteria
                 let home_possession = tracker.possession_share(0);
@@ -598,35 +602,43 @@ mod tests {
                     "{match_id} seed={seed}: poss_home={home_possession:.3} poss_away={away_possession:.3} cross_h1={h1_crossings} cross_h2={h2_crossings} left_half={left_share:.3} shots={shots}"
                 );
 
-                // Gate criteria assertions
-                assert!(
-                    home_possession >= MIN_POSSESSION_SHARE,
-                    "{match_id} seed={seed}: home possession {home_possession:.3} < {MIN_POSSESSION_SHARE}"
-                );
-                assert!(
-                    away_possession >= MIN_POSSESSION_SHARE,
-                    "{match_id} seed={seed}: away possession {away_possession:.3} < {MIN_POSSESSION_SHARE}"
-                );
-                assert!(
-                    h1_crossings >= MIN_CROSSINGS_PER_HALF,
-                    "{match_id} seed={seed}: H1 crossings {h1_crossings} < {MIN_CROSSINGS_PER_HALF}"
-                );
-                assert!(
-                    h2_crossings >= MIN_CROSSINGS_PER_HALF,
-                    "{match_id} seed={seed}: H2 crossings {h2_crossings} < {MIN_CROSSINGS_PER_HALF}"
-                );
-                assert!(
-                    left_share >= MIN_TERRITORY_SHARE && left_share <= MAX_TERRITORY_SHARE,
-                    "{match_id} seed={seed}: left half share {left_share:.3} outside [{MIN_TERRITORY_SHARE}, {MAX_TERRITORY_SHARE}]"
-                );
+                // Gate criteria - collect failures instead of asserting
+                if home_possession < MIN_POSSESSION_SHARE {
+                    failures.push(format!("{match_id} seed={seed}: home possession {home_possession:.3} < {MIN_POSSESSION_SHARE}"));
+                }
+                if away_possession < MIN_POSSESSION_SHARE {
+                    failures.push(format!("{match_id} seed={seed}: away possession {away_possession:.3} < {MIN_POSSESSION_SHARE}"));
+                }
+                if h1_crossings < MIN_CROSSINGS_PER_HALF {
+                    failures.push(format!("{match_id} seed={seed}: H1 crossings {h1_crossings} < {MIN_CROSSINGS_PER_HALF}"));
+                }
+                if h2_crossings < MIN_CROSSINGS_PER_HALF {
+                    failures.push(format!("{match_id} seed={seed}: H2 crossings {h2_crossings} < {MIN_CROSSINGS_PER_HALF}"));
+                }
+                if left_share < MIN_TERRITORY_SHARE || left_share > MAX_TERRITORY_SHARE {
+                    failures.push(format!("{match_id} seed={seed}: left half share {left_share:.3} outside [{MIN_TERRITORY_SHARE}, {MAX_TERRITORY_SHARE}]"));
+                }
 
                 total_shots += shots as u64;
                 total_matches += 1;
             }
         }
 
+        // Report all failures
+        if !failures.is_empty() {
+            println!("\n=== PHASE 0 GATE FAILURES ({} total) ===", failures.len());
+            for f in &failures {
+                println!("FAIL: {f}");
+            }
+        } else {
+            println!("\n=== PHASE 0 GATE: ALL CRITERIA PASSED ===");
+        }
+
         let avg_shots = total_shots as f64 / total_matches as f64;
         println!("Phase 0 gate: average shots per match = {avg_shots:.1} (min {MIN_AVERAGE_SHOTS})");
+
+        // Final assertions
+        assert!(failures.is_empty(), "Phase 0 gate failed with {} failures", failures.len());
         assert!(avg_shots >= MIN_AVERAGE_SHOTS, "average shots {avg_shots:.1} < {MIN_AVERAGE_SHOTS}");
     }
 }

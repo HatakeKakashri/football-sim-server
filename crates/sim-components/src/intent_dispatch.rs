@@ -88,6 +88,9 @@ impl Intent {
                 Some((nearest_teammate_pos().unwrap_or(ball_pos), 8.0 / 60.0))
             }
             Self::Action(ActionIntent::ShootAtGoal(target)) => Some((*target, 10.0 / 60.0)),
+            Self::Action(ActionIntent::DribbleForward) => {
+                Some((perception.goal_position, 8.0 / 60.0))
+            }
             Self::Action(ActionIntent::Tackle(_) | ActionIntent::Press(_)) => {
                 Some((nearest_opponent_pos().unwrap_or(player_pos), 10.0 / 60.0))
             }
@@ -126,12 +129,30 @@ impl Intent {
                 Some(dir.normalized())
             }
             Self::Action(ActionIntent::PassTo) => {
-                let target = nearest_teammate_pos().unwrap_or(perception.ball_position);
-                let dir = target - player_pos;
+                // Prefer teammates closer to the opponent's goal (more forward).
+                // If no teammate is visible, fall back to ball position (no kick).
+                let best_target = perception
+                    .nearby_teammates
+                    .iter()
+                    .min_by(|a, b| {
+                        let a_goal_dist = (a.relative_position + player_pos - perception.goal_position).length();
+                        let b_goal_dist = (b.relative_position + player_pos - perception.goal_position).length();
+                        a_goal_dist
+                            .partial_cmp(&b_goal_dist)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|t| t.relative_position + player_pos)
+                    .unwrap_or(perception.ball_position);
+                let dir = best_target - player_pos;
                 Some(dir.normalized())
             }
             Self::Action(ActionIntent::Tackle(_) | ActionIntent::Press(_)) => {
                 Some(player_vel.normalized())
+            }
+            Self::Action(ActionIntent::DribbleForward) => {
+                // Kick toward opponent's goal at pass speed.
+                let dir = perception.goal_position - player_pos;
+                Some(dir.normalized())
             }
         }
     }

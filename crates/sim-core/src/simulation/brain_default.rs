@@ -91,19 +91,20 @@ pub fn default_utility_brain_with(params: &TacticParameters) -> UtilityBrain {
             ],
         },
         // PassTo — open passing lane, reasonable teammate distance, space.
+        // CALIBRATED: boost forward passing to move ball up the pitch.
         PlayerAction {
             intent: Intent::Action(ActionIntent::PassTo),
             considerations: vec![
                 Consideration::PassAngleClear {
-                    weight: 0.5,
+                    weight: 0.7,
                     curve: lin(0.0, 1.0),
                 },
                 Consideration::TeammateDistance {
-                    weight: 0.3,
+                    weight: 0.4,
                     curve: lin(0.0, 30.0),
                 },
                 Consideration::TeammateSpace {
-                    weight: 0.2,
+                    weight: 0.3,
                     curve: lin(0.0, 20.0),
                 },
             ],
@@ -113,17 +114,18 @@ pub fn default_utility_brain_with(params: &TacticParameters) -> UtilityBrain {
         // `player_decision_system` replaces it with `perception.goal_position`
         // when this action wins, so no hardcoded pitch coordinate
         // survives into the committed intent.
+        // CALIBRATED: boost shooting to create scoring opportunities.
         PlayerAction {
             intent: Intent::Action(ActionIntent::ShootAtGoal(Vec2::zero())),
             considerations: vec![
                 Consideration::DistanceToGoal {
-                    weight: 0.5,
+                    weight: 0.7,
                     // Logistic: inside the box (d < 18m, raw > 17) score is
                     // high (>0.7), outside 25m it falls off sharply.
                     curve: log(15.0, 0.25),
                 },
                 Consideration::GoalAngle {
-                    weight: 0.3,
+                    weight: 0.4,
                     curve: lin(-1.0, 1.0),
                 },
                 Consideration::DefenderPressure {
@@ -133,6 +135,25 @@ pub fn default_utility_brain_with(params: &TacticParameters) -> UtilityBrain {
                         below: 1.0,
                         above: 0.5,
                     },
+                },
+            ],
+        },
+        // DribbleForward — move ball toward opponent's goal at pass speed.
+        // CALIBRATED: helps move ball forward from defensive/middle third.
+        PlayerAction {
+            intent: Intent::Action(ActionIntent::DribbleForward),
+            considerations: vec![
+                Consideration::SpaceAhead {
+                    weight: 0.8,
+                    curve: lin(0.0, 15.0),
+                },
+                Consideration::Stamina {
+                    weight: 0.4,
+                    curve: lin(0.0, 1.0),
+                },
+                Consideration::PitchControlAtBall {
+                    weight: 0.3,
+                    curve: step(30.0, 0.5, 0.9),
                 },
             ],
         },
@@ -184,11 +205,12 @@ pub fn default_utility_brain_with(params: &TacticParameters) -> UtilityBrain {
             ],
         },
         // SupportRun — open space ahead + teammate on the ball.
+        // CALIBRATED: boost forward runs to move ball up the pitch.
         PlayerAction {
             intent: Intent::Movement(MovementIntent::SupportRun),
             considerations: vec![
                 Consideration::SpaceAhead {
-                    weight: 0.6,
+                    weight: 0.8,
                     curve: lin(0.0, 15.0),
                 },
                 Consideration::TeammateBall {

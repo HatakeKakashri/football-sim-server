@@ -29,6 +29,7 @@ pub const fn intent_kind(intent: &Intent) -> &'static str {
         Intent::Movement(MovementIntent::TrackBack) => "TrackBack",
         Intent::Action(ActionIntent::PassTo) => "PassTo",
         Intent::Action(ActionIntent::ShootAtGoal(_)) => "ShootAtGoal",
+        Intent::Action(ActionIntent::DribbleForward) => "DribbleForward",
         Intent::Action(ActionIntent::Tackle(_)) => "Tackle",
         Intent::Action(ActionIntent::MarkOpponent(_)) => "MarkOpponent",
         Intent::Action(ActionIntent::Press(_)) => "Press",

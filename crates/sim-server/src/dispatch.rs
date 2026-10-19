@@ -144,6 +144,7 @@ fn serve(
     use std::sync::Arc;
 
     use crate::api::{MatchRegistry, MatchStore, ServerConfig, default_concurrency_cap};
+    use crate::fixtures;
 
     let cors_origins: Vec<String> = cors_origins
         .split(',')
@@ -158,7 +159,19 @@ fn serve(
         api_token: api_token.clone(),
         cors_origins: cors_origins.clone(),
     };
-    let store = Arc::new(MatchStore::new(config, MatchRegistry::default_fixture()));
+
+    // Load and validate all fixtures, then build the registry.
+    let fixture_set = fixtures::load_default()?;
+    let mut registry = MatchRegistry::default();
+    for (match_id, validated_match) in &fixture_set.matches {
+        let home_team = fixture_set.teams.get(&validated_match.home)
+            .expect("invariant: validated match references existing home team");
+        let away_team = fixture_set.teams.get(&validated_match.away)
+            .expect("invariant: validated match references existing away team");
+        registry.insert(match_id, validated_match.clone(), home_team.clone(), away_team.clone());
+    }
+
+    let store = Arc::new(MatchStore::new(config, registry));
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

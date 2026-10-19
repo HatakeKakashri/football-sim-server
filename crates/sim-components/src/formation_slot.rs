@@ -247,6 +247,30 @@ impl HomeSlot {
     }
 }
 
+/// The 1-3 positions a player is trained to play (PRD §5.3, §6.5).
+///
+/// Stored on the player entity so the fit multiplier can be computed
+/// per-player in the execution hot path. The component is inserted
+/// from the fixture's `ValidatedPlayer.trained_positions` when the
+/// player is created; tests using `Simulation::new(seed)` insert an
+/// empty list (no fixture data → no fit penalty applied).
+#[derive(Component, Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct TrainedPositions(pub Vec<PosSlot>);
+
+impl TrainedPositions {
+    /// Construct from a list of trained positions.
+    #[must_use]
+    pub const fn new(positions: Vec<PosSlot>) -> Self {
+        Self(positions)
+    }
+
+    /// The trained positions as a slice.
+    #[must_use]
+    pub fn as_slice(&self) -> &[PosSlot] {
+        &self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

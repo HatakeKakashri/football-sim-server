@@ -281,7 +281,8 @@ mod tests {
         cors_origins: Vec<String>,
     ) -> AppState {
         let mut registry = MatchRegistry::default();
-        registry.insert("m-0000", 7);
+        let single = MatchRegistry::single_test("m-0000", 7);
+        registry.fixtures.extend(single.fixtures);
         let store = Arc::new(MatchStore::new(
             ServerConfig {
                 result_ttl_secs: ttl_secs,
@@ -440,7 +441,8 @@ mod tests {
         // Bind an ephemeral port and serve over a real socket; speak
         // raw HTTP/1.1 to prove the contract bytes.
         let mut registry = MatchRegistry::default();
-        registry.insert("m-0000", 7);
+        let single = MatchRegistry::single_test("m-0000", 7);
+        registry.fixtures.extend(single.fixtures);
         let store = Arc::new(MatchStore::new(ServerConfig::default(), registry));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -517,8 +519,10 @@ mod tests {
         // Default TTL: the finished entry is served (200) until it
         // expires; 404/409/204 are exercised over a real socket.
         let mut registry = MatchRegistry::default();
-        registry.insert("m-0000", 7);
-        registry.insert("m-0001", 7);
+        let single1 = MatchRegistry::single_test("m-0000", 7);
+        let single2 = MatchRegistry::single_test("m-0001", 7);
+        registry.fixtures.extend(single1.fixtures);
+        registry.fixtures.extend(single2.fixtures);
         let store = Arc::new(MatchStore::new(
             ServerConfig {
                 tick_cap: 120,
@@ -575,7 +579,8 @@ mod tests {
     async fn get_expired_is_410_over_real_socket() {
         // TTL 0: the entry expires as soon as the thread finishes.
         let mut registry = MatchRegistry::default();
-        registry.insert("m-0000", 7);
+        let single = MatchRegistry::single_test("m-0000", 7);
+        registry.fixtures.extend(single.fixtures);
         let store = Arc::new(MatchStore::new(
             ServerConfig {
                 result_ttl_secs: 0,
@@ -611,7 +616,8 @@ mod tests {
     #[tokio::test]
     async fn cors_over_real_socket() {
         let mut registry = MatchRegistry::default();
-        registry.insert("m-0000", 7);
+        let single = MatchRegistry::single_test("m-0000", 7);
+        registry.fixtures.extend(single.fixtures);
         let store = Arc::new(MatchStore::new(
             ServerConfig {
                 tick_cap: 120,
@@ -763,8 +769,10 @@ mod tests {
     #[ignore = "long-running end-to-end concurrency-cap test over a real socket"]
     async fn concurrency_cap_end_to_end_503_over_cap() {
         let mut registry = MatchRegistry::default();
-        registry.insert("m-0000", 7);
-        registry.insert("m-0001", 42);
+        let single1 = MatchRegistry::single_test("m-0000", 7);
+        let single2 = MatchRegistry::single_test("m-0001", 42);
+        registry.fixtures.extend(single1.fixtures);
+        registry.fixtures.extend(single2.fixtures);
         let store = Arc::new(MatchStore::new(
             ServerConfig {
                 max_concurrent_sims: 1,

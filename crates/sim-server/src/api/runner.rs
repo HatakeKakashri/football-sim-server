@@ -40,7 +40,7 @@ struct RunnerHook<'a> {
 }
 
 impl TickHook for RunnerHook<'_> {
-    fn on_tick(&mut self, sim: &Simulation) -> Result<(), String> {
+    fn on_tick(&mut self, sim: &mut Simulation) -> Result<(), String> {
         if sim.current_tick().is_multiple_of(6) {
             self.frames.push(capture_frame(sim, self.roster_ids));
         }
@@ -48,7 +48,7 @@ impl TickHook for RunnerHook<'_> {
     }
 }
 
-/// Run one match on the calling thread.
+/// Run one match on the calling thread using validated fixture data.
 ///
 /// Drives the simulation to `FullTime` (or the tick cap), enforces
 /// the six PRD §12 invariants per tick via [`check_invariants`],
@@ -59,10 +59,19 @@ impl TickHook for RunnerHook<'_> {
 /// Panics if `RunnerHook::on_tick` returns `Err`, which it never does
 /// (it only captures frames). The `.expect()` is a defensive guard.
 #[must_use]
-pub fn run_match_blocking(match_id: &str, seed: u64, tick_cap: u64) -> MatchOutcome {
-    let mut sim = Simulation::new(seed);
+pub fn run_match_blocking(
+    fixture: &crate::api::MatchFixture,
+    tick_cap: u64,
+) -> MatchOutcome {
+    let mut sim = Simulation::new_from_fixture(
+        &fixture.validated_match,
+        &fixture.home_team,
+        &fixture.away_team,
+    );
     let attack_start = attack_directions(&sim);
     let roster = build_roster(&sim);
+    let match_id = fixture.validated_match.id.clone();
+    let seed = fixture.validated_match.seed;
 
     let mut frames: Vec<StreamFrame> = Vec::new();
     let mut hook = RunnerHook {

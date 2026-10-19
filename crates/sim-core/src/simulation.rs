@@ -79,7 +79,7 @@ impl Simulation {
 }
 
 // `Simulation`'s implementation is split across the sibling submodules:
-// - `construct` — `new`, `create_match` (world + match setup)
+// - `construct` — `new`, `new_from_fixture`, `create_match` (world + match setup)
 // - `tick` — `tick`, `tick_clock` (per-tick driver)
 // - `commands` — `validate_command`, `apply_validated_command` (F5 split API)
 // - `snapshot` — `get_state`

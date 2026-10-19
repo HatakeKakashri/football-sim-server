@@ -33,7 +33,7 @@ pub trait TickHook {
     /// Returns an error when the caller's side effect (e.g. JSONL write)
     /// fails. The driver propagates this error to `run_match_driver`'s
     /// caller and does not update internal counters for the failing tick.
-    fn on_tick(&mut self, sim: &Simulation) -> Result<(), String>;
+    fn on_tick(&mut self, sim: &mut Simulation) -> Result<(), String>;
 }
 
 /// Observable result of a run.
@@ -162,7 +162,7 @@ mod tests {
     struct CountingHook(u64);
 
     impl TickHook for CountingHook {
-        fn on_tick(&mut self, _sim: &Simulation) -> Result<(), String> {
+        fn on_tick(&mut self, _sim: &mut Simulation) -> Result<(), String> {
             self.0 += 1;
             Ok(())
         }
@@ -172,7 +172,7 @@ mod tests {
     struct FailingHook(&'static str);
 
     impl TickHook for FailingHook {
-        fn on_tick(&mut self, _sim: &Simulation) -> Result<(), String> {
+        fn on_tick(&mut self, _sim: &mut Simulation) -> Result<(), String> {
             Err(self.0.to_string())
         }
     }

@@ -49,7 +49,7 @@ pub use entities::{
     Card, DecisionFactor, Manager, Referee, StoppageEvent, TeamId, WeightedDecisionTable,
 };
 pub use event_kinds::{KickoffReason, SaveKind, ShotOutcome};
-pub use formation_slot::{FormationSlot, HomeSlot};
+pub use formation_slot::{FormationSlot, HomeSlot, TrainedPositions};
 pub use intent::{ActionIntent, Intent, IntentKind, MovementIntent};
 pub use perception::{NearbyEntity, PerceptionSnapshot, PitchBounds};
 pub use profile::{

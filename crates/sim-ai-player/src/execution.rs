@@ -6,10 +6,11 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    ActionIntent, Attribute, Ball, Intent, PerceptionSnapshot, Player, PlayerProfile, Skill,
-    Stamina, TackleRecovery, Team, Velocity,
+    ActionIntent, Attribute, Ball, FormationSlot, Intent, PerceptionSnapshot, Player,
+    PlayerProfile, Skill, Stamina, TackleRecovery, Team, TrainedPositions, Velocity,
     aggression_stamina_factor, fitness_drain_factor,
 };
+use sim_components::position::fit_multiplier;
 use sim_math::{Tuning, Vec2};
 use sim_physics::{PLAYER_MAX_ACCEL_PER_TICK, SimRng};
 use sim_rules::{PendingRuleOutcome, TackleAttempt};
@@ -46,6 +47,8 @@ pub fn player_action_execution_system(
         Option<&PlayerProfile>,
         Option<&TackleRecovery>,
         &PerceptionSnapshot,
+        &FormationSlot,
+        Option<&TrainedPositions>,
     )>,
     mut rng: ResMut<SimRng>,
     mut commands: Commands,
@@ -54,17 +57,11 @@ pub fn player_action_execution_system(
     team_query: Query<&Team>,
     mut pending_rule_outcome: ResMut<PendingRuleOutcome>,
 ) {
-    // MVP: players occupy their trained slots, so the fit multiplier is
-    // 1.00. The parameter is retained so calibrated out-of-position
-    // penalties flow through automatically once trained positions are
-    // tracked per player.
-    let fit_multiplier = 1.0f32;
-
     // The ball's current carrier, if any. A tackle is only an attempt
     // when there is a carrier to challenge.
     let carrier_entity = ball.possessor;
 
-    let mut entities: Vec<Entity> = query.iter().map(|(e, _, _, _, _, _, _, _)| e).collect();
+    let mut entities: Vec<Entity> = query.iter().map(|(e, _, _, _, _, _, _, _, _, _)| e).collect();
     entities.sort_by_key(|e| e.to_bits());
     for entity in entities {
         let Ok((
@@ -76,6 +73,8 @@ pub fn player_action_execution_system(
             profile,
             tackle_recovery,
             perception,
+            formation_slot,
+            trained_positions,
         )) = query.get_mut(entity)
         else {
             continue;
@@ -84,6 +83,15 @@ pub fn player_action_execution_system(
             velocity.0 = Vec2::zero();
             continue;
         };
+
+        // Compute the per-player fit multiplier (PRD §6.5): a player
+        // occupying a slot they are not trained for gets a penalty
+        // (0.92 at distance 1, 0.75 at distance 2+). Players without a
+        // `TrainedPositions` component (placeholder profile path) get
+        // 1.00, preserving the old behaviour for non-fixture worlds.
+        let fit_multiplier = trained_positions.map_or(1.0, |tp| {
+            fit_multiplier(formation_slot.position, tp.as_slice(), &tuning)
+        });
 
         // Capture the previous tick's velocity BEFORE we do any work.
         // This is the "prev" the acceleration cap will clamp the new

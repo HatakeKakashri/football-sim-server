@@ -285,7 +285,112 @@ fn play_one(seed: u64) -> (SeedReport, u64) {
 struct HarnessHook;
 
 impl TickHook for HarnessHook {
-    fn on_tick(&mut self, _sim: &Simulation) -> Result<(), String> {
+    fn on_tick(&mut self, _sim: &mut Simulation) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Tracks per-tick metrics for the Phase 0 playability gate.
+#[derive(Default)]
+struct PlayabilityTracker {
+    in_play_ticks: u64,
+    possession_ticks: [u64; 2],
+    left_half_ticks: u64,
+    crossings: [u32; 2],
+    shots: u32,
+    last_side_left: Option<bool>,
+    was_in_play: bool,
+    half: u8,
+}
+
+impl PlayabilityTracker {
+    fn record_tick(&mut self, world: &mut bevy_ecs::prelude::World) {
+        use sim_components::{Ball, BallState, Match, MatchState, Player, Position, TeamId};
+
+        let ball = world.get_resource::<Ball>().expect("Ball resource");
+        let match_res = world.get_resource::<Match>().expect("Match resource");
+        let clock = world.get_resource::<sim_components::MatchClock>().expect("MatchClock");
+
+        const HALFWAY_X: f32 = sim_math::PITCH_LENGTH / 2.0;
+        const SIDE_DEAD_BAND: f32 = 1.0;
+
+        let in_play = matches!(match_res.state, MatchState::InPlay);
+        if !in_play {
+            self.was_in_play = false;
+            return;
+        }
+        if !self.was_in_play {
+            self.half = clock.half;
+            self.was_in_play = true;
+        }
+
+        self.in_play_ticks += 1;
+
+        // Possession
+        if let Some(possessor) = ball.possessor {
+            if let Some(player) = world.get::<Player>(possessor) {
+                self.possession_ticks[player.team_id.0 as usize] += 1;
+            }
+        }
+
+        // Territory & halfway crossings
+        let ball_entity = {
+            let mut query = world.query_filtered::<bevy_ecs::prelude::Entity, bevy_ecs::prelude::With<sim_components::BallMarker>>();
+            query.iter(world).next().expect("ball entity must exist")
+        };
+        let ball_x = if let Some(pos) = world.get::<Position>(ball_entity) {
+            pos.0.x
+        } else {
+            sim_math::PITCH_LENGTH / 2.0
+        };
+        let side_left = ball_x < sim_math::PITCH_LENGTH / 2.0 - 1.0;
+        let side_right = ball_x > sim_math::PITCH_LENGTH / 2.0 + 1.0;
+        if side_left {
+            self.left_half_ticks += 1;
+        }
+        if let Some(last) = self.last_side_left {
+            if last != side_left && (side_left || side_right) {
+                // Crossed halfway
+                self.crossings[(self.half as usize).saturating_sub(1)] += 1;
+            }
+        }
+        self.last_side_left = if side_left || side_right { Some(side_left) } else { None };
+    }
+
+    fn shots(&self) -> u32 {
+        self.shots
+    }
+
+    fn possession_share(&self, team: u8) -> f64 {
+        if self.in_play_ticks == 0 {
+            0.0
+        } else {
+            self.possession_ticks[team as usize] as f64 / self.in_play_ticks as f64
+        }
+    }
+
+    fn left_half_share(&self) -> f64 {
+        if self.in_play_ticks == 0 {
+            0.0
+        } else {
+            self.left_half_ticks as f64 / self.in_play_ticks as f64
+        }
+    }
+
+    fn crossings(&self, half: u8) -> u32 {
+        self.crossings[(half as usize).saturating_sub(1)]
+    }
+}
+
+/// Per-tick hook for the Phase 0 gate test: records per-tick metrics
+/// into a `PlayabilityTracker`.
+struct GateHook<'a> {
+    tracker: &'a mut PlayabilityTracker,
+}
+
+impl TickHook for GateHook<'_> {
+    fn on_tick(&mut self, sim: &mut Simulation) -> Result<(), String> {
+        self.tracker.record_tick(sim.world_mut());
         Ok(())
     }
 }
@@ -348,5 +453,180 @@ mod tests {
         // here, the engine has a seq-ordering regression.
         assert!(report.event_order_ok, "A8: seq must be gapless");
         assert!(report.reached_full_time, "A1: full-time within cap");
+    }
+
+    /// Playability gate test with the m-0001 fixture (near-equal teams).
+    ///
+    /// Runs the Phase 0 playability gate criteria against a single match
+    /// using real fixture data (t-alpha vs t-bravo, seed 20240101).
+    ///
+    /// Run with:
+    /// ```text
+    /// cargo test --release -p sim-server --lib -- --ignored playability_gate_with_fixture_m0001 --nocapture
+    /// ```
+    #[test]
+    #[ignore = "full-match test is minutes-long; run explicitly to verify Phase 0 gate with fixtures"]
+    fn playability_gate_with_fixture_m0001() {
+        use std::path::Path;
+        use crate::fixtures::load;
+        use sim_core::{Simulation, Termination, TickHook, run_match_driver, TICK_CAP};
+
+        // Resolve fixtures directory from manifest dir (works regardless of cwd)
+        let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let fixture_set = load(&fixtures_dir).expect("fixtures must load");
+        let validated_match = fixture_set.matches.get("m-0001").expect("m-0001 must exist");
+        let home_team = fixture_set.teams.get(&validated_match.home).expect("home team");
+        let away_team = fixture_set.teams.get(&validated_match.away).expect("away team");
+
+        let mut sim = Simulation::new_from_fixture(validated_match, home_team, away_team);
+        let mut hook = HarnessHook;
+        let result = run_match_driver(&mut sim, TICK_CAP, &mut hook)
+            .expect("invariant: HarnessHook never errors");
+
+        assert_eq!(result.termination, Termination::FullTime, "match must reach FullTime");
+
+        // Check playability gate criteria (simplified for single match)
+        let world = sim.world();
+        let match_res = world.get_resource::<sim_components::Match>().expect("Match resource");
+
+        // Count shots from event log
+        let shots = if let Some(log) = world.get_resource::<sim_core::EventLog>() {
+            log.events.iter().filter(|e| matches!(e, sim_core::MatchEvent::Shot { .. })).count()
+        } else {
+            0
+        };
+        println!("Fixture m-0001: shots = {}", shots);
+        assert!(shots >= 5, "minimum 5 shots per match (gate criterion)");
+
+        // Check score
+        println!("Fixture m-0001: score = {:?}", match_res.score);
+    }
+
+    /// Full Phase 0 playability gate test using all fixture teams and GATE_SEEDS.
+    ///
+    /// Runs the complete Phase 0 gate criteria (PRD §15) across all 3 fixture
+    /// match configurations and the 10 GATE_SEEDS (2001-2010).
+    ///
+    /// Gate criteria (all must pass for every seed):
+    /// - Each team ≥ 30% possession of in-play ticks
+    /// - Ball crosses halfway ≥ 20 times per half
+    /// - Ball spends 25–75% of in-play ticks in each half of the pitch
+    /// - Average ≥ 5 shots per match
+    ///
+    /// Run with:
+    /// ```text
+    /// cargo test --release -p sim-server --lib -- --ignored phase_0_playability_gate_full --nocapture
+    /// ```
+    #[test]
+    #[ignore = "full-match test is minutes-long; run explicitly to verify Phase 0 gate with fixtures"]
+    fn phase_0_playability_gate_full() {
+        use std::path::Path;
+        use crate::fixtures::load;
+        use sim_components::{
+            ActionIntent, Ball, BallState, Intent, Match, MatchState, Player, Position, TeamId, TouchKind,
+        };
+        use sim_core::{Simulation, Termination, TickHook, run_match_driver, TICK_CAP};
+        use sim_math::PITCH_LENGTH;
+
+        // Resolve fixtures directory from manifest dir (works regardless of cwd)
+        let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let fixture_set = load(&fixtures_dir).expect("fixtures must load");
+
+        const HALFWAY_X: f32 = PITCH_LENGTH / 2.0;
+        const SIDE_DEAD_BAND: f32 = 1.0;
+        const GATE_SEEDS: [u64; 10] = [2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010];
+
+        const MIN_POSSESSION_SHARE: f64 = 0.30;
+        const MIN_CROSSINGS_PER_HALF: u32 = 20;
+        const MIN_TERRITORY_SHARE: f64 = 0.25;
+        const MAX_TERRITORY_SHARE: f64 = 0.75;
+        const MIN_AVERAGE_SHOTS: f64 = 5.0;
+        // Build match configurations from fixtures
+        let match_configs: Vec<(&str, &str, &str, &str, &str, &str)> = vec![
+            ("m-0001", "t-alpha", "t-bravo", "4-4-2", "balance", "possession"),
+            ("m-0002", "t-delta", "t-echo", "4-4-2", "defend", "park_the_bus"),
+            ("m-0003", "t-alpha", "t-alpha", "4-4-2", "balance", "possession"),
+        ];
+
+        let mut total_shots = 0u64;
+        let mut total_matches = 0u64;
+
+        for (match_id, home_team_id, away_team_id, formation, mentality, tactic) in match_configs {
+            let home_team = fixture_set.teams.get(home_team_id).expect("home team");
+            let away_team = fixture_set.teams.get(away_team_id).expect("away team");
+
+            for &seed in &GATE_SEEDS {
+                println!("Running Phase 0 gate: {match_id} seed={seed}");
+
+                // Build validated match with this seed
+                use sim_components::fixture::{ValidatedMatch, ValidatedSide};
+                use sim_components::{Formation, Mentality, Tactic};
+                let validated_match = ValidatedMatch {
+                    id: match_id.to_string(),
+                    seed,
+                    home: home_team_id.to_string(),
+                    away: away_team_id.to_string(),
+                    home_setup: ValidatedSide {
+                        formation: Formation::from_name(formation).expect("valid formation"),
+                        mentality: Mentality::from_name(mentality).expect("valid mentality"),
+                        tactic: Tactic::from_name(tactic).expect("valid tactic"),
+                    },
+                    away_setup: ValidatedSide {
+                        formation: Formation::from_name(formation).expect("valid formation"),
+                        mentality: Mentality::from_name(mentality).expect("valid mentality"),
+                        tactic: Tactic::from_name(tactic).expect("valid tactic"),
+                    },
+                };
+
+                let mut sim = Simulation::new_from_fixture(&validated_match, home_team, away_team);
+                let mut tracker = PlayabilityTracker::default();
+                let mut hook = GateHook { tracker: &mut tracker };
+                let result = run_match_driver(&mut sim, TICK_CAP, &mut hook)
+                    .expect("invariant: HarnessHook never errors");
+
+                assert_eq!(result.termination, Termination::FullTime, "{match_id} seed={seed}: must reach FullTime");
+
+                // Check gate criteria
+                let home_possession = tracker.possession_share(0);
+                let away_possession = tracker.possession_share(1);
+                let left_share = tracker.left_half_share();
+                let h1_crossings = tracker.crossings(1);
+                let h2_crossings = tracker.crossings(2);
+                let shots = tracker.shots();
+
+                println!(
+                    "{match_id} seed={seed}: poss_home={home_possession:.3} poss_away={away_possession:.3} cross_h1={h1_crossings} cross_h2={h2_crossings} left_half={left_share:.3} shots={shots}"
+                );
+
+                // Gate criteria assertions
+                assert!(
+                    home_possession >= MIN_POSSESSION_SHARE,
+                    "{match_id} seed={seed}: home possession {home_possession:.3} < {MIN_POSSESSION_SHARE}"
+                );
+                assert!(
+                    away_possession >= MIN_POSSESSION_SHARE,
+                    "{match_id} seed={seed}: away possession {away_possession:.3} < {MIN_POSSESSION_SHARE}"
+                );
+                assert!(
+                    h1_crossings >= MIN_CROSSINGS_PER_HALF,
+                    "{match_id} seed={seed}: H1 crossings {h1_crossings} < {MIN_CROSSINGS_PER_HALF}"
+                );
+                assert!(
+                    h2_crossings >= MIN_CROSSINGS_PER_HALF,
+                    "{match_id} seed={seed}: H2 crossings {h2_crossings} < {MIN_CROSSINGS_PER_HALF}"
+                );
+                assert!(
+                    left_share >= MIN_TERRITORY_SHARE && left_share <= MAX_TERRITORY_SHARE,
+                    "{match_id} seed={seed}: left half share {left_share:.3} outside [{MIN_TERRITORY_SHARE}, {MAX_TERRITORY_SHARE}]"
+                );
+
+                total_shots += shots as u64;
+                total_matches += 1;
+            }
+        }
+
+        let avg_shots = total_shots as f64 / total_matches as f64;
+        println!("Phase 0 gate: average shots per match = {avg_shots:.1} (min {MIN_AVERAGE_SHOTS})");
+        assert!(avg_shots >= MIN_AVERAGE_SHOTS, "average shots {avg_shots:.1} < {MIN_AVERAGE_SHOTS}");
     }
 }

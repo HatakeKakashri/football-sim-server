@@ -78,44 +78,107 @@ impl Default for ServerConfig {
     }
 }
 
-/// One registered fixture: a `match_id` with its deterministic seed.
+/// One registered fixture: a `match_id` with its validated match data and
+/// the two teams' player rosters.
 #[derive(Debug, Clone)]
 pub struct MatchFixture {
     /// Fixture match id from the URL path.
     pub match_id: String,
-    /// Deterministic seed; re-simulation reuses it (PRD §10.4).
-    pub seed: u64,
+    /// The validated match (seed, home/away team IDs, setups).
+    pub validated_match: sim_components::fixture::ValidatedMatch,
+    /// The home team's validated players.
+    pub home_team: sim_components::fixture::ValidatedTeam,
+    /// The away team's validated players.
+    pub away_team: sim_components::fixture::ValidatedTeam,
 }
 
 /// Fixture registry. Unknown `match_id`s get `404` (PRD §10.1).
 #[derive(Debug, Clone, Default)]
 pub struct MatchRegistry {
     /// Fixtures by `match_id`.
-    fixtures: HashMap<String, MatchFixture>,
+    pub fixtures: HashMap<String, MatchFixture>,
 }
 
 impl MatchRegistry {
     /// Registry with a single fixture (this slice serves one fixture).
     #[must_use]
-    pub fn single(match_id: &str, seed: u64) -> Self {
+    pub fn single(
+        match_id: &str,
+        validated_match: sim_components::fixture::ValidatedMatch,
+        home_team: sim_components::fixture::ValidatedTeam,
+        away_team: sim_components::fixture::ValidatedTeam,
+    ) -> Self {
         let mut registry = Self::default();
-        registry.insert(match_id, seed);
+        registry.insert(match_id, validated_match, home_team, away_team);
         registry
     }
 
-    /// Registry with the PRD §5.4 example fixture.
+    /// Test-only constructor: creates a registry with a single fixture using
+    /// placeholder profiles (for tests that don't need real fixture data).
+    #[cfg(test)]
     #[must_use]
-    pub fn default_fixture() -> Self {
-        Self::single("m-0001", 42)
+    pub fn single_test(match_id: &str, seed: u64) -> Self {
+        use sim_components::{
+            fixture::{ValidatedMatch, ValidatedSide, ValidatedTeam, ValidatedPlayer},
+            profile::ProfileKind,
+            Formation, Mentality, Tactic, PosSlot, PlayerProfile,
+        };
+        let mut registry = Self::default();
+
+        // Create minimal validated match with placeholder data
+        let validated_match = ValidatedMatch {
+            id: match_id.to_string(),
+            seed,
+            home: "test-home".to_string(),
+            away: "test-away".to_string(),
+            home_setup: ValidatedSide {
+                formation: Formation::FourFourTwo,
+                mentality: Mentality::Balance,
+                tactic: Tactic::Possession,
+            },
+            away_setup: ValidatedSide {
+                formation: Formation::FourFourTwo,
+                mentality: Mentality::Balance,
+                tactic: Tactic::Possession,
+            },
+        };
+
+        // Create minimal validated teams with 11 placeholder players each
+        let make_team = |id: &str, name: &str| ValidatedTeam {
+            id: id.to_string(),
+            name: name.to_string(),
+            players: (0..11).map(|i| ValidatedPlayer {
+                id: format!("{id}-p{i:02}"),
+                name: format!("Player {i}"),
+                number: (i + 1) as u8,
+                kind: if i == 0 { ProfileKind::Goalkeeper } else { ProfileKind::Outfield },
+                trained_positions: if i == 0 { vec![PosSlot::GK] } else { vec![PosSlot::MC] },
+                profile: if i == 0 { PlayerProfile::default_goalkeeper() } else { PlayerProfile::default_outfield() },
+            }).collect(),
+        };
+
+        let home_team = make_team("test-home", "Home");
+        let away_team = make_team("test-away", "Away");
+
+        registry.insert(match_id, validated_match, home_team, away_team);
+        registry
     }
 
     /// Add (or replace) a fixture.
-    pub fn insert(&mut self, match_id: &str, seed: u64) {
+    pub fn insert(
+        &mut self,
+        match_id: &str,
+        validated_match: sim_components::fixture::ValidatedMatch,
+        home_team: sim_components::fixture::ValidatedTeam,
+        away_team: sim_components::fixture::ValidatedTeam,
+    ) {
         self.fixtures.insert(
             match_id.to_string(),
             MatchFixture {
                 match_id: match_id.to_string(),
-                seed,
+                validated_match,
+                home_team,
+                away_team,
             },
         );
     }
@@ -226,7 +289,7 @@ pub enum StreamResponse {
 #[derive(Debug)]
 pub struct MatchStore {
     config: ServerConfig,
-    registry: MatchRegistry,
+    pub registry: MatchRegistry,
     state: Mutex<StoreState>,
     finished: Notify,
 }
@@ -313,11 +376,12 @@ impl MatchStore {
             PostDecision::Start => {
                 let store = Arc::clone(self);
                 let tick_cap = self.config.tick_cap;
+                let fixture = fixture.clone();
                 std::thread::Builder::new()
                     .name(format!("sim-{match_id}"))
                     .spawn(move || {
-                        let outcome = run_match_blocking(&fixture.match_id, fixture.seed, tick_cap);
-                        store.finish_match(&fixture.match_id, outcome);
+                        let outcome = run_match_blocking(&fixture, tick_cap);
+                        store.finish_match(&fixture.validated_match.id, outcome);
                     })
                     .expect("invariant: OS thread spawn for a match simulation");
                 PostResponse {

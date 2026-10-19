@@ -40,7 +40,7 @@ struct SimulateHook<'a> {
 }
 
 impl TickHook for SimulateHook<'_> {
-    fn on_tick(&mut self, sim: &Simulation) -> Result<(), String> {
+    fn on_tick(&mut self, sim: &mut Simulation) -> Result<(), String> {
         if let Some(w) = &mut self.writer {
             let state = sim.get_state()?;
             serde_json::to_writer(&mut *w, &state).map_err(|e| e.to_string())?;

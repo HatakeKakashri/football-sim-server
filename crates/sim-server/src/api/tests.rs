@@ -17,21 +17,38 @@ use super::{JobStatus, MatchRecord, MatchRegistry, MatchStore, ServerConfig, Str
 fn test_store(fixture_count: u32, config: ServerConfig) -> Arc<MatchStore> {
     let mut registry = MatchRegistry::default();
     for index in 0..fixture_count {
-        registry.insert(&format!("m-{index:04}"), 42 + u64::from(index));
+        let id = format!("m-{index:04}");
+        let seed = 42 + u64::from(index);
+        let single = MatchRegistry::single_test(&id, seed);
+        registry.fixtures.extend(single.fixtures);
+    }
+    Arc::new(MatchStore::new(config, registry))
+}
+
+#[cfg(test)]
+fn test_store_with_fixtures(fixture_count: u32, config: ServerConfig) -> Arc<MatchStore> {
+    let mut registry = MatchRegistry::default();
+    for index in 0..fixture_count {
+        let id = format!("m-{index:04}");
+        let seed = 42 + u64::from(index);
+        // Use insert on the default registry, then create single_test and merge
+        // For simplicity, create a new registry each time and merge (not ideal but works for tests)
+        let single = MatchRegistry::single_test(&id, seed);
+        registry.fixtures.extend(single.fixtures);
     }
     Arc::new(MatchStore::new(config, registry))
 }
 
 #[test]
 fn post_unknown_match_id_is_404() {
-    let store = test_store(1, ServerConfig::default());
+    let store = test_store_with_fixtures(1, ServerConfig::default());
     let response = store.post_match("nope");
     assert_eq!(response.status, 404);
 }
 
 #[test]
 fn stream_unknown_match_id_is_404() {
-    let store = test_store(1, ServerConfig::default());
+    let store = test_store_with_fixtures(1, ServerConfig::default());
     assert!(matches!(
         store.stream_slice("nope", None),
         StreamResponse::Unknown
@@ -40,7 +57,7 @@ fn stream_unknown_match_id_is_404() {
 
 #[test]
 fn stream_before_post_is_409() {
-    let store = test_store(1, ServerConfig::default());
+    let store = test_store_with_fixtures(1, ServerConfig::default());
     assert!(matches!(
         store.stream_slice("m-0000", None),
         StreamResponse::NotStarted
@@ -53,7 +70,7 @@ fn concurrency_cap_returns_503_with_retry_after() {
         max_concurrent_sims: 1,
         ..ServerConfig::default()
     };
-    let store = test_store(2, config);
+    let store = test_store_with_fixtures(2, config);
     // Occupy the single slot with a stuck Running record.
     {
         let mut state = store
@@ -82,7 +99,7 @@ fn expired_result_is_410_until_repost() {
         tick_cap: 120,
         ..ServerConfig::default()
     };
-    let store = test_store(1, config);
+    let store = test_store_with_fixtures(1, config);
     let response = store.post_match("m-0000");
     assert_eq!(response.status, 202);
     // The 120-tick thread fails fast on the cap; wait for it.
@@ -122,7 +139,7 @@ fn cached_get_never_blocked_by_concurrency_cap() {
         tick_cap: 120,
         ..ServerConfig::default()
     };
-    let store = test_store(3, config);
+    let store = test_store_with_fixtures(3, config);
 
     // Cache a finished result first.
     let response = store.post_match("m-0000");
@@ -174,7 +191,7 @@ fn evict_and_regenerate_is_byte_identical_after_ttl_expiry() {
         tick_cap: 120,
         ..ServerConfig::default()
     };
-    let store = test_store(1, config);
+    let store = test_store_with_fixtures(1, config);
 
     // First simulation: tick-cap failure, deterministic for the seed.
     let response = store.post_match("m-0000");
@@ -324,7 +341,12 @@ fn rendered_stream_bodies_are_byte_identical() {
 
 #[test]
 fn short_run_fails_on_tick_cap_with_last_good_tick() {
-    let outcome = run_match_blocking("m-0000", 42, 120);
+    let fixture = MatchRegistry::single_test("m-0000", 42)
+        .fixtures
+        .into_values()
+        .next()
+        .expect("test fixture");
+    let outcome = run_match_blocking(&fixture, 120);
     let MatchOutcome::Failed {
         code,
         last_good_tick,
@@ -363,7 +385,7 @@ fn api_end_to_end_full_match() {
     };
     let store: Arc<MatchStore> = Arc::new(MatchStore::new(
         config,
-        MatchRegistry::single("m-0001", 42),
+        MatchRegistry::single_test("m-0001", 42),
     ));
     let response = store.post_match("m-0001");
     assert_eq!(response.status, 202);
@@ -427,11 +449,11 @@ fn api_end_to_end_full_match() {
     assert!(full_time["state_hash"].as_u64().unwrap_or(0) > 0);
 
     // Re-simulation is byte-identical (PRD §10.4 determinism).
-    let rerun = run_match_blocking(
-        "m-0001",
-        42,
-        store.config.tick_cap,
-    );
+    let fixture = store
+        .registry
+        .get("m-0001")
+        .expect("fixture exists");
+    let rerun = run_match_blocking(fixture, store.config.tick_cap);
     let MatchOutcome::Finished(rerun_completed) = rerun else {
         panic!("re-simulation of seed 42 must finish");
     };

@@ -2,10 +2,11 @@
 
 use bevy_ecs::prelude::*;
 use sim_components::{
-    ActionIntent, Intent, MovementIntent, Skill, Stamina, TackleRecovery,
+    ActionIntent, FormationSlot, Intent, MovementIntent, PosSlot, Skill, Stamina, TackleRecovery,
 };
 use sim_math::Vec2;
 use sim_physics::SimRng;
+use sim_physics::PLAYER_MAX_ACCEL_PER_TICK;
 use smallvec::smallvec;
 
 use crate::execution::player_action_execution_system;
@@ -24,6 +25,37 @@ type EventVec = Vec<serde_json::Value>;
 
 fn pos(x: f32, y: f32) -> Vec2 {
     Vec2::new(x, y)
+}
+
+/// Build a `FormationSlot` for a test player at the given pitch position.
+/// Maps the position to the closest `PosSlot` (4-4-2-like mapping for
+/// test purposes) so the execution system can compute the fit multiplier.
+fn test_slot(x: f32, y: f32) -> FormationSlot {
+    let position = if x < 17.0 {
+        PosSlot::GK
+    } else if x < 35.0 {
+        if y < 23.0 {
+            PosSlot::DL
+        } else if y > 45.0 {
+            PosSlot::DR
+        } else {
+            PosSlot::DC
+        }
+    } else if x < 70.0 {
+        if y < 23.0 {
+            PosSlot::ML
+        } else if y > 45.0 {
+            PosSlot::MR
+        } else {
+            PosSlot::MC
+        }
+    } else {
+        PosSlot::ST
+    };
+    FormationSlot {
+        position,
+        home: Vec2::new(x, y),
+    }
 }
 
 /// Arrival slow-down: a player close to a stationary target should steer
@@ -185,6 +217,7 @@ fn kick_execution_emits_a_pass_flow_event_when_telemetry_is_on() {
                     distance_to_bottom: 34.0,
                 },
             },
+            test_slot(50.0, 34.0),
         ))
         .id();
     // Spawn a teammate entity for completeness (the kicker only reads
@@ -262,6 +295,7 @@ fn kick_execution_emits_no_flow_when_telemetry_is_off() {
                     distance_to_bottom: 34.0,
                 },
             },
+            test_slot(50.0, 34.0),
         ))
         .id();
     world.spawn(BallMarker);
@@ -346,6 +380,7 @@ fn accel_cap_clamps_first_tick_velocity_from_rest() {
                     distance_to_bottom: 68.0 - player_pos.y,
                 },
             },
+            test_slot(50.0, 34.0),
         ))
         .id();
 
@@ -378,6 +413,7 @@ fn accel_cap_clamps_first_tick_velocity_from_rest() {
         p.x - player_pos.x,
     );
 }
+
 
 /// MVP steering fix integration test (item #2): the arrival slow-down
 /// must prevent a stationary player from oscillating around a 1.5 m
@@ -430,6 +466,7 @@ fn arrival_prevents_oscillation_near_ball() {
                     distance_to_bottom: 68.0 - player_pos.y,
                 },
             },
+            test_slot(50.0, 34.0),
         ))
         .id();
 
@@ -523,6 +560,7 @@ fn tackle_attempt_records_pending_tackle_and_recovery_on_failure() {
             Stamina(1.0),
             Skill(0.7),
             snap(Vec2::new(60.0, 34.0), Vec2::new(60.0, 34.0)),
+            test_slot(60.0, 34.0),
         ))
         .id();
     let tackler = {
@@ -551,6 +589,7 @@ fn tackle_attempt_records_pending_tackle_and_recovery_on_failure() {
                 Skill(0.7),
                 profile,
                 snap(Vec2::new(58.0, 34.0), Vec2::new(60.0, 34.0)),
+                test_slot(58.0, 34.0),
             ))
             .id()
         };

@@ -125,7 +125,7 @@ fn header_value(headers: &HeaderMap, name: header::HeaderName) -> String {
 async fn a_ready_segment_is_served_with_the_immutable_cache_headers() {
     let service = ready_service("m-0001").await;
     let segment = first_segment(&service, "m-0001");
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let response = router
         .oneshot(segment_request(&segment.url, None))
@@ -157,7 +157,7 @@ async fn a_ready_segment_is_served_with_the_immutable_cache_headers() {
 async fn a_gzip_client_gets_the_stored_gzipped_bytes() {
     let service = ready_service("m-0001").await;
     let segment = first_segment(&service, "m-0001");
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let response = router
         .oneshot(segment_request(&segment.url, Some("gzip, deflate")))
@@ -188,7 +188,7 @@ async fn a_gzip_client_gets_the_stored_gzipped_bytes() {
 async fn a_client_without_gzip_gets_the_decompressed_bytes() {
     let service = ready_service("m-0001").await;
     let segment = first_segment(&service, "m-0001");
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let response = router
         .oneshot(segment_request(&segment.url, None))
@@ -214,7 +214,7 @@ async fn a_client_without_gzip_gets_the_decompressed_bytes() {
 async fn a_client_that_refuses_gzip_gets_the_decompressed_bytes() {
     let service = ready_service("m-0001").await;
     let segment = first_segment(&service, "m-0001");
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let response = router
         .oneshot(segment_request(&segment.url, Some("gzip;q=0, deflate")))
@@ -234,7 +234,7 @@ async fn a_client_that_refuses_gzip_gets_the_decompressed_bytes() {
 #[tokio::test]
 async fn a_match_that_was_never_started_is_409() {
     let service = service_with(as_dyn(Arc::new(InstantRunner)), &["m-0001"], 1);
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let response = router
         .oneshot(request(
@@ -265,7 +265,7 @@ async fn a_running_match_is_409() {
         matches!(state, MatchState::Running)
     })
     .await;
-    let router = router_with_service(test_store(), Arc::clone(&service), None, Vec::new());
+    let router = router_with_service(test_store(), Arc::clone(&service), http_config(None, &[]));
 
     let response = router
         .oneshot(request(
@@ -291,7 +291,7 @@ async fn a_failed_match_is_409() {
         matches!(state, MatchState::Failed { .. })
     })
     .await;
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let response = router
         .oneshot(request(
@@ -310,7 +310,7 @@ async fn a_failed_match_is_409() {
 #[tokio::test]
 async fn an_unknown_match_is_404() {
     let service = ready_service("m-0001").await;
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let response = router
         .oneshot(request(
@@ -330,7 +330,7 @@ async fn an_unknown_match_is_404() {
 async fn a_wrong_build_id_is_404() {
     let service = ready_service("m-0001").await;
     let segment = first_segment(&service, "m-0001");
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let wrong = format!(
         "/match/m-0001/segments/{}/0.json",
@@ -351,7 +351,7 @@ async fn a_wrong_build_id_is_404() {
 async fn an_out_of_range_segment_is_404() {
     let service = ready_service("m-0001").await;
     let segment = first_segment(&service, "m-0001");
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let out_of_range = format!(
         "/match/m-0001/segments/{}/{}.json",
@@ -373,7 +373,7 @@ async fn an_out_of_range_segment_is_404() {
 async fn a_bad_segment_number_is_404() {
     let service = ready_service("m-0001").await;
     let segment = first_segment(&service, "m-0001");
-    let router = router_with_service(test_store(), service, None, Vec::new());
+    let router = router_with_service(test_store(), service, http_config(None, &[]));
 
     let bad = format!(
         "/match/m-0001/segments/{}/first.json",

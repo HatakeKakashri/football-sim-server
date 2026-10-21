@@ -61,6 +61,7 @@ use axum::{Json, Router, routing};
 use serde::Serialize;
 
 use crate::api::render::Manifest;
+use crate::http::HttpConfig;
 use crate::service::{MatchService, MatchState, StartError, StartOutcome};
 
 mod segments;
@@ -102,9 +103,8 @@ const STATE_UNAUTHORIZED: &str = "unauthorized";
 pub struct MatchApiState {
     /// The match service behind the routes.
     pub service: Arc<MatchService>,
-    /// Bearer token required by `POST`; `None` disables auth
-    /// (PRD §4).
-    pub api_token: Option<String>,
+    /// Transport settings: the bearer token this route set checks.
+    pub http: HttpConfig,
 }
 
 /// The body of a response that carries no result: the match's state.
@@ -368,12 +368,8 @@ fn state_response_with(
 
 /// The 401: the request did not carry the configured bearer token.
 fn unauthorized(state: &MatchApiState, match_id: &str, headers: &HeaderMap) -> Option<Response> {
-    let expected_token = state.api_token.as_ref()?;
-    let provided = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
-    let expected = format!("Bearer {expected_token}");
-    if provided == Some(expected.as_str()) {
+    let expected_token = state.http.api_token.as_ref()?;
+    if super::auth::bearer_token_matches(expected_token, headers) {
         return None;
     }
     Some(state_response_with(

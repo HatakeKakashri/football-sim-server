@@ -125,7 +125,8 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             api_token,
             cors_origins,
         } => {
-            let _fixtures = fixtures::load_default()?;
+            // The fixtures are loaded once, inside `serve`, and shared by
+            // the legacy store and the match service.
             serve(bind, max_concurrent_sims, result_ttl_secs, api_token, cors_origins)?;
         }
     }
@@ -146,6 +147,7 @@ fn serve(
     use crate::api::runner::SimulationRunner;
     use crate::api::{MatchRegistry, MatchStore, ServerConfig, default_concurrency_cap};
     use crate::fixtures;
+    use crate::http::HttpConfig;
     use crate::service::MatchService;
 
     let cors_origins: Vec<String> = cors_origins
@@ -155,15 +157,18 @@ fn serve(
         .collect();
     let cap = max_concurrent_sims.unwrap_or_else(default_concurrency_cap);
     let config = ServerConfig {
-        bind: bind.clone(),
         max_concurrent_sims: cap,
         result_ttl_secs,
         tick_cap: sim_core::TICK_CAP,
-        api_token: api_token.clone(),
-        cors_origins: cors_origins.clone(),
+    };
+    let http = HttpConfig {
+        bind,
+        api_token,
+        cors_origins,
     };
 
-    // Load and validate all fixtures, then build the registry.
+    // Load and validate all fixtures once; both the legacy store and the
+    // match service are built from this set.
     let fixture_set = fixtures::load_default()?;
     let mut registry = MatchRegistry::default();
     for (match_id, validated_match) in &fixture_set.matches {
@@ -183,13 +188,7 @@ fn serve(
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(crate::http::serve(
-            store,
-            service,
-            &bind,
-            api_token,
-            cors_origins,
-        ))?;
+        .block_on(crate::http::serve(store, service, http))?;
     Ok(())
 }
 

@@ -60,9 +60,6 @@ pub const RETRY_AFTER_SECS: u64 = 5;
 /// Default cache lifetime for finished/failed results (PRD §4).
 pub const DEFAULT_RESULT_TTL_SECS: u64 = 3600;
 
-/// Default listen address (PRD §4: bind `127.0.0.1`).
-pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
-
 /// Default concurrency cap: one simulation per core minus one for
 /// the executor (PRD §4), at least one.
 #[must_use]
@@ -70,35 +67,28 @@ pub fn default_concurrency_cap() -> usize {
     std::thread::available_parallelism().map_or(1, |cores| cores.get().max(2) - 1)
 }
 
-/// Server knobs (PRD §4 configuration table).
+/// The service's policy settings (PRD §4 configuration table).
+///
+/// Transport settings — bind address, API token and CORS origins — live
+/// in [`crate::http::HttpConfig`]. Keeping the two apart means the
+/// policy cannot diverge between the legacy store and the match service,
+/// and neither struct carries a field the other layer owns.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-    /// Listen address.
-    pub bind: String,
     /// Simultaneous simulation thread cap.
     pub max_concurrent_sims: usize,
     /// Cache lifetime for finished/failed results.
     pub result_ttl_secs: u64,
     /// Hard stop per match; exceeding it fails the match (PRD §12).
     pub tick_cap: u64,
-    /// Bearer token required for `POST /match/{id}` when set (`Some`).
-    /// Unset (`None`) disables auth for local-only deployments (PRD §4
-    /// Security). `GET` is never authenticated.
-    pub api_token: Option<String>,
-    /// Allowed browser origins for CORS on `GET /match/{id}/stream`.
-    /// Empty disables CORS for local-only deployments (PRD §4).
-    pub cors_origins: Vec<String>,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind: DEFAULT_BIND.to_string(),
             max_concurrent_sims: default_concurrency_cap(),
             result_ttl_secs: DEFAULT_RESULT_TTL_SECS,
             tick_cap: TICK_CAP,
-            api_token: None,
-            cors_origins: Vec::new(),
         }
     }
 }

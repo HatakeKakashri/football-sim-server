@@ -17,13 +17,17 @@
 //!
 //! Security (PRD §4):
 //! - `POST` requires `Authorization: Bearer <token>` when
-//!   [`ServerConfig::api_token`] is set; missing/invalid tokens get
+//!   [`HttpConfig::api_token`] is set; missing/invalid tokens get
 //!   401. `GET` is never authenticated (browser `EventSource` cannot
 //!   set headers).
 //! - `GET` responses carry `Access-Control-Allow-Origin` only for
-//!   origins in [`ServerConfig::cors_origins`]; an empty list
+//!   origins in [`HttpConfig::cors_origins`]; an empty list
 //!   disables CORS (local-only deployment). `OPTIONS` preflight is
 //!   answered with the matching CORS headers.
+//! - Every response varies on `Origin`, so a shared cache cannot serve
+//!   one origin's answer to another.
+//! - An allowed origin can read `Retry-After` and `ETag` from a
+//!   cross-origin `fetch`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +41,7 @@ use axum::{Json, Router, routing};
 use crate::api::{MatchStore, StreamResponse};
 use crate::service::MatchService;
 
+mod auth;
 pub mod service_api;
 
 pub use service_api::MatchApiState;
@@ -46,15 +51,54 @@ pub use service_api::MatchApiState;
 /// ready).
 const KEEP_ALIVE_SECS: u64 = 15;
 
-/// Shared handler state: the match store plus the security config.
+/// Default listen address (PRD §4: bind `127.0.0.1`).
+pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
+
+/// The response headers a cross-origin script may read.
+///
+/// A browser only exposes the CORS-safelisted response headers to
+/// `fetch`; `Retry-After` and `ETag` are not safelisted, so they must
+/// be named here or the client cannot pace its polling or revalidate
+/// its manifest.
+const EXPOSED_HEADERS: &str = "Retry-After, ETag";
+
+/// The transport settings of the HTTP server (PRD §4 configuration
+/// table).
+///
+/// These are deliberately separate from the service's policy settings
+/// ([`crate::api::ServerConfig`]): the bind address, the token and the
+/// CORS allowlist belong to the transport, while the cap, the result
+/// TTL and the tick cap belong to the simulation service.
+#[derive(Debug, Clone)]
+pub struct HttpConfig {
+    /// Listen address.
+    pub bind: String,
+    /// Bearer token required for `POST` when set (`Some`). Unset
+    /// (`None`) disables auth for local-only deployments (PRD §4
+    /// Security). `GET` is never authenticated.
+    pub api_token: Option<String>,
+    /// Allowed browser origins for CORS. Empty disables CORS for
+    /// local-only deployments (PRD §4).
+    pub cors_origins: Vec<String>,
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            bind: DEFAULT_BIND.to_string(),
+            api_token: None,
+            cors_origins: Vec::new(),
+        }
+    }
+}
+
+/// Shared handler state: the match store plus the transport config.
 #[derive(Debug, Clone)]
 pub struct AppState {
     /// Match store behind the routes.
     pub store: Arc<MatchStore>,
-    /// Bearer token required for `POST`; `None` disables auth.
-    pub api_token: Option<String>,
-    /// Allowed CORS origins for `GET`; empty disables CORS.
-    pub cors_origins: Vec<String>,
+    /// Transport settings: bind, bearer token and CORS origins.
+    pub http: HttpConfig,
 }
 
 /// `Access-Control-Allow-Origin` for `origin` when it is in the
@@ -70,12 +114,25 @@ fn allowed_origin<'a>(origin: &'a str, cors_origins: &'a [String]) -> Option<&'a
         .map(String::as_str)
 }
 
+/// Add `Origin` to a response's `Vary` header.
+///
+/// A response that varies by origin must say so, or a shared cache can
+/// replay one origin's answer to another. Existing `Vary` values (for
+/// example a segment's `Accept-Encoding`) are preserved as extra header
+/// values.
+fn add_vary_origin(response: &mut Response) {
+    response
+        .headers_mut()
+        .append(header::VARY, HeaderValue::from_static("Origin"));
+}
+
 /// CORS middleware applied to every request (PRD §4).
 ///
 /// `OPTIONS` preflight requests match no `GET`/`POST` route, so they
 /// are short-circuited here with the matching CORS headers. All other
 /// responses get `Access-Control-Allow-Origin` reflected when the
-/// request `Origin` is in the allowlist.
+/// request `Origin` is in the allowlist, plus the exposed response
+/// headers a cross-origin script may read.
 async fn cors_middleware(
     State(state): State<AppState>,
     request: Request,
@@ -89,12 +146,12 @@ async fn cors_middleware(
 
     let allowed = origin
         .as_deref()
-        .and_then(|o| allowed_origin(o, &state.cors_origins));
+        .and_then(|o| allowed_origin(o, &state.http.cors_origins));
 
     // Preflight: answer before routing; an unlisted origin gets no
     // `Access-Control-Allow-Origin` so the browser blocks it.
     if request.method() == Method::OPTIONS {
-        return allowed.map_or_else(
+        let mut response = allowed.map_or_else(
             || StatusCode::NO_CONTENT.into_response(),
             |origin| {
                 (
@@ -110,35 +167,39 @@ async fn cors_middleware(
                             header::ACCESS_CONTROL_ALLOW_HEADERS,
                             HeaderValue::from_static("authorization, last-event-id, content-type"),
                         ),
+                        (
+                            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                            HeaderValue::from_static(EXPOSED_HEADERS),
+                        ),
                         (header::ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("86400")),
                     ],
                 )
                     .into_response()
             },
         );
+        add_vary_origin(&mut response);
+        return response;
     }
 
     let mut response = next.run(request).await;
     if let Some(origin) = allowed {
-        let _ = response.headers_mut().insert(
+        let headers = response.headers_mut();
+        let _ = headers.insert(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
             HeaderValue::from_str(origin).expect("invariant: allowed CORS origin is a valid header value"),
         );
+        let _ = headers.insert(
+            header::ACCESS_CONTROL_EXPOSE_HEADERS,
+            HeaderValue::from_static(EXPOSED_HEADERS),
+        );
     }
+    add_vary_origin(&mut response);
     response
 }
 
 /// Build the axum router for a store.
-pub fn router(
-    store: Arc<MatchStore>,
-    api_token: Option<String>,
-    cors_origins: Vec<String>,
-) -> Router {
-    let state = AppState {
-        store,
-        api_token,
-        cors_origins,
-    };
+pub fn router(store: Arc<MatchStore>, http: HttpConfig) -> Router {
+    let state = AppState { store, http };
     let legacy: Router = legacy_routes().with_state(state.clone());
     legacy.layer(middleware::from_fn_with_state(state, cors_middleware))
 }
@@ -152,16 +213,14 @@ pub fn router(
 pub fn router_with_service(
     store: Arc<MatchStore>,
     service: Arc<MatchService>,
-    api_token: Option<String>,
-    cors_origins: Vec<String>,
+    http: HttpConfig,
 ) -> Router {
     let state = AppState {
         store,
-        api_token: api_token.clone(),
-        cors_origins,
+        http: http.clone(),
     };
     let legacy: Router = legacy_routes().with_state(state.clone());
-    let next = service_api::routes(MatchApiState { service, api_token });
+    let next = service_api::routes(MatchApiState { service, http });
     legacy
         .merge(next)
         .layer(middleware::from_fn_with_state(state, cors_middleware))
@@ -185,23 +244,17 @@ fn legacy_routes() -> Router<AppState> {
 pub async fn serve(
     store: Arc<MatchStore>,
     service: Arc<MatchService>,
-    bind: &str,
-    api_token: Option<String>,
-    cors_origins: Vec<String>,
+    http: HttpConfig,
 ) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind(bind).await?;
-    tracing::info!("football-sim HTTP listening on {bind}");
-    axum::serve(
-        listener,
-        router_with_service(store, service, api_token, cors_origins),
-    )
-    .await
+    let listener = tokio::net::TcpListener::bind(&http.bind).await?;
+    tracing::info!("football-sim HTTP listening on {}", http.bind);
+    axum::serve(listener, router_with_service(store, service, http)).await
 }
 
 /// `POST /match/{match_id}`: start the match on its own OS thread
 /// (inside [`MatchStore::post_match`]) and report 202 / 200 / 404 /
 /// 503 per PRD §10.1. Requires `Authorization: Bearer <token>` when
-/// [`AppState::api_token`] is set; missing/invalid tokens get 401.
+/// [`HttpConfig::api_token`] is set; missing/invalid tokens get 401.
 async fn post_match_handler(
     State(state): State<AppState>,
     Path(match_id): Path<String>,
@@ -209,18 +262,14 @@ async fn post_match_handler(
 ) -> Response {
     // Auth is checked before the registry so a missing token is 401
     // even for an unknown id (PRD §10.1 lists 401 before 404).
-    if let Some(expected_token) = &state.api_token {
-        let provided = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok());
-        let expected = format!("Bearer {expected_token}");
-        if provided != Some(expected.as_str()) {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": "missing or invalid bearer token"})),
-            )
-                .into_response();
-        }
+    if let Some(expected_token) = &state.http.api_token
+        && !auth::bearer_token_matches(expected_token, &headers)
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "missing or invalid bearer token"})),
+        )
+            .into_response();
     }
 
     let outcome = state.store.post_match(&match_id);
@@ -332,16 +381,17 @@ mod tests {
             ServerConfig {
                 result_ttl_secs: ttl_secs,
                 tick_cap,
-                api_token: api_token.clone(),
-                cors_origins: cors_origins.clone(),
                 ..ServerConfig::default()
             },
             registry,
         ));
         AppState {
             store,
-            api_token,
-            cors_origins,
+            http: HttpConfig {
+                api_token,
+                cors_origins,
+                ..HttpConfig::default()
+            },
         }
     }
 
@@ -496,7 +546,7 @@ mod tests {
             .local_addr()
             .expect("invariant: bound socket has an address");
         tokio::spawn(async move {
-            axum::serve(listener, router(store, None, Vec::new()))
+            axum::serve(listener, router(store, HttpConfig::default()))
                 .await
                 .expect("invariant: test server serves");
         });
@@ -583,7 +633,7 @@ mod tests {
             .expect("invariant: bound socket has an address");
         let server_store = store.clone();
         tokio::spawn(async move {
-            axum::serve(listener, router(server_store, None, Vec::new()))
+            axum::serve(listener, router(server_store, HttpConfig::default()))
                 .await
                 .expect("invariant: test server serves");
         });
@@ -642,7 +692,7 @@ mod tests {
             .expect("invariant: bound socket has an address");
         let server_store = store.clone();
         tokio::spawn(async move {
-            axum::serve(listener, router(server_store, None, Vec::new()))
+            axum::serve(listener, router(server_store, HttpConfig::default()))
                 .await
                 .expect("invariant: test server serves");
         });
@@ -666,7 +716,6 @@ mod tests {
         let store = Arc::new(MatchStore::new(
             ServerConfig {
                 tick_cap: 120,
-                cors_origins: vec!["http://example.com".to_string()],
                 ..ServerConfig::default()
             },
             registry,
@@ -681,7 +730,13 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(
                 listener,
-                router(server_store, None, vec!["http://example.com".to_string()]),
+                router(
+                    server_store,
+                    HttpConfig {
+                        cors_origins: vec!["http://example.com".to_string()],
+                        ..HttpConfig::default()
+                    },
+                ),
             )
             .await
             .expect("invariant: test server serves");
@@ -758,7 +813,7 @@ mod tests {
             .expect("invariant: bound socket has an address");
         let server_store = store.clone();
         tokio::spawn(async move {
-            axum::serve(listener, router(server_store, None, Vec::new()))
+            axum::serve(listener, router(server_store, HttpConfig::default()))
                 .await
                 .expect("invariant: test server serves");
         });
@@ -877,7 +932,7 @@ mod tests {
             .expect("invariant: bound socket has an address");
         let server_store = store.clone();
         tokio::spawn(async move {
-            axum::serve(listener, router(server_store, None, Vec::new()))
+            axum::serve(listener, router(server_store, HttpConfig::default()))
                 .await
                 .expect("invariant: test server serves");
         });

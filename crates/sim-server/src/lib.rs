@@ -147,7 +147,7 @@ pub enum Commands {
     /// segments + `full_time`.
     Serve {
         /// Listen address (default `127.0.0.1:8080`).
-        #[arg(long, default_value = crate::api::DEFAULT_BIND)]
+        #[arg(long, default_value = crate::http::DEFAULT_BIND)]
         bind: String,
 
         /// Simultaneous simulation thread cap (default `cores − 1`).

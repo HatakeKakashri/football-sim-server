@@ -18,8 +18,7 @@ async fn the_status_matrix_is_served() {
         let router = router_with_service(
             Arc::clone(&store),
             Arc::clone(&row.service),
-            None,
-            Vec::new(),
+            http_config(None, &[]),
         );
         let response = router
             .oneshot(request(row.method.clone(), row.path))

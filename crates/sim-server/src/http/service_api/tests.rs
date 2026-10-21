@@ -18,13 +18,14 @@ use tower::ServiceExt;
 
 use crate::api::runner::MatchRunner;
 use crate::api::{MatchRegistry, MatchStore, ServerConfig};
-use crate::http::router_with_service;
+use crate::http::{HttpConfig, router_with_service};
 use crate::service::{MatchService, MatchState, StartOutcome};
 use crate::test_support::{
     AlwaysTransientRunner, GateGuard, GatedRunner, InstantRunner, TickCapFailureRunner, as_dyn,
     fixture_set, wait_until,
 };
 
+mod cors;
 mod matrix;
 mod routes;
 mod segments;
@@ -113,6 +114,15 @@ fn service_with(
     cap: usize,
 ) -> Arc<MatchService> {
     Arc::new(MatchService::new(fixture_set(match_ids), runner).with_cap(cap))
+}
+
+/// The transport settings of a router under test.
+fn http_config(api_token: Option<&str>, cors_origins: &[&str]) -> HttpConfig {
+    HttpConfig {
+        api_token: api_token.map(ToString::to_string),
+        cors_origins: cors_origins.iter().map(|origin| (*origin).to_string()).collect(),
+        ..HttpConfig::default()
+    }
 }
 
 /// A request for one of the routes.

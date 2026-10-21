@@ -80,6 +80,11 @@ re-evaluates only when `elapsed_ticks % 6 == player_stagger_slot(entity)`.
 via `SimRng` (LCG), no wall-clock, `f32::total_cmp` where ordering matters,
 `Entity::to_bits()` stable ordering, and `state_hash` excluding tick/RNG.
 
+**deterministic failure** — `sim_server::api::runner::FailureKind::Deterministic`.
+A failure that repeats: the same fixture and the same seed fail the same way, so
+the match service caches it for the life of the process and never retries it.
+Contrast with **transient failure**.
+
 ## E
 
 **ECS** — Bevy ECS 0.14 (no full Bevy). Systems take `Query`/`Res`/`ResMut` by
@@ -263,6 +268,11 @@ Contrast with `Component`.
 Spawned once at match construction; accrues one `StoppageEvent` per dead-ball
 tick.
 
+**retry window** — `sim_server::service::DEFAULT_RETRY_WINDOW` (5 s). The time a
+**transient failure** waits before a later start may try the match again. A
+start inside the window reports the failure with the remaining wait; a start
+after it schedules the match again, exactly like a fresh start.
+
 **RuleEvent** — `sim_components::RuleEvent`: `OutOfBounds`, `Goal`,
 `KickoffRestart`, `HalfTimeStart`, `FullTimeStart`, `Foul`. Emitted as
 components on the ball entity (deferred; visible next tick) — see Coding
@@ -324,6 +334,14 @@ in. Measured on m-0001 (110 segments, 110 minutes of match time): 6.5 MB
 gzipped, 137.2 MB uncompressed, a 4.7% ratio — **over** the budget, so
 the wire format is due for a revisit. Reproduce with
 `cargo test --release -p sim-server --lib -- --ignored a_real_match_reports --nocapture`.
+
+**transient failure** — `sim_server::api::runner::FailureKind::Transient`. A
+resource failure: the run could not get a resource it needed. Today the one
+catchable source is the memory for the animation frames
+(`RESOURCE_FAILURE_CODE`): a full match's frame capture holds ~145 MB
+resident, so a host under memory pressure cannot serve it. The pressure belongs
+to the host, not to the match, so the failure carries a **retry window**
+instead of being cached forever. Contrast with **deterministic failure**.
 
 ## U
 

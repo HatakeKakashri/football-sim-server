@@ -15,9 +15,24 @@
 //! Starting is single-flight. The simulation and rendering run together
 //! on a blocking thread ([`tokio::task::spawn_blocking`]) so the async
 //! executor never does CPU work. A panic on that thread is caught and
-//! becomes `Failed` with the distinct `runner_panic` code; deterministic
-//! failures (tick cap, invariant violation, panic) are cached with their
-//! `code`, `message` and `last_good_tick` for the life of the process.
+//! becomes `Failed` with the distinct `runner_panic` code.
+//!
+//! # Failures
+//!
+//! A failure is either deterministic or transient. A deterministic
+//! failure (tick cap, invariant violation, panic) repeats: the same
+//! fixture and the same seed fail the same way, so the result is cached
+//! for the life of the process and a later start reports it without
+//! running the match again.
+//!
+//! A transient failure is a resource failure: the run could not get a
+//! resource it needed (memory, for now — see
+//! [`crate::api::runner::RESOURCE_FAILURE_CODE`]). The pressure belongs
+//! to the host, not to the match, so the failure is not cached forever:
+//! it records a retry time and a start before that time reports the
+//! failure with the remaining wait, while a start after it schedules
+//! the match again.
+//!
 //! `Ready` is set only after rendering is complete, and the raw
 //! completed match is dropped afterwards.
 //!
@@ -27,61 +42,24 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use sim_core::TICK_CAP;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::api::default_concurrency_cap;
 use crate::api::registry::{MatchFixture, MatchRegistry};
-use crate::api::render::{Manifest, RenderedSegment, render_match};
-use crate::api::runner::{MatchOutcome, MatchRunner, panic_message, run_catching_panic};
+use crate::api::render::render_match;
+use crate::api::runner::{FailureKind, MatchOutcome, MatchRunner, panic_message, run_catching_panic};
 use crate::fixtures::FixtureSet;
 
-/// Terminal outcome of [`MatchService::start`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StartOutcome {
-    /// This caller initiated the run; the match is running now.
-    Started,
-    /// The concurrency cap is full: the match waits in `Queued` and
-    /// runs, in arrival order, when a permit frees.
-    Queued,
-    /// A run is already in flight for this match (single-flight).
-    AlreadyRunning,
-    /// The match is already terminal (`Ready` or `Failed`); the cached
-    /// result is kept and not re-run.
-    AlreadyComplete,
-}
+mod state;
 
-/// Why [`MatchService::start`] could not begin a run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StartError {
-    /// The `match_id` is not in the fixture set the service was built
-    /// from.
-    UnknownFixture,
-}
+pub use state::{MatchState, StartError, StartOutcome};
 
-/// Lifecycle of one match managed by the service.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MatchState {
-    /// Never started.
-    NotStarted,
-    /// Waiting for a concurrency permit. The match runs when a permit
-    /// frees, in the order the starts arrived.
-    Queued,
-    /// The simulation and rendering are in flight on a blocking thread.
-    Running,
-    /// Rendering finished: the manifest and the gzipped segments.
-    Ready {
-        manifest: Arc<Manifest>,
-        segments: Arc<[RenderedSegment]>,
-    },
-    /// A deterministic failure, cached for the life of the process.
-    Failed {
-        code: String,
-        message: String,
-        last_good_tick: u64,
-    },
-}
+/// The default retry window of a transient failure: how long a start
+/// has to wait before the match may be tried again.
+pub const DEFAULT_RETRY_WINDOW: Duration = Duration::from_secs(5);
 
 /// `match_id` → lifecycle state, plus the matches waiting for a permit.
 #[derive(Debug)]
@@ -102,6 +80,9 @@ pub struct MatchService {
     fixtures: MatchRegistry,
     runner: Arc<dyn MatchRunner>,
     tick_cap: u64,
+    /// How long a transient failure waits before a start may try the
+    /// match again.
+    retry_window: Duration,
     /// Fair semaphore sized to the concurrency cap: one permit per
     /// running match. A permit is held for the whole run and released
     /// on every path out of it.
@@ -148,12 +129,28 @@ impl MatchService {
             fixtures,
             runner,
             tick_cap: TICK_CAP,
+            retry_window: DEFAULT_RETRY_WINDOW,
             permits: Arc::new(Semaphore::new(default_concurrency_cap())),
             state: Mutex::new(ServiceState {
                 entries,
                 pending: VecDeque::new(),
             }),
         }
+    }
+
+    /// Set the retry window: how long a transient failure waits before
+    /// a start may try the match again.
+    ///
+    /// The window starts when the failure is recorded. A start inside
+    /// the window reports the failure with the remaining wait; a start
+    /// after it schedules the match again.
+    ///
+    /// The window is a construction-time setting: set it before the
+    /// first start.
+    #[must_use]
+    pub const fn with_retry_window(mut self, window: Duration) -> Self {
+        self.retry_window = window;
+        self
     }
 
     /// Set the concurrency cap: how many matches may run at once.
@@ -178,6 +175,11 @@ impl MatchService {
     ///
     /// Single-flight: concurrent starts of the same match run once.
     ///
+    /// A match that failed transiently is not run again inside its
+    /// retry window: the start reports the failure with the time left
+    /// before the match may be tried again. After the window the match
+    /// is scheduled again, exactly like a fresh start.
+    ///
     /// # Errors
     ///
     /// Returns [`StartError::UnknownFixture`] when `match_id` is not in
@@ -199,6 +201,17 @@ impl MatchService {
             Decision::RejectUnknown => Err(StartError::UnknownFixture),
             Decision::AlreadyRunning => Ok(StartOutcome::AlreadyRunning),
             Decision::AlreadyComplete => Ok(StartOutcome::AlreadyComplete),
+            Decision::RetryAfter {
+                code,
+                message,
+                last_good_tick,
+                retry_in,
+            } => Ok(StartOutcome::RetryAfter {
+                code,
+                message,
+                last_good_tick,
+                retry_in,
+            }),
             Decision::Queued => Ok(StartOutcome::Queued),
             Decision::Spawn { match_id, permit } => {
                 self.spawn_run(&match_id, permit);
@@ -213,6 +226,9 @@ impl MatchService {
     /// permit waits in the queue for the permit of the run that
     /// finishes first, so the cap is never exceeded and no start is
     /// refused.
+    ///
+    /// A transient failure is retried only after its retry window has
+    /// passed; inside the window the failure is reported again.
     fn decide(&self, match_id: &str) -> Decision {
         let mut state = self
             .state
@@ -222,21 +238,50 @@ impl MatchService {
         let current = state.entries.get(match_id).cloned();
         match current {
             None => Decision::RejectUnknown,
-            Some(MatchState::NotStarted) => {
-                if let Ok(permit) = Arc::clone(&self.permits).try_acquire_owned() {
-                    state.entries.insert(match_id.to_string(), MatchState::Running);
-                    Decision::Spawn {
-                        match_id: match_id.to_string(),
-                        permit,
-                    }
-                } else {
-                    state.entries.insert(match_id.to_string(), MatchState::Queued);
-                    state.pending.push_back(match_id.to_string());
-                    Decision::Queued
-                }
-            }
+            Some(MatchState::NotStarted) => self.schedule(&mut state, match_id),
             Some(MatchState::Queued | MatchState::Running) => Decision::AlreadyRunning,
-            Some(MatchState::Ready { .. } | MatchState::Failed { .. }) => Decision::AlreadyComplete,
+            Some(MatchState::Ready { .. }) => Decision::AlreadyComplete,
+            Some(MatchState::Failed {
+                code,
+                message,
+                last_good_tick,
+                retry_at,
+            }) => retry_at.map_or_else(
+                // A deterministic failure: cached for the life of the
+                // process, never retried.
+                || Decision::AlreadyComplete,
+                |retry_at| {
+                    let now = Instant::now();
+                    if now < retry_at {
+                        Decision::RetryAfter {
+                            code,
+                            message,
+                            last_good_tick,
+                            retry_in: retry_at.saturating_duration_since(now),
+                        }
+                    } else {
+                        // The retry window has passed: the match is
+                        // scheduled again, exactly like a fresh start.
+                        self.schedule(&mut state, match_id)
+                    }
+                },
+            ),
+        }
+    }
+
+    /// Put the match on the run queue: it takes a permit and runs now
+    /// when one is free, and waits in the queue otherwise.
+    fn schedule(&self, state: &mut ServiceState, match_id: &str) -> Decision {
+        if let Ok(permit) = Arc::clone(&self.permits).try_acquire_owned() {
+            state.entries.insert(match_id.to_string(), MatchState::Running);
+            Decision::Spawn {
+                match_id: match_id.to_string(),
+                permit,
+            }
+        } else {
+            state.entries.insert(match_id.to_string(), MatchState::Queued);
+            state.pending.push_back(match_id.to_string());
+            Decision::Queued
         }
     }
 
@@ -279,12 +324,13 @@ impl MatchService {
             .expect("invariant: only known fixtures are started")
             .clone();
         let tick_cap = self.tick_cap;
+        let retry_window = self.retry_window;
         let thread_match_id = match_id.to_string();
         // Fire-and-forget on the blocking pool: the closure writes its
         // terminal result back into the state map and hands the permit
         // on, so callers never block and no join handle is awaited.
         tokio::task::spawn_blocking(move || {
-            let entry = run_guarded(runner.as_ref(), &fixture, tick_cap);
+            let entry = run_guarded(runner.as_ref(), &fixture, tick_cap, retry_window);
             service.finish(&thread_match_id, entry, permit);
         });
     }
@@ -343,6 +389,13 @@ enum Decision {
     AlreadyRunning,
     /// The match already has a terminal result.
     AlreadyComplete,
+    /// A transient failure is still inside its retry window.
+    RetryAfter {
+        code: String,
+        message: String,
+        last_good_tick: u64,
+        retry_in: Duration,
+    },
     /// The match waits in the queue for a permit.
     Queued,
     /// The match took a permit and runs now.
@@ -358,8 +411,17 @@ enum Decision {
 /// error on the blocking thread) and reported as a `runner_panic`
 /// failure, so the match always leaves `Running`. The raw completed match
 /// is dropped as soon as it is rendered.
+///
+/// A transient failure records the time a later start may try the match
+/// again; a deterministic failure records none and is cached for the
+/// life of the process.
 #[must_use]
-fn run_and_render(runner: &dyn MatchRunner, fixture: &MatchFixture, tick_cap: u64) -> MatchState {
+fn run_and_render(
+    runner: &dyn MatchRunner,
+    fixture: &MatchFixture,
+    tick_cap: u64,
+    retry_window: Duration,
+) -> MatchState {
     let outcome = run_catching_panic(runner, fixture, tick_cap);
     match outcome {
         MatchOutcome::Finished(completed) => {
@@ -375,10 +437,15 @@ fn run_and_render(runner: &dyn MatchRunner, fixture: &MatchFixture, tick_cap: u6
             code,
             message,
             last_good_tick,
+            kind,
         } => MatchState::Failed {
             code,
             message,
             last_good_tick,
+            retry_at: match kind {
+                FailureKind::Deterministic => None,
+                FailureKind::Transient => Some(Instant::now() + retry_window),
+            },
         },
     }
 }
@@ -392,14 +459,21 @@ fn run_and_render(runner: &dyn MatchRunner, fixture: &MatchFixture, tick_cap: u6
 /// the permit must be released and handed to the next queued match, or
 /// the matches behind this one would wait forever.
 #[must_use]
-fn run_guarded(runner: &dyn MatchRunner, fixture: &MatchFixture, tick_cap: u64) -> MatchState {
-    let run = || run_and_render(runner, fixture, tick_cap);
+fn run_guarded(
+    runner: &dyn MatchRunner,
+    fixture: &MatchFixture,
+    tick_cap: u64,
+    retry_window: Duration,
+) -> MatchState {
+    let run = || run_and_render(runner, fixture, tick_cap, retry_window);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
         Ok(entry) => entry,
         Err(payload) => MatchState::Failed {
             code: "render_panic".to_string(),
             message: panic_message(payload.as_ref()),
             last_good_tick: 0,
+            // A panic repeats: the same seed panics at the same place.
+            retry_at: None,
         },
     }
 }

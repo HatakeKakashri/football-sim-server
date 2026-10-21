@@ -142,6 +142,7 @@ impl MatchRunner for ScriptedRunner {
                 code: "tick_cap_exceeded".to_string(),
                 message: "injected failure".to_string(),
                 last_good_tick: 0,
+                kind: FailureKind::Deterministic,
             };
         }
         assert!(!id.starts_with("panic-"), "injected panic for {id}");

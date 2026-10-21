@@ -270,7 +270,7 @@ fn frame_player_ids_are_the_manifest_roster_ids() {
             &fixture.away_team,
         );
         let roster = build_roster(&sim, &fixture);
-        let frame = capture_frame(&sim, &roster.ids);
+        let frame = capture_frame(&sim, &roster.ids).expect("invariant: the frame fits in memory");
 
         let mut frame_ids: Vec<String> = frame.players.iter().map(|p| p.id.clone()).collect();
         let mut roster_ids: Vec<String> = roster.entries.iter().map(|e| e.id.clone()).collect();

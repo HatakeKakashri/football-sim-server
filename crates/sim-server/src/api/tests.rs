@@ -374,7 +374,7 @@ fn frame_capture_runs_every_sixth_tick_with_22_players() {
     );
     let roster = build_roster(&sim, &fixture);
     assert_eq!(roster.entries.len(), 22);
-    let frame = capture_frame(&sim, &roster.ids);
+    let frame = capture_frame(&sim, &roster.ids).expect("invariant: the frame fits in memory");
     assert_eq!(frame.players.len(), 22);
     assert_eq!(frame.ball.state, "free");
 }

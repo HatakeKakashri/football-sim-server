@@ -36,6 +36,8 @@ pub(crate) mod render_doubles;
 #[cfg(test)]
 mod render_tests;
 #[cfg(test)]
+mod runner_tests;
+#[cfg(test)]
 pub(crate) mod test_doubles;
 #[cfg(test)]
 mod tests;
@@ -48,7 +50,7 @@ use sim_core::TICK_CAP;
 use tokio::sync::Notify;
 
 pub use registry::{MatchFixture, MatchRegistry};
-use runner::{MatchOutcome, MatchRunner, SimulationRunner, run_catching_panic};
+use runner::{FailureKind, MatchOutcome, MatchRunner, SimulationRunner, run_catching_panic};
 use spawn::{OsThreadSpawner, ThreadSpawner};
 use stream::{SseMessage, build_error_stream, build_stream, render_body};
 
@@ -351,6 +353,10 @@ impl MatchStore {
                                     error.message
                                 ),
                                 last_good_tick: 0,
+                                // The legacy store caches every
+                                // failure for the life of the process;
+                                // it has no retry window.
+                                kind: FailureKind::Deterministic,
                             },
                         );
                         PostResponse {
@@ -374,6 +380,10 @@ impl MatchStore {
                 code,
                 message,
                 last_good_tick,
+                // The legacy store caches every failure, transient or
+                // not: it has no retry window, and the new match
+                // service (ticket 07) owns the retry semantics.
+                ..
             } => (
                 JobStatus::Failed,
                 build_error_stream(&code, &message, last_good_tick),

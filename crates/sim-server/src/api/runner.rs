@@ -7,6 +7,7 @@
 //! builder consumes.
 
 use std::collections::HashMap;
+use std::collections::TryReserveError;
 
 use sim_components::{Ball, Match, MatchClock, Player, PlayerIdentity, Position, Team};
 use sim_core::{EventLog, MatchEvent, Simulation, Termination, TickHook, run_match_driver};
@@ -20,18 +21,94 @@ use super::stream::{
 pub enum MatchOutcome {
     /// Reached `FullTime` with no invariant violation.
     Finished(CompletedMatch),
-    /// Invariant violation, tick-cap breach or runner panic (PRD §12);
-    /// cached like a success so retries are deterministic.
+    /// Invariant violation, tick-cap breach, runner panic (PRD §12) or
+    /// resource exhaustion; cached like a success so retries are
+    /// deterministic, except for a transient failure.
     Failed {
         /// Machine-readable reason (`tick_cap_exceeded`,
-        /// `runner_panic`, `thread_spawn_failed` or the invariant
-        /// code).
+        /// `runner_panic`, `thread_spawn_failed`,
+        /// `resource_exhausted` or the invariant code).
         code: String,
         /// Human-readable detail.
         message: String,
         /// Tick the simulation reached before failing.
         last_good_tick: u64,
+        /// Whether the failure may be retried.
+        kind: FailureKind,
     },
+}
+
+/// Why a match failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    /// The failure repeats: the same fixture and the same seed fail
+    /// the same way, so the result is cached for the life of the
+    /// process. A retry would burn the same minutes again.
+    Deterministic,
+    /// A resource failure: the run could not get a resource it needed.
+    ///
+    /// The pressure belongs to the host, not to the match, so the same
+    /// match may succeed once the pressure has passed. The failure
+    /// carries a retry window instead of being cached forever.
+    Transient,
+}
+
+/// The failure code of a transient resource failure.
+pub const RESOURCE_FAILURE_CODE: &str = "resource_exhausted";
+
+/// A resource failure: the run could not obtain the memory it needed.
+///
+/// The failure is transient by nature — the memory belongs to the
+/// host, not to the match — so the same match may succeed later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResourceError {
+    message: String,
+}
+
+impl ResourceError {
+    /// A failed reservation for `what`.
+    pub(crate) fn reservation_failed(what: &str, error: &TryReserveError) -> Self {
+        Self {
+            message: resource_message(what, error),
+        }
+    }
+
+    /// The failure message.
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// The message a failed reservation reports.
+fn resource_message(what: &str, error: &TryReserveError) -> String {
+    format!("could not allocate the {what}: {error}")
+}
+
+/// The failure a capture that could not allocate its memory reports.
+///
+/// The failure is transient: the pressure belongs to the host, not to
+/// the match, so the same match may succeed later.
+pub(crate) fn resource_failure(message: String, last_good_tick: u64) -> MatchOutcome {
+    MatchOutcome::Failed {
+        code: RESOURCE_FAILURE_CODE.to_string(),
+        message,
+        last_good_tick,
+        kind: FailureKind::Transient,
+    }
+}
+
+/// Copy `source` into a fresh string, reporting a resource failure
+/// instead of aborting the process when the allocation fails.
+///
+/// `String::clone` aborts the process on an allocation failure; the
+/// capture path uses this instead, so a host under memory pressure
+/// loses the match rather than the whole server.
+pub(crate) fn copy_string(source: &str) -> Result<String, ResourceError> {
+    let mut copy = String::new();
+    copy.try_reserve(source.len())
+        .map_err(|error| ResourceError::reservation_failed("frame text", &error))?;
+    copy.push_str(source);
+    Ok(copy)
 }
 
 /// Injection seam over the blocking match runner.
@@ -86,6 +163,9 @@ pub fn run_catching_panic(
                 // The panic payload carries no tick count: the run is
                 // failed at tick 0 (unknown progress).
                 last_good_tick: 0,
+                // A panic repeats: the same seed panics at the same
+                // place, so the failure is cached.
+                kind: FailureKind::Deterministic,
             }
         }
     }
@@ -113,7 +193,12 @@ struct RunnerHook<'a> {
 impl TickHook for RunnerHook<'_> {
     fn on_tick(&mut self, sim: &mut Simulation) -> Result<(), String> {
         if sim.current_tick().is_multiple_of(6) {
-            self.frames.push(capture_frame(sim, self.roster_ids));
+            let frame = capture_frame(sim, self.roster_ids)
+                .map_err(|error| error.message().to_string())?;
+            self.frames
+                .try_reserve(1)
+                .map_err(|error| resource_message("frame buffer", &error))?;
+            self.frames.push(frame);
         }
         Ok(())
     }
@@ -125,10 +210,11 @@ impl TickHook for RunnerHook<'_> {
 /// the six PRD §12 invariants per tick via [`check_invariants`],
 /// captures 10 Hz frames, and assembles the [`CompletedMatch`].
 ///
-/// # Panics
-///
-/// Panics if `RunnerHook::on_tick` returns `Err`, which it never does
-/// (it only captures frames). The `.expect()` is a defensive guard.
+/// The frame capture is the run's largest allocation: a full match
+/// keeps about 54,000 frames of 22 players in memory at once. The
+/// capture therefore reserves its memory fallibly, and a host that
+/// cannot give it the memory fails the match with a transient
+/// [`RESOURCE_FAILURE_CODE`] instead of aborting the process.
 #[must_use]
 pub fn run_match_blocking(
     fixture: &crate::api::MatchFixture,
@@ -149,34 +235,24 @@ pub fn run_match_blocking(
         roster_ids: &roster.ids,
         frames: &mut frames,
     };
-    let result = run_match_driver(&mut sim, tick_cap, &mut hook)
-        .expect("invariant: RunnerHook never errors");
+    let result = match run_match_driver(&mut sim, tick_cap, &mut hook) {
+        Ok(result) => result,
+        Err(message) => {
+            // The hook's only side effect is capturing the frames, so
+            // an error here is a resource failure: the run could not
+            // get the memory it needed. The pressure belongs to the
+            // host, not to the match, so the failure is transient and
+            // a later start may run the same match again.
+            return resource_failure(message, sim.current_tick());
+        }
+    };
 
     if let Some(violation) = result.violation {
         return MatchOutcome::Failed {
             code: violation.code().to_string(),
             message: violation.message(),
             last_good_tick: violation.last_good_tick(),
-        };
-    }
-
-    if result.termination == Termination::TickCap {
-        let world = sim.world();
-        let match_res = world.get_resource::<Match>().cloned();
-        let Some(match_res) = match_res else {
-            return MatchOutcome::Failed {
-                code: "no_match_resource".to_string(),
-                message: "Match resource missing after simulation".to_string(),
-                last_good_tick: sim.current_tick(),
-            };
-        };
-        return MatchOutcome::Failed {
-            code: "tick_cap_exceeded".to_string(),
-            message: format!(
-                "match did not reach FullTime within {tick_cap} ticks (state {:?})",
-                match_res.state
-            ),
-            last_good_tick: sim.current_tick(),
+            kind: FailureKind::Deterministic,
         };
     }
 
@@ -187,9 +263,12 @@ pub fn run_match_blocking(
             code: "no_match_resource".to_string(),
             message: "Match resource missing after simulation".to_string(),
             last_good_tick: sim.current_tick(),
+            kind: FailureKind::Deterministic,
         };
     };
-    if match_res.state != sim_components::MatchState::FullTime {
+    if result.termination != Termination::FullTime
+        || match_res.state != sim_components::MatchState::FullTime
+    {
         return MatchOutcome::Failed {
             code: "tick_cap_exceeded".to_string(),
             message: format!(
@@ -197,6 +276,7 @@ pub fn run_match_blocking(
                 match_res.state
             ),
             last_good_tick: sim.current_tick(),
+            kind: FailureKind::Deterministic,
         };
     }
 
@@ -330,7 +410,14 @@ fn side_roster(
 }
 
 /// Capture one 10 Hz frame: ball + all players in integer decimetres.
-pub(crate) fn capture_frame(sim: &Simulation, roster_ids: &HashMap<u64, String>) -> StreamFrame {
+///
+/// Every allocation the frame needs is reserved fallibly: the capture
+/// is the run's largest allocation, and a host that cannot give it
+/// the memory fails the match instead of aborting the process.
+pub(crate) fn capture_frame(
+    sim: &Simulation,
+    roster_ids: &HashMap<u64, String>,
+) -> Result<StreamFrame, ResourceError> {
     let world = sim.world();
     let ball = world
         .get_resource::<Ball>()
@@ -341,7 +428,7 @@ pub(crate) fn capture_frame(sim: &Simulation, roster_ids: &HashMap<u64, String>)
         .map_or([0, 0], |pos| [to_decimetres(pos.0.x), to_decimetres(pos.0.y)]);
     let possessor = ball
         .possessor
-        .and_then(|entity| roster_ids.get(&entity.to_bits()).cloned());
+        .and_then(|entity| roster_ids.get(&entity.to_bits()));
     let mut players: Vec<(u8, FramePlayer)> = Vec::new();
     for entity in world.iter_entities() {
         let Some(player) = entity.get::<Player>() else {
@@ -352,29 +439,41 @@ pub(crate) fn capture_frame(sim: &Simulation, roster_ids: &HashMap<u64, String>)
         // never names a player with an id invented from the entity bits.
         let id = roster_ids
             .get(&bits)
-            .expect("invariant: every fixture player carries a PlayerIdentity")
-            .clone();
+            .expect("invariant: every fixture player carries a PlayerIdentity");
         let (x, y) = entity.get::<Position>().map_or((0, 0), |pos| {
             (to_decimetres(pos.0.x), to_decimetres(pos.0.y))
         });
-        players.push((player.team_id.0, FramePlayer { id, x, y }));
+        players
+            .try_reserve(1)
+            .map_err(|error| ResourceError::reservation_failed("player list", &error))?;
+        players.push((player.team_id.0, FramePlayer {
+            id: copy_string(id)?,
+            x,
+            y,
+        }));
     }
     // Sorted by id, then by side: a mirror match puts the same fixture
     // ids on both sides, and the side breaks the tie deterministically.
     players.sort_by(|left, right| left.1.id.cmp(&right.1.id).then(left.0.cmp(&right.0)));
-    let players = players.into_iter().map(|(_, player)| player).collect();
+    let mut sorted: Vec<FramePlayer> = Vec::new();
+    sorted
+        .try_reserve(players.len())
+        .map_err(|error| ResourceError::reservation_failed("player list", &error))?;
+    for (_, player) in players {
+        sorted.push(player);
+    }
     let half = world
         .get_resource::<MatchClock>()
         .map_or(1, |clock| clock.half);
-    StreamFrame {
+    Ok(StreamFrame {
         tick: sim.current_tick(),
         half,
         ball: FrameBall {
             x: position[0],
             y: position[1],
-            state: ball_state_str(ball.state).to_string(),
-            possessor,
+            state: copy_string(ball_state_str(ball.state))?,
+            possessor: possessor.map(|id| copy_string(id)).transpose()?,
         },
-        players,
-    }
+        players: sorted,
+    })
 }

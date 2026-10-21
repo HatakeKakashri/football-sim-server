@@ -12,6 +12,9 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 
+use crate::api::registry::MatchFixture;
+use crate::api::runner::{FailureKind, MatchOutcome};
+
 /// Counts the matches that are in the runner at the same time and
 /// records the peak.
 #[derive(Debug, Default)]

@@ -143,17 +143,20 @@ fn serve(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::Arc;
 
+    use crate::api::runner::SimulationRunner;
     use crate::api::{MatchRegistry, MatchStore, ServerConfig, default_concurrency_cap};
     use crate::fixtures;
+    use crate::service::MatchService;
 
     let cors_origins: Vec<String> = cors_origins
         .split(',')
         .map(|origin| origin.trim().to_string())
         .filter(|origin| !origin.is_empty())
         .collect();
+    let cap = max_concurrent_sims.unwrap_or_else(default_concurrency_cap);
     let config = ServerConfig {
         bind: bind.clone(),
-        max_concurrent_sims: max_concurrent_sims.unwrap_or_else(default_concurrency_cap),
+        max_concurrent_sims: cap,
         result_ttl_secs,
         tick_cap: sim_core::TICK_CAP,
         api_token: api_token.clone(),
@@ -172,10 +175,21 @@ fn serve(
     }
 
     let store = Arc::new(MatchStore::new(config, registry));
+    // The match service runs the matches the new routes start: the
+    // real runner, the same concurrency cap as the legacy store.
+    let service = Arc::new(
+        MatchService::new(fixture_set.clone(), Arc::new(SimulationRunner)).with_cap(cap),
+    );
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(crate::http::serve(store, &bind, api_token, cors_origins))?;
+        .block_on(crate::http::serve(
+            store,
+            service,
+            &bind,
+            api_token,
+            cors_origins,
+        ))?;
     Ok(())
 }
 

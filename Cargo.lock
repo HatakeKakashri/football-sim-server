@@ -1043,6 +1043,7 @@ dependencies = [
  "sim-telemetry",
  "tokio",
  "toml",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

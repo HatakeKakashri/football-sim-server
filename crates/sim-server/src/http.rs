@@ -9,6 +9,11 @@
 //!   index is at or beyond the final message, 404 unknown id, 409
 //!   never `POST`ed, 410 result expired.
 //!
+//! The match service's own routes live beside them (server-API ticket
+//! 08): `POST /match/{match_id}/start` and
+//! `GET /match/{match_id}/manifest`. See [`service_api`] for the
+//! status matrix they implement.
+//!
 //! Security (PRD §4):
 //! - `POST` requires `Authorization: Bearer <token>` when
 //!   [`ServerConfig::api_token`] is set; missing/invalid tokens get
@@ -29,6 +34,11 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing};
 
 use crate::api::{MatchStore, StreamResponse};
+use crate::service::MatchService;
+
+pub mod service_api;
+
+pub use service_api::MatchApiState;
 
 /// Keep-alive comment interval while a simulation is still running
 /// (PRD §10.1: the connection stays open until the first message is
@@ -128,14 +138,42 @@ pub fn router(
         api_token,
         cors_origins,
     };
+    let legacy: Router = legacy_routes().with_state(state.clone());
+    legacy.layer(middleware::from_fn_with_state(state, cors_middleware))
+}
+
+/// Build the axum router with the match service's routes beside the
+/// legacy SSE routes.
+///
+/// The two route sets live side by side: the legacy stream routes keep
+/// their behaviour, and the start and manifest routes of
+/// [`service_api`] answer the status matrix of server-API ticket 08.
+pub fn router_with_service(
+    store: Arc<MatchStore>,
+    service: Arc<MatchService>,
+    api_token: Option<String>,
+    cors_origins: Vec<String>,
+) -> Router {
+    let state = AppState {
+        store,
+        api_token: api_token.clone(),
+        cors_origins,
+    };
+    let legacy: Router = legacy_routes().with_state(state.clone());
+    let next = service_api::routes(MatchApiState { service, api_token });
+    legacy
+        .merge(next)
+        .layer(middleware::from_fn_with_state(state, cors_middleware))
+}
+
+/// The legacy SSE routes, without the CORS middleware.
+fn legacy_routes() -> Router<AppState> {
     Router::new()
         .route("/match/{match_id}", routing::post(post_match_handler))
         .route(
             "/match/{match_id}/stream",
             routing::get(get_stream_handler),
         )
-        .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(state, cors_middleware))
 }
 
 /// Serve forever on `bind` (e.g. `127.0.0.1:8080`).
@@ -145,13 +183,18 @@ pub fn router(
 /// Returns the bind or accept-loop I/O error.
 pub async fn serve(
     store: Arc<MatchStore>,
+    service: Arc<MatchService>,
     bind: &str,
     api_token: Option<String>,
     cors_origins: Vec<String>,
 ) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("football-sim HTTP listening on {bind}");
-    axum::serve(listener, router(store, api_token, cors_origins)).await
+    axum::serve(
+        listener,
+        router_with_service(store, service, api_token, cors_origins),
+    )
+    .await
 }
 
 /// `POST /match/{match_id}`: start the match on its own OS thread

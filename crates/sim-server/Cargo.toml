@@ -24,6 +24,11 @@ toml = "0.8"
 axum = { version = "0.8", features = ["json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync", "io-util"] }
 
+[dev-dependencies]
+# `ServiceExt::oneshot` drives the router in the HTTP tests, so no
+# socket is opened to exercise a route.
+tower = { version = "0.5", features = ["util"] }
+
 [[bin]]
 name = "football-sim"
 path = "src/main.rs"

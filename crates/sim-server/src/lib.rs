@@ -8,6 +8,9 @@ pub mod service;
 pub mod telemetry_cli;
 pub mod trace_filter;
 
+#[cfg(test)]
+mod test_support;
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};

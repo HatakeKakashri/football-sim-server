@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+use crate::api::registry::MatchFixture;
+use crate::api::runner::{FailureKind, MatchOutcome};
+
 /// The retry window the tests that wait for it use: short enough to
 /// wait for, long enough to observe a start inside it.
 const WINDOW: Duration = Duration::from_millis(200);
@@ -57,31 +60,6 @@ impl MatchRunner for TransientThenOkRunner {
             };
         }
         MatchOutcome::Finished(completed_for(fixture))
-    }
-}
-
-/// A runner that always reports a transient resource failure, counting
-/// the runs.
-#[derive(Debug, Default)]
-struct AlwaysTransientRunner {
-    runs: AtomicU32,
-}
-
-impl AlwaysTransientRunner {
-    fn runs(&self) -> u32 {
-        self.runs.load(Ordering::SeqCst)
-    }
-}
-
-impl MatchRunner for AlwaysTransientRunner {
-    fn run(&self, _fixture: &MatchFixture, _tick_cap: u64) -> MatchOutcome {
-        self.runs.fetch_add(1, Ordering::SeqCst);
-        MatchOutcome::Failed {
-            code: "resource_exhausted".to_string(),
-            message: "could not allocate the frame buffer".to_string(),
-            last_good_tick: 120,
-            kind: FailureKind::Transient,
-        }
     }
 }
 

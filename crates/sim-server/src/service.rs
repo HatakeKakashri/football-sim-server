@@ -285,6 +285,18 @@ impl MatchService {
         }
     }
 
+    /// Whether `match_id` is a fixture this service knows.
+    ///
+    /// [`MatchService::state`] reports `NotStarted` for an id that is
+    /// not in the fixture set, so a caller that needs the difference
+    /// between "never started" and "not a fixture" asks this first:
+    /// the HTTP layer answers the first with 409 and the second with
+    /// 404.
+    #[must_use]
+    pub fn is_known(&self, match_id: &str) -> bool {
+        self.fixtures.get(match_id).is_some()
+    }
+
     /// Read the current lifecycle state of `match_id`.
     ///
     /// Unknown ids report `NotStarted` (they were never started).

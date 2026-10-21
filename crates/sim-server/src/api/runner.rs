@@ -92,7 +92,7 @@ pub fn run_catching_panic(
 }
 
 /// Extract a human-readable message from a panic payload.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload.downcast_ref::<&str>().map_or_else(
         || {
             payload

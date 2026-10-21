@@ -191,6 +191,13 @@ built by `sim_server::app::match_service` from the validated fixture set and a
 `runner`; `sim-server serve` and the real-match end-to-end test use that same
 constructor.
 
+**match status** — `sim_server::service::MatchState`, the service's one
+lifecycle type, and `MatchService::status`, the one call that answers it. The
+answer is one of `UnknownFixture` (the id is not a fixture at all — not the
+same as a match that was never started), `NotStarted`, `Queued`, `Running`,
+`Ready` (carrying the match's `published` bytes) or `Failed` (carrying the
+failure's code, message, last good tick and the time left before a retry).
+
 **MatchClock** — `sim_components::MatchClock`: `elapsed_ticks`, `half`,
 `added_time_ticks`, `is_running`. Spec §3: a `Resource` (source of truth for
 systems); also kept as a `Component` on the match entity for backwards compat

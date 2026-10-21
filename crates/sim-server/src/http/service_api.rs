@@ -56,7 +56,7 @@
 //! [`segments`].
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -223,9 +223,11 @@ async fn get_manifest_handler(
 ///
 /// `not_started` never reaches this function: the `GET` route answers
 /// it with a conflict, and a `POST` has already started the match by
-/// the time it asks.
+/// the time it asks. The wait before a retry is the service's answer,
+/// so the route never computes one.
 fn state_response(current: &MatchState, match_id: &str) -> Response {
     match current {
+        MatchState::UnknownFixture => unknown_response(match_id),
         MatchState::NotStarted | MatchState::Running => pending_response(STATE_RUNNING, match_id),
         MatchState::Queued => pending_response(STATE_QUEUED, match_id),
         MatchState::Ready { manifest, .. } => manifest_response(manifest),
@@ -233,13 +235,14 @@ fn state_response(current: &MatchState, match_id: &str) -> Response {
             code,
             message,
             last_good_tick,
-            retry_at,
+            retry_in,
+            ..
         } => failure_response(
             match_id,
             code,
             message,
             *last_good_tick,
-            retry_at.map(|at| at.saturating_duration_since(Instant::now())),
+            *retry_in,
         ),
     }
 }

@@ -2,11 +2,18 @@
 //!
 //! These are the types the HTTP layer reads (ticket 08): the lifecycle
 //! of one match, and what a start did with it.
+//!
+//! The lifecycle is one type, [`MatchState`], and it covers every case
+//! a match can be in: an id that is not a fixture at all, a match that
+//! was never started, a queued match, a running match, a ready match
+//! and a failed match. The service answers a match's status in one
+//! call (see [`crate::service::MatchService::status`]), so a caller
+//! never has to ask two questions to tell the cases apart.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::api::render::{Manifest, RenderedSegment};
+use crate::api::render::{Manifest, PublishedMatch, RenderedSegment};
 
 /// Terminal outcome of [`crate::service::MatchService::start`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,8 +52,16 @@ pub enum StartError {
 }
 
 /// Lifecycle of one match managed by the service.
+///
+/// This is the service's one lifecycle type: every case a match can be
+/// in has a case here, including the case of an id that is not a
+/// fixture at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MatchState {
+    /// The `match_id` is not a fixture this service knows.
+    ///
+    /// It is not a match that was never started: there is no match.
+    UnknownFixture,
     /// Never started.
     NotStarted,
     /// Waiting for a concurrency permit. The match runs when a permit
@@ -54,20 +69,44 @@ pub enum MatchState {
     Queued,
     /// The simulation and rendering are in flight on a blocking thread.
     Running,
-    /// Rendering finished: the manifest and the gzipped segments.
+    /// Rendering finished: the manifest, the segments and the published
+    /// bytes of the match.
     Ready {
+        /// The manifest of the match.
         manifest: Arc<Manifest>,
+        /// The segments, in manifest order.
         segments: Arc<[RenderedSegment]>,
+        /// The published bytes of the match: the manifest's answer body
+        /// and every segment's body, indexed by segment number.
+        ///
+        /// A caller that is told the match is ready reads the
+        /// manifest's bytes and a segment's bytes from here, without
+        /// asking a second question.
+        published: Arc<PublishedMatch>,
     },
     /// A failure. A deterministic failure is cached for the life of
-    /// the process; a transient failure carries the time a later start
-    /// may try the match again.
+    /// the process; a transient failure carries the time left before a
+    /// later start may try the match again.
     Failed {
+        /// The failure's code, as the runner reported it.
         code: String,
+        /// The failure's message.
         message: String,
+        /// The tick the failed run reached.
         last_good_tick: u64,
-        /// When a later start may try the match again. `None` for a
+        /// When the match may be tried again. `None` for a
         /// deterministic failure, which is never retried.
+        ///
+        /// The service keeps this deadline to decide whether a later
+        /// start may run the match again.
         retry_at: Option<Instant>,
+        /// The time left before the match may be tried again, as of the
+        /// moment the state was answered. `None` for a deterministic
+        /// failure, which is never retried.
+        ///
+        /// This is the wait a caller honours: it never has to compute
+        /// one from the deadline. The service refreshes it on every
+        /// answer, so the answer a caller reads is never stale.
+        retry_in: Option<Duration>,
     },
 }

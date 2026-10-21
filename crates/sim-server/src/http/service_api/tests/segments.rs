@@ -48,7 +48,10 @@ async fn ready_service(match_id: &str) -> Arc<MatchService> {
 /// The first segment of a ready match, as the manifest publishes it and
 /// as the service stores it.
 fn first_segment(service: &Arc<MatchService>, match_id: &str) -> Segment {
-    let MatchState::Ready { manifest, segments } = service.state(match_id) else {
+    let MatchState::Ready {
+        manifest, segments, ..
+    } = service.state(match_id)
+    else {
         panic!("invariant: the match under test is ready");
     };
     let row = manifest

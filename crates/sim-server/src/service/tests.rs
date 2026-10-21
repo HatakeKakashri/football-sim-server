@@ -11,6 +11,7 @@
 mod lifecycle_tests;
 mod queue_tests;
 mod retry_tests;
+mod status_tests;
 
 use super::*;
 

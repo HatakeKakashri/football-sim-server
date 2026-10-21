@@ -85,7 +85,10 @@ pub(super) async fn get_segment_handler(
         return unknown_response(&match_id);
     }
     let current = state.service.state(&match_id);
-    let MatchState::Ready { manifest, segments } = current else {
+    let MatchState::Ready {
+        manifest, segments, ..
+    } = current
+    else {
         // Not started, queued, running, failed, or forgotten by a
         // restart: there is no segment to serve yet.
         return not_ready_response(&match_id);

@@ -3,7 +3,10 @@
 //! The simulation is hidden behind a [`MatchRunner`] trait. The real
 //! adapter ([`crate::api::runner::SimulationRunner`]) wraps the existing
 //! simulation; tests inject fakes. The service tracks each match through
-//! `NotStarted`, `Queued`, `Running`, `Ready` and `Failed`.
+//! `NotStarted`, `Queued`, `Running`, `Ready` and `Failed`, and answers
+//! for any id: an id that is not a fixture answers `UnknownFixture`,
+//! which is not the same answer as a match that was never started. A
+//! caller asks the question once, through [`MatchService::status`].
 //!
 //! Concurrency is capped by a fair semaphore sized to the cap
 //! ([`MatchService::with_cap`]): a start that finds no free permit waits
@@ -54,6 +57,7 @@ use crate::api::runner::{FailureKind, MatchOutcome, MatchRunner, panic_message, 
 use crate::fixtures::FixtureSet;
 
 mod state;
+mod status;
 
 pub use state::{MatchState, StartError, StartOutcome};
 
@@ -237,7 +241,9 @@ impl MatchService {
         // The entry is copied out so the map can be changed below.
         let current = state.entries.get(match_id).cloned();
         match current {
-            None => Decision::RejectUnknown,
+            // The map holds the known fixtures only, so an id it does
+            // not hold is not a match at all.
+            None | Some(MatchState::UnknownFixture) => Decision::RejectUnknown,
             Some(MatchState::NotStarted) => self.schedule(&mut state, match_id),
             Some(MatchState::Queued | MatchState::Running) => Decision::AlreadyRunning,
             Some(MatchState::Ready { .. }) => Decision::AlreadyComplete,
@@ -246,6 +252,7 @@ impl MatchService {
                 message,
                 last_good_tick,
                 retry_at,
+                ..
             }) => retry_at.map_or_else(
                 // A deterministic failure: cached for the life of the
                 // process, never retried.
@@ -283,37 +290,6 @@ impl MatchService {
             state.pending.push_back(match_id.to_string());
             Decision::Queued
         }
-    }
-
-    /// Whether `match_id` is a fixture this service knows.
-    ///
-    /// [`MatchService::state`] reports `NotStarted` for an id that is
-    /// not in the fixture set, so a caller that needs the difference
-    /// between "never started" and "not a fixture" asks this first:
-    /// the HTTP layer answers the first with 409 and the second with
-    /// 404.
-    #[must_use]
-    pub fn is_known(&self, match_id: &str) -> bool {
-        self.fixtures.get(match_id).is_some()
-    }
-
-    /// Read the current lifecycle state of `match_id`.
-    ///
-    /// Unknown ids report `NotStarted` (they were never started).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the state lock is poisoned, a programmer error, never
-    /// client input.
-    #[must_use]
-    pub fn state(&self, match_id: &str) -> MatchState {
-        self.state
-            .lock()
-            .expect("invariant: service state lock is never poisoned")
-            .entries
-            .get(match_id)
-            .cloned()
-            .unwrap_or(MatchState::NotStarted)
     }
 
     /// Run one match on the blocking pool, holding a permit for the
@@ -440,12 +416,13 @@ fn run_and_render(
             let rendered = render_match(fixture, &completed);
             // The raw completed match is dropped now that it is rendered.
             drop(completed);
-            // The published bytes are dropped with the rendered match:
-            // the ready case carries the manifest and the segments
-            // until the published match joins it.
+            // The published bytes are kept with the ready state: a
+            // caller that is told the match is ready reads the
+            // manifest's bytes and a segment's bytes from there.
             MatchState::Ready {
                 manifest: Arc::new(rendered.manifest),
                 segments: Arc::from(rendered.segments),
+                published: Arc::new(rendered.published),
             }
         }
         MatchOutcome::Failed {
@@ -453,15 +430,22 @@ fn run_and_render(
             message,
             last_good_tick,
             kind,
-        } => MatchState::Failed {
-            code,
-            message,
-            last_good_tick,
-            retry_at: match kind {
+        } => {
+            let now = Instant::now();
+            // A deterministic failure is never retried; a transient one
+            // opens a window that a later start may wait out.
+            let retry_at = match kind {
                 FailureKind::Deterministic => None,
-                FailureKind::Transient => Some(Instant::now() + retry_window),
-            },
-        },
+                FailureKind::Transient => Some(now + retry_window),
+            };
+            MatchState::Failed {
+                code,
+                message,
+                last_good_tick,
+                retry_at,
+                retry_in: retry_at.map(|at| at.saturating_duration_since(now)),
+            }
+        }
     }
 }
 
@@ -489,6 +473,7 @@ fn run_guarded(
             last_good_tick: 0,
             // A panic repeats: the same seed panics at the same place.
             retry_at: None,
+            retry_in: None,
         },
     }
 }

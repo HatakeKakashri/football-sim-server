@@ -13,7 +13,7 @@ async fn unknown_fixture_is_rejected() {
     );
 
     assert_eq!(service.start("nope").await, Err(StartError::UnknownFixture));
-    assert_eq!(service.state("nope"), MatchState::NotStarted);
+    assert_eq!(service.state("nope"), MatchState::UnknownFixture);
     assert_eq!(service.state("m-0001"), MatchState::NotStarted);
 }
 
@@ -76,7 +76,10 @@ async fn ready_only_after_rendering_exposes_manifest_and_gzipped_segments() {
         .await;
 
     let state = service.state("m-0001");
-    let MatchState::Ready { manifest, segments } = state else {
+    let MatchState::Ready {
+        manifest, segments, ..
+    } = state
+    else {
         panic!("expected Ready, got {state:?}");
     };
     assert_eq!(manifest.match_id, "m-0001");
@@ -118,6 +121,7 @@ async fn panicking_runner_fails_and_service_keeps_working() {
             message,
             last_good_tick,
             retry_at,
+            ..
         } => {
             assert_eq!(code, "runner_panic", "a panic reports a distinct code");
             assert!(!message.is_empty());
@@ -153,6 +157,7 @@ async fn deterministic_failure_is_cached_and_not_rerun() {
         message,
         last_good_tick,
         retry_at,
+        ..
     } = service.state("m-0001")
     else {
         panic!("expected Failed");
@@ -175,6 +180,7 @@ async fn deterministic_failure_is_cached_and_not_rerun() {
             message: cached_message,
             last_good_tick: cached_tick,
             retry_at: cached_retry_at,
+            ..
         } => {
             assert_eq!(cached_code, code);
             assert_eq!(cached_message, message);

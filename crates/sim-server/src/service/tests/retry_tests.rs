@@ -135,6 +135,7 @@ async fn a_transient_failure_records_a_retry_time() {
         message,
         last_good_tick,
         retry_at,
+        ..
     } = service.state("m-0001")
     else {
         panic!("expected Failed");

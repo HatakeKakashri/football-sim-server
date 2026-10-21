@@ -27,16 +27,18 @@
 //! shared between clones and never mutated, so serving a segment costs
 //! no copy of either.
 //!
-//! A client that does not accept gzip is served the decompressed bytes
-//! on demand; see [`RenderedSegment::decompress`].
+//! A client that does not accept gzip is served the published
+//! uncompressed body; [`RenderedSegment::decompress`] reproduces that
+//! body from the stored coding on demand.
 //!
 //! # Publishing
 //!
 //! A rendered match is published as immutable bytes: the manifest's
-//! answer body and every segment's body, indexed by segment number.
-//! The bytes are produced once, at render time, and are never derived
-//! again, so a served manifest is a copy of bytes rather than a value
-//! re-serialised per request. See [`PublishedMatch`].
+//! answer body and every segment's body, indexed by segment number,
+//! next to the build id the published URLs carry. The bytes are
+//! produced once, at render time, and are never derived again, so a
+//! served manifest is a copy of bytes rather than a value re-serialised
+//! per request. See [`PublishedMatch`].
 //!
 //! # Identity
 //!
@@ -65,7 +67,7 @@ use gzip::{compress, decompress};
 use ranges::{SegmentRange, segment_ranges};
 
 pub use gzip::{GZIP_LEVEL, GzipError};
-pub use published::{ManifestBody, PublishedMatch, PublishedSegment};
+pub use published::{ManifestBody, PublishedMatch, PublishedSegment, STATE_READY};
 
 mod digest;
 mod frame_body;
@@ -196,8 +198,8 @@ pub struct Manifest {
 /// The body is stored gzipped and shared between clones of the
 /// segment, so serving a segment from several places costs one copy of
 /// the bytes. The uncompressed body is published beside it (see
-/// [`PublishedSegment`]) and is reproduced on demand by
-/// [`RenderedSegment::decompress`].
+/// [`PublishedSegment`]); [`RenderedSegment::decompress`] reproduces
+/// that body from the stored coding on demand.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedSegment {
     /// The manifest row for this segment.
@@ -231,6 +233,10 @@ impl RenderedSegment {
 }
 
 /// A rendered match: the manifest and the segments it lists.
+///
+/// The published bytes are what the routes serve: the service keeps
+/// them and drops the manifest value and the segment list, so the
+/// match is published once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedMatch {
     /// The manifest.

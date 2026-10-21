@@ -14,6 +14,11 @@
 //! next to the manifest it flattens, so the wire format of a manifest
 //! body lives in one place.
 //!
+//! The published match also carries the build id: the digest every
+//! published URL names. A caller that serves the bytes needs it for
+//! the manifest's validator and for the build-id check of a segment
+//! URL.
+//!
 //! # The segment bodies
 //!
 //! A published segment carries its body — the uncompressed JSON, whose
@@ -44,7 +49,7 @@ use super::{Manifest, StoredSegment};
 ///
 /// The body is only ever the answer of a ready match, so the state is
 /// part of the body's shape rather than a choice the caller makes.
-const STATE_READY: &str = "ready";
+pub const STATE_READY: &str = "ready";
 
 /// The body of a ready match's manifest.
 ///
@@ -52,19 +57,22 @@ const STATE_READY: &str = "ready";
 /// last, so the body is the manifest's own JSON with the state
 /// appended: the bytes this type produces are the bytes the manifest
 /// route serves.
+///
+/// The body borrows the manifest: publishing a match copies the
+/// manifest's bytes once, not the manifest itself.
 #[derive(Debug, Serialize)]
-pub struct ManifestBody {
+pub struct ManifestBody<'a> {
     /// The manifest, flattened into the body.
     #[serde(flatten)]
-    manifest: Manifest,
+    manifest: &'a Manifest,
     /// Always [`STATE_READY`].
     state: &'static str,
 }
 
-impl ManifestBody {
+impl<'a> ManifestBody<'a> {
     /// The body of a ready match's manifest.
     #[must_use]
-    pub const fn ready(manifest: Manifest) -> Self {
+    pub const fn ready(manifest: &'a Manifest) -> Self {
         Self {
             manifest,
             state: STATE_READY,
@@ -97,6 +105,10 @@ pub struct PublishedSegment {
 pub struct PublishedMatch {
     /// The manifest's answer body, as it goes on the wire.
     manifest_body: Arc<[u8]>,
+    /// The build id of the published match.
+    ///
+    /// The digest every published URL of this match carries.
+    build_id: String,
     /// The segments, indexed by segment number.
     segments: BTreeMap<u32, PublishedSegment>,
 }
@@ -113,7 +125,7 @@ impl PublishedMatch {
     /// Panics if the manifest body cannot be serialised, which cannot
     /// happen for a manifest this crate built.
     pub(super) fn publish(manifest: &Manifest, stored: &[StoredSegment]) -> Self {
-        let body = serde_json::to_vec(&ManifestBody::ready(manifest.clone()))
+        let body = serde_json::to_vec(&ManifestBody::ready(manifest))
             .expect("invariant: the manifest body is JSON-serialisable");
         let segments = stored
             .iter()
@@ -129,6 +141,7 @@ impl PublishedMatch {
             .collect();
         Self {
             manifest_body: Arc::from(body),
+            build_id: manifest.build_id.clone(),
             segments,
         }
     }
@@ -141,6 +154,15 @@ impl PublishedMatch {
     #[must_use]
     pub fn manifest_body(&self) -> Arc<[u8]> {
         Arc::clone(&self.manifest_body)
+    }
+
+    /// The build id of the published match.
+    ///
+    /// The build id is a digest of the rendered content, so it names
+    /// the bytes behind every published URL of this match.
+    #[must_use]
+    pub fn build_id(&self) -> &str {
+        &self.build_id
     }
 
     /// The published segment with this number, if the match has one.

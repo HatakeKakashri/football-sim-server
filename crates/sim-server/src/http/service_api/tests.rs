@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use tower::ServiceExt;
 
 use crate::api::runner::MatchRunner;
@@ -147,4 +147,12 @@ async fn response_parts(
         headers,
         String::from_utf8(bytes.to_vec()).expect("invariant: a response body is UTF-8"),
     )
+}
+
+/// The value of a header, or the empty string when it is absent.
+fn header_value(headers: &HeaderMap, name: header::HeaderName) -> String {
+    headers
+        .get(name)
+        .map(|value| value.to_str().unwrap_or_default().to_string())
+        .unwrap_or_default()
 }

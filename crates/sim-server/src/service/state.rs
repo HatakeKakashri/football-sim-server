@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::api::render::{Manifest, PublishedMatch, RenderedSegment};
+use crate::api::render::PublishedMatch;
 
 /// Terminal outcome of [`crate::service::MatchService::start`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,19 +69,16 @@ pub enum MatchState {
     Queued,
     /// The simulation and rendering are in flight on a blocking thread.
     Running,
-    /// Rendering finished: the manifest, the segments and the published
-    /// bytes of the match.
+    /// Rendering finished: the published bytes of the match.
     Ready {
-        /// The manifest of the match.
-        manifest: Arc<Manifest>,
-        /// The segments, in manifest order.
-        segments: Arc<[RenderedSegment]>,
         /// The published bytes of the match: the manifest's answer body
-        /// and every segment's body, indexed by segment number.
+        /// and every segment's body, indexed by segment number, next
+        /// to the build id the published URLs carry.
         ///
         /// A caller that is told the match is ready reads the
         /// manifest's bytes and a segment's bytes from here, without
-        /// asking a second question.
+        /// asking a second question: the match is published once, and
+        /// the ready case holds nothing but the published bytes.
         published: Arc<PublishedMatch>,
     },
     /// A failure. A deterministic failure is cached for the life of

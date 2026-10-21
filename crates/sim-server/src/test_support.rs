@@ -342,20 +342,20 @@ fn test_team(id: &str, name: &str, prefix: &str) -> ValidatedTeam {
     }
 }
 
-/// Poll until `pred` holds for `match_id`'s state, then return.
+/// Poll until `pred` holds for `match_id`'s status, then return.
 pub async fn wait_until(
     service: &MatchService,
     match_id: &str,
     mut pred: impl FnMut(&MatchState) -> bool,
 ) {
     for _ in 0..500 {
-        if pred(&service.state(match_id)) {
+        if pred(&service.status(match_id)) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!(
         "timed out waiting for match {match_id} state; last state: {:?}",
-        service.state(match_id)
+        service.status(match_id)
     );
 }

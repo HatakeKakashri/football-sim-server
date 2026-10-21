@@ -51,33 +51,6 @@ impl MatchService {
             .cloned();
         answered(state, now)
     }
-
-    /// The current lifecycle state of `match_id`.
-    ///
-    /// The older name for [`MatchService::status`]: both answer the
-    /// same question in the same way. It is kept until every caller
-    /// asks the new one.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the state lock is poisoned, a programmer error, never
-    /// client input.
-    #[must_use]
-    pub fn state(&self, match_id: &str) -> MatchState {
-        self.status(match_id)
-    }
-
-    /// Whether `match_id` is a fixture this service knows.
-    ///
-    /// [`MatchService::status`] answers [`MatchState::UnknownFixture`]
-    /// for an id that is not in the fixture set, so this question is
-    /// only needed by a caller that asks for the two separately: the
-    /// HTTP layer answers "never started" with 409 and "not a fixture"
-    /// with 404.
-    #[must_use]
-    pub fn is_known(&self, match_id: &str) -> bool {
-        self.fixtures.get(match_id).is_some()
-    }
 }
 
 /// The answer for the state the map holds, or for an id it does not

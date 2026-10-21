@@ -174,13 +174,13 @@ async fn over_cap_start_is_queued_and_runs_when_a_permit_frees() {
 
     // The third start finds no permit: it waits in the queue.
     assert_eq!(service.start("m-2").await, Ok(StartOutcome::Queued));
-    assert_eq!(service.state("m-2"), MatchState::Queued);
+    assert_eq!(service.status("m-2"), MatchState::Queued);
     assert_eq!(runner.order().len(), 2, "the queued match has not run");
 
     // A permit frees: the queued match takes it and runs.
     runner.open("m-0");
     wait_until(&service, "m-2", |_| runner.order().len() >= 3).await;
-    assert_eq!(service.state("m-2"), MatchState::Running);
+    assert_eq!(service.status("m-2"), MatchState::Running);
 }
 
 /// Queued matches start in the order they arrived.
@@ -212,7 +212,7 @@ async fn queued_matches_start_in_arrival_order() {
         vec!["m-0".to_string(), "m-1".to_string()],
         "the first queued match runs first"
     );
-    assert_eq!(service.state("m-1"), MatchState::Running);
+    assert_eq!(service.status("m-1"), MatchState::Running);
 
     runner.open("m-1");
     wait_until(&service, "m-2", |_| runner.order().len() >= 3).await;
@@ -221,7 +221,7 @@ async fn queued_matches_start_in_arrival_order() {
         vec!["m-0".to_string(), "m-1".to_string(), "m-2".to_string()],
         "the second queued match runs last"
     );
-    assert_eq!(service.state("m-2"), MatchState::Running);
+    assert_eq!(service.status("m-2"), MatchState::Running);
 
     runner.open("m-2");
     wait_until(&service, "m-2", |state| matches!(state, MatchState::Ready { .. })).await;
@@ -247,7 +247,7 @@ async fn over_cap_start_is_never_rejected() {
     // refused and none is an error.
     for id in ["m-1", "m-2"] {
         assert_eq!(service.start(id).await, Ok(StartOutcome::Queued));
-        assert_eq!(service.state(id), MatchState::Queued);
+        assert_eq!(service.status(id), MatchState::Queued);
     }
 }
 
@@ -274,7 +274,7 @@ async fn second_start_of_a_queued_match_is_already_running() {
         Ok(StartOutcome::AlreadyRunning),
         "a queued match is already in flight"
     );
-    assert_eq!(service.state("m-1"), MatchState::Queued);
+    assert_eq!(service.status("m-1"), MatchState::Queued);
 }
 
 /// A permit is released after a success: the next start runs at once
@@ -298,7 +298,7 @@ async fn permit_is_released_after_success() {
 
     // The permit is back in the pool, so the cap did not shrink.
     assert_eq!(service.start("m-1").await, Ok(StartOutcome::Started));
-    assert_eq!(service.state("m-1"), MatchState::Running);
+    assert_eq!(service.status("m-1"), MatchState::Running);
 }
 
 /// A permit is released after a failure: the queued match takes it and
@@ -325,8 +325,8 @@ async fn permit_is_released_after_failure() {
     // The failure releases the permit: the queued match runs.
     runner.open("fail-0");
     wait_until(&service, "m-1", |_| runner.order().len() >= 2).await;
-    assert_eq!(service.state("m-1"), MatchState::Running);
-    match service.state("fail-0") {
+    assert_eq!(service.status("m-1"), MatchState::Running);
+    match service.status("fail-0") {
         MatchState::Failed { code, .. } => assert_eq!(code, "tick_cap_exceeded"),
         other => panic!("expected Failed, got {other:?}"),
     }
@@ -356,8 +356,8 @@ async fn permit_is_released_after_panic() {
     // The panic releases the permit: the queued match runs.
     runner.open("panic-0");
     wait_until(&service, "m-1", |_| runner.order().len() >= 2).await;
-    assert_eq!(service.state("m-1"), MatchState::Running);
-    match service.state("panic-0") {
+    assert_eq!(service.status("m-1"), MatchState::Running);
+    match service.status("panic-0") {
         MatchState::Failed { code, .. } => assert_eq!(code, "runner_panic"),
         other => panic!("expected Failed, got {other:?}"),
     }

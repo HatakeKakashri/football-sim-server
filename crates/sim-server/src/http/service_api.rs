@@ -12,6 +12,25 @@
 //!   segment of a ready match from the immutable URL the manifest
 //!   publishes. It never starts work either.
 //!
+//! # One rule, one answer
+//!
+//! The routes do not each decide what a match's state means. The
+//! service answers a match's status in one call
+//! ([`MatchService::status`]), and this module turns that answer into
+//! a response in one place: [`status_answer`]. The start route and the
+//! manifest route come through the same mapping, so "running" means
+//! the same thing in both.
+//!
+//! The `state` values the wire uses are declared here, once, and both
+//! route modules use them. The manifest's own `ready` state is the one
+//! exception: it is declared with the body that carries it, in the
+//! render module ([`crate::api::render::STATE_READY`]) — the wire
+//! format of a manifest body lives in one place, and the render
+//! layer must not depend on this one.
+//!
+//! The wait before a retry is the service's answer, so no route
+//! computes one and no route reads the clock.
+//!
 //! # The status matrix
 //!
 //! | Match state | `POST /start` | `GET /manifest` | `GET /segment` |
@@ -41,10 +60,6 @@
 //! A failed body keeps the wire shape the old error stream used
 //! (`code`, `message`, `last_good_tick`) next to the `state` field.
 //!
-//! The manifest's `ready` state is declared with the body that carries
-//! it, in the render module: the wire format of a manifest body lives
-//! in one place.
-//!
 //! The 200 manifest is the only answer of the start and manifest
 //! routes that may be cached: it carries an `ETag` (the content-derived
 //! build id) and `Cache-Control: no-cache`. Every other answer of
@@ -58,13 +73,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing};
 use serde::Serialize;
 
-use crate::api::render::{Manifest, ManifestBody};
+use crate::api::render::PublishedMatch;
 use crate::http::HttpConfig;
 use crate::service::{MatchService, MatchState, StartError, StartOutcome};
 
@@ -81,23 +97,35 @@ pub const POLL_RETRY_AFTER_SECS: u64 = 1;
 /// browser that cannot read the `Retry-After` header can pace itself.
 pub const POLL_RETRY_AFTER_MS: u64 = POLL_RETRY_AFTER_SECS * 1_000;
 
+/// The content type of a JSON body.
+pub(crate) const CONTENT_TYPE_JSON: &str = "application/json";
+
 /// The `state` a response reports for an id that is not a fixture.
-const STATE_UNKNOWN: &str = "unknown";
+pub(crate) const STATE_UNKNOWN: &str = "unknown";
 
 /// The `state` a response reports for a match that was never started.
-const STATE_NOT_STARTED: &str = "not_started";
+pub(crate) const STATE_NOT_STARTED: &str = "not_started";
 
 /// The `state` a response reports for a queued match.
-const STATE_QUEUED: &str = "queued";
+pub(crate) const STATE_QUEUED: &str = "queued";
 
 /// The `state` a response reports for a running match.
-const STATE_RUNNING: &str = "running";
+pub(crate) const STATE_RUNNING: &str = "running";
 
 /// The `state` a response reports for a failed match.
-const STATE_FAILED: &str = "failed";
+pub(crate) const STATE_FAILED: &str = "failed";
 
 /// The `state` a response reports for a rejected request.
-const STATE_UNAUTHORIZED: &str = "unauthorized";
+pub(crate) const STATE_UNAUTHORIZED: &str = "unauthorized";
+
+/// The `state` a response reports for a match that has no segments.
+pub(crate) const STATE_NOT_READY: &str = "not_ready";
+
+/// The `state` a response reports for a segment that does not exist.
+pub(crate) const STATE_NO_SEGMENT: &str = "no_segment";
+
+/// The `state` a response reports for a segment that cannot be read.
+pub(crate) const STATE_BROKEN: &str = "broken";
 
 /// The state of the start and manifest routes.
 #[derive(Debug, Clone)]
@@ -183,20 +211,25 @@ async fn post_start_handler(
     }
     match state.service.start(&match_id).await {
         Err(StartError::UnknownFixture) => unknown_response(&match_id),
-        Ok(StartOutcome::Started) => pending_response(STATE_RUNNING, &match_id),
-        Ok(StartOutcome::Queued) => pending_response(STATE_QUEUED, &match_id),
-        // A run is already in flight, or the match is already terminal:
-        // the state it is in now decides the answer.
-        Ok(StartOutcome::AlreadyRunning | StartOutcome::AlreadyComplete) => {
-            let current = state.service.state(&match_id);
-            state_response(&current, &match_id)
+        // The start decided the match's state: it runs now, or it
+        // waits for a permit. The state the service just set goes
+        // through the same mapping the manifest route uses, so
+        // "running" means the same thing in both. The service is not
+        // asked for its status here: the run may already have
+        // finished, and the answer would be a 200 instead of a 202.
+        Ok(StartOutcome::Started) => status_answer(&MatchState::Running, &match_id),
+        Ok(StartOutcome::Queued) => status_answer(&MatchState::Queued, &match_id),
+        // A run is already in flight, the match is already terminal, or
+        // it failed inside its retry window: the service's answer
+        // decides the response, the wait before a retry included.
+        Ok(
+            StartOutcome::AlreadyRunning
+            | StartOutcome::AlreadyComplete
+            | StartOutcome::RetryAfter { .. },
+        ) => {
+            let current = state.service.status(&match_id);
+            status_answer(&current, &match_id)
         }
-        Ok(StartOutcome::RetryAfter {
-            code,
-            message,
-            last_good_tick,
-            retry_in,
-        }) => failure_response(&match_id, &code, &message, last_good_tick, Some(retry_in)),
     }
 }
 
@@ -209,28 +242,25 @@ async fn get_manifest_handler(
     State(state): State<MatchApiState>,
     Path(match_id): Path<String>,
 ) -> Response {
-    if !state.service.is_known(&match_id) {
-        return unknown_response(&match_id);
-    }
-    let current = state.service.state(&match_id);
-    if matches!(current, MatchState::NotStarted) {
-        return not_started_response(&match_id);
-    }
-    state_response(&current, &match_id)
+    let current = state.service.status(&match_id);
+    status_answer(&current, &match_id)
 }
 
-/// The response for a match's current state.
+/// The answer for a match's status.
 ///
-/// `not_started` never reaches this function: the `GET` route answers
-/// it with a conflict, and a `POST` has already started the match by
-/// the time it asks. The wait before a retry is the service's answer,
-/// so the route never computes one.
-fn state_response(current: &MatchState, match_id: &str) -> Response {
-    match current {
+/// This is the one rule that turns a match's state into a response:
+/// the start route and the manifest route both come through here, so
+/// "running" means the same thing in both.
+///
+/// The wait before a retry is the service's answer, so the route never
+/// computes one.
+fn status_answer(status: &MatchState, match_id: &str) -> Response {
+    match status {
         MatchState::UnknownFixture => unknown_response(match_id),
-        MatchState::NotStarted | MatchState::Running => pending_response(STATE_RUNNING, match_id),
+        MatchState::NotStarted => not_started_response(match_id),
+        MatchState::Running => pending_response(STATE_RUNNING, match_id),
         MatchState::Queued => pending_response(STATE_QUEUED, match_id),
-        MatchState::Ready { manifest, .. } => manifest_response(manifest),
+        MatchState::Ready { published } => manifest_response(published),
         MatchState::Failed {
             code,
             message,
@@ -287,19 +317,21 @@ fn pending_response(state: &'static str, match_id: &str) -> Response {
     response
 }
 
-/// The 200: the manifest, with the state that produced it.
+/// The 200: the manifest's published bytes.
 ///
-/// The body is the render module's own body type, so the wire format
-/// of a manifest lives in one place.
-fn manifest_response(manifest: &Manifest) -> Response {
-    let body = ManifestBody::ready(manifest.clone());
-    let mut response = (StatusCode::OK, Json(body)).into_response();
+/// The body is the bytes the render step published, copied into the
+/// response: the manifest is never cloned and never re-serialised, so
+/// a request costs no string per manifest row.
+fn manifest_response(published: &PublishedMatch) -> Response {
+    let body = Bytes::from_owner(published.manifest_body());
+    let mut response = (StatusCode::OK, Body::from(body)).into_response();
+    set_header(&mut response, header::CONTENT_TYPE, CONTENT_TYPE_JSON);
     // The build id is a digest of the rendered content, so it is a
     // strong validator for the manifest.
     set_header(
         &mut response,
         header::ETAG,
-        &format!("\"{}\"", manifest.build_id),
+        &format!("\"{}\"", published.build_id()),
     );
     set_header(&mut response, header::CACHE_CONTROL, "no-cache");
     response

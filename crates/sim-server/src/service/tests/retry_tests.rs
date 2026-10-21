@@ -136,7 +136,7 @@ async fn a_transient_failure_records_a_retry_time() {
         last_good_tick,
         retry_at,
         ..
-    } = service.state("m-0001")
+    } = service.status("m-0001")
     else {
         panic!("expected Failed");
     };
@@ -260,7 +260,7 @@ async fn a_start_after_the_window_re_queues_the_match_when_the_cap_is_full() {
     // The retried match finds no permit: it waits in the queue.
     let outcome = service.start("fail-0").await;
     assert_eq!(outcome, Ok(StartOutcome::Queued));
-    assert_eq!(service.state("fail-0"), MatchState::Queued);
+    assert_eq!(service.status("fail-0"), MatchState::Queued);
 }
 
 /// A transient failure that fails again records a fresh retry window.
@@ -278,7 +278,7 @@ async fn a_transient_failure_that_fails_again_records_a_new_window() {
         matches!(state, MatchState::Failed { .. })
     })
     .await;
-    let first = service.state("m-0001");
+    let first = service.status("m-0001");
     let MatchState::Failed {
         retry_at: Some(first_retry_at),
         ..
@@ -294,7 +294,7 @@ async fn a_transient_failure_that_fails_again_records_a_new_window() {
         matches!(state, MatchState::Failed { .. })
     })
     .await;
-    let second = service.state("m-0001");
+    let second = service.status("m-0001");
     let MatchState::Failed {
         retry_at: Some(second_retry_at),
         ..

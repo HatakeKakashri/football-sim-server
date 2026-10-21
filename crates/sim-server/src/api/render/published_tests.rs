@@ -91,7 +91,7 @@ fn key_order(bytes: &[u8]) -> Vec<String> {
 fn the_published_manifest_body_is_the_body_the_manifest_route_serves() {
     let rendered = render_match(&fixture(), &hand_built_match());
 
-    let route_body = serde_json::to_vec(&ManifestBody::ready(rendered.manifest.clone()))
+    let route_body = serde_json::to_vec(&ManifestBody::ready(&rendered.manifest))
         .expect("invariant: the manifest body is JSON-serialisable");
 
     assert_eq!(

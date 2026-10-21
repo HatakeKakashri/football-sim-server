@@ -17,11 +17,12 @@
 //!
 //! # The two representations
 //!
-//! The bodies are stored gzipped. A client that accepts gzip is served
-//! the stored bytes with `Content-Encoding: gzip`; every other client
-//! is served the decompressed bytes. Both decode to the same body,
-//! whose SHA-256 is the hash the manifest publishes, so the URL means
-//! the same thing either way.
+//! Both representations are published: the body — the uncompressed
+//! JSON, whose SHA-256 is the hash the manifest publishes — and its
+//! gzip coding. A client that accepts gzip is served the coding with
+//! `Content-Encoding: gzip`; every other client is served the body.
+//! Both decode to the same body, so the URL means the same thing
+//! either way.
 //!
 //! Which representation a client gets is decided by the shared
 //! negotiation rule in [`crate::http::content_negotiation`].
@@ -32,17 +33,30 @@
 //! (`private`, not `public`, until a CDN exists) and never changes
 //! behind its URL (`immutable`). The errors are `no-store`, so they
 //! name no coding.
+//!
+//! # Resolution and negotiation
+//!
+//! The request is resolved first: the match's status says whether
+//! there is a segment at all, the build id says whether the URL names
+//! this match's bytes, and the published index says which segment the
+//! URL names. The handler then does the rest: it negotiates the
+//! coding and writes the headers.
+
+use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
-use crate::api::render::{ENCODING_GZIP, RenderedSegment};
+use crate::api::render::{ENCODING_GZIP, PublishedMatch, PublishedSegment};
 use crate::http::content_negotiation::accepts_gzip;
-use crate::service::MatchState;
+use crate::service::{MatchService, MatchState};
 
-use super::{MatchApiState, STATE_UNKNOWN, set_header, state_response_with};
+use super::{
+    CONTENT_TYPE_JSON, MatchApiState, STATE_BROKEN, STATE_NO_SEGMENT, STATE_NOT_READY,
+    set_header, state_response_with, unknown_response,
+};
 
 /// The `Cache-Control` of a served segment.
 ///
@@ -55,20 +69,27 @@ const IMMUTABLE_CACHE_CONTROL: &str = "private, max-age=31536000, immutable";
 /// on the coding the client accepts.
 const VARY_ACCEPT_ENCODING: &str = "Accept-Encoding";
 
-/// The content type of a segment body.
-const SEGMENT_CONTENT_TYPE: &str = "application/json";
-
 /// The suffix every published segment URL ends in.
 const SEGMENT_SUFFIX: &str = ".json";
 
-/// The `state` a response reports for a match that has no segments.
-const STATE_NOT_READY: &str = "not_ready";
+/// The message of the 404 for a URL that names another match's bytes.
+const UNKNOWN_BUILD_ID: &str = "unknown build id";
 
-/// The `state` a response reports for a segment that does not exist.
-const STATE_NO_SEGMENT: &str = "no_segment";
+/// The message of the 404 for a URL that names no segment.
+const UNKNOWN_SEGMENT_NUMBER: &str = "unknown segment number";
 
-/// The `state` a response reports for a segment that cannot be read.
-const STATE_BROKEN: &str = "broken";
+/// What a segment request resolves to.
+#[derive(Debug)]
+enum Resolved {
+    /// The match id is not a known fixture.
+    UnknownMatch,
+    /// The match has no rendered segments yet.
+    NotReady,
+    /// The build id or the segment number names nothing.
+    NoSegment(&'static str),
+    /// The segment's published bytes.
+    Segment(PublishedSegment),
+}
 
 /// `GET /match/{match_id}/segments/{build_id}/{segment}`: one segment
 /// of a ready match.
@@ -81,28 +102,50 @@ pub(super) async fn get_segment_handler(
     Path((match_id, build_id, segment)): Path<(String, String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    if !state.service.is_known(&match_id) {
-        return unknown_response(&match_id);
+    match resolve_segment(&state.service, &match_id, &build_id, &segment) {
+        Resolved::UnknownMatch => unknown_response(&match_id),
+        Resolved::NotReady => not_ready_response(&match_id),
+        Resolved::NoSegment(message) => unknown_segment_response(&match_id, message),
+        Resolved::Segment(published) => segment_response(&match_id, &published, &headers),
     }
-    let current = state.service.state(&match_id);
-    let MatchState::Ready {
-        manifest, segments, ..
-    } = current
-    else {
+}
+
+/// Resolve the request against the match's published bytes.
+///
+/// The resolution is this route's own rule: the match's status says
+/// whether there is a segment at all, the build id says whether the
+/// URL names this match's bytes, and the published index says which
+/// segment the URL names.
+fn resolve_segment(
+    service: &MatchService,
+    match_id: &str,
+    build_id: &str,
+    segment: &str,
+) -> Resolved {
+    match service.status(match_id) {
+        MatchState::Ready { published } => resolve_in_match(&published, build_id, segment),
+        MatchState::UnknownFixture => Resolved::UnknownMatch,
         // Not started, queued, running, failed, or forgotten by a
         // restart: there is no segment to serve yet.
-        return not_ready_response(&match_id);
-    };
-    if manifest.build_id != build_id {
-        return unknown_segment_response(&match_id, "unknown build id");
+        MatchState::NotStarted
+        | MatchState::Queued
+        | MatchState::Running
+        | MatchState::Failed { .. } => Resolved::NotReady,
     }
-    let Some(number) = segment_number(&segment) else {
-        return unknown_segment_response(&match_id, "unknown segment number");
+}
+
+/// Resolve the request against a ready match's published bytes.
+fn resolve_in_match(published: &PublishedMatch, build_id: &str, segment: &str) -> Resolved {
+    if published.build_id() != build_id {
+        return Resolved::NoSegment(UNKNOWN_BUILD_ID);
+    }
+    let Some(number) = segment_number(segment) else {
+        return Resolved::NoSegment(UNKNOWN_SEGMENT_NUMBER);
     };
-    let Some(rendered) = segments.iter().find(|row| row.metadata.segment == number) else {
-        return unknown_segment_response(&match_id, "unknown segment number");
-    };
-    segment_response(&match_id, rendered, &headers)
+    published.segment(number).map_or_else(
+        || Resolved::NoSegment(UNKNOWN_SEGMENT_NUMBER),
+        |found| Resolved::Segment(found.clone()),
+    )
 }
 
 /// The segment number a URL names, or `None` when the path names no
@@ -115,25 +158,36 @@ fn segment_number(segment: &str) -> Option<u32> {
     number.parse::<u32>().ok()
 }
 
-/// The 200: the segment's bytes, in the coding the client accepts.
+/// The 200: the segment's published bytes, in the coding the client
+/// accepts.
+///
+/// The bytes are the ones the render step published, so a client gets
+/// a copy of bytes that already exist instead of a body derived again.
 fn segment_response(
     match_id: &str,
-    rendered: &RenderedSegment,
+    published: &PublishedSegment,
     headers: &HeaderMap,
 ) -> Response {
     let gzipped = accepts_gzip(headers);
-    let body = if gzipped {
-        // The stored bytes are shared and never mutated, so the body
-        // points at them instead of copying them.
-        Body::from(Bytes::from_owner(rendered.gzipped_body.clone()))
+    let bytes: &Arc<[u8]> = if gzipped {
+        &published.gzipped_body
     } else {
-        match rendered.decompress() {
-            Ok(bytes) => Body::from(bytes),
-            Err(error) => return broken_segment_response(match_id, &error.to_string()),
-        }
+        &published.body
     };
-    let mut response = (StatusCode::OK, body).into_response();
-    set_header(&mut response, header::CONTENT_TYPE, SEGMENT_CONTENT_TYPE);
+    if bytes.is_empty() {
+        // The render step writes a body for every segment, so a
+        // published body that is empty is a body that cannot be read:
+        // the answer is a 500, not an empty 200.
+        return broken_segment_response(match_id, "the published segment body is empty");
+    }
+    // The published bytes are shared and never mutated, so the body
+    // points at them instead of copying them.
+    let mut response = (
+        StatusCode::OK,
+        Body::from(Bytes::from_owner(Arc::clone(bytes))),
+    )
+        .into_response();
+    set_header(&mut response, header::CONTENT_TYPE, CONTENT_TYPE_JSON);
     set_header(
         &mut response,
         header::CACHE_CONTROL,
@@ -156,16 +210,6 @@ fn append_vary(response: &mut Response, condition: &str) {
     response.headers_mut().append(header::VARY, value);
 }
 
-/// The 404: the match id is not a known fixture.
-fn unknown_response(match_id: &str) -> Response {
-    state_response_with(
-        StatusCode::NOT_FOUND,
-        STATE_UNKNOWN,
-        match_id,
-        "unknown match_id",
-    )
-}
-
 /// The 409: the match has no rendered segments yet.
 fn not_ready_response(match_id: &str) -> Response {
     state_response_with(
@@ -181,7 +225,7 @@ fn unknown_segment_response(match_id: &str, message: &str) -> Response {
     state_response_with(StatusCode::NOT_FOUND, STATE_NO_SEGMENT, match_id, message)
 }
 
-/// The 500: the stored segment cannot be read.
+/// The 500: the published segment cannot be read.
 fn broken_segment_response(match_id: &str, message: &str) -> Response {
     state_response_with(
         StatusCode::INTERNAL_SERVER_ERROR,

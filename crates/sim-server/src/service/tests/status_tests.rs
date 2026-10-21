@@ -22,11 +22,9 @@ async fn an_id_that_is_not_a_fixture_is_unknown() {
     );
 
     assert_eq!(service.status("nope"), MatchState::UnknownFixture);
-    assert!(!service.is_known("nope"));
 }
 
-/// A fixture that was never started says so, and the older name for
-/// the question answers the same.
+/// A fixture that was never started says so.
 #[tokio::test]
 async fn a_fixture_that_was_never_started_is_not_started() {
     let service = Arc::new(
@@ -34,7 +32,6 @@ async fn a_fixture_that_was_never_started_is_not_started() {
     );
 
     assert_eq!(service.status("m-0001"), MatchState::NotStarted);
-    assert_eq!(service.state("m-0001"), MatchState::NotStarted);
 }
 
 /// The match that took the permit is running; the one that found no
@@ -82,37 +79,25 @@ async fn a_ready_match_carries_the_published_match() {
     .await;
 
     let status = service.status("m-0001");
-    let MatchState::Ready {
-        manifest,
-        segments,
-        published,
-    } = status
-    else {
+    let MatchState::Ready { published } = status else {
         panic!("expected Ready");
     };
-    assert_eq!(manifest.match_id, "m-0001");
-    assert!(!segments.is_empty(), "a rendered match has segments");
+    assert!(!published.build_id().is_empty(), "the match has a build id");
     assert!(
         !published.manifest_body().is_empty(),
         "the published match carries the manifest's body"
     );
-    assert_eq!(
-        published.len(),
-        segments.len(),
-        "every rendered segment is published"
+    assert!(!published.is_empty(), "a rendered match has segments");
+    let first = published
+        .segment(0)
+        .expect("invariant: the manifest lists the first segment");
+    assert!(
+        !first.body.is_empty(),
+        "the published segment carries its body"
     );
-    let row = manifest
-        .segments
-        .first()
-        .expect("invariant: a rendered match has at least one segment");
-    let published_segment = published
-        .segment(row.segment)
-        .expect("invariant: the manifest's segment is published");
-    assert_eq!(
-        u64::try_from(published_segment.body.len())
-            .expect("invariant: a body length fits in u64"),
-        row.uncompressed_bytes,
-        "the published body is the body the manifest describes"
+    assert!(
+        !first.gzipped_body.is_empty(),
+        "the published segment carries its gzip coding"
     );
 }
 

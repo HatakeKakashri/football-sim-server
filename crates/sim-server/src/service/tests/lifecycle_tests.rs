@@ -13,8 +13,8 @@ async fn unknown_fixture_is_rejected() {
     );
 
     assert_eq!(service.start("nope").await, Err(StartError::UnknownFixture));
-    assert_eq!(service.state("nope"), MatchState::UnknownFixture);
-    assert_eq!(service.state("m-0001"), MatchState::NotStarted);
+    assert_eq!(service.status("nope"), MatchState::UnknownFixture);
+    assert_eq!(service.status("m-0001"), MatchState::NotStarted);
 }
 
 #[tokio::test]
@@ -23,13 +23,13 @@ async fn known_match_moves_out_of_not_started_and_becomes_ready() {
         MatchService::new(fixture_set(&["m-0001"]), as_dyn(Arc::new(InstantRunner))).with_cap(1),
     );
 
-    assert_eq!(service.state("m-0001"), MatchState::NotStarted);
+    assert_eq!(service.status("m-0001"), MatchState::NotStarted);
 
     assert_eq!(service.start("m-0001").await, Ok(StartOutcome::Started));
 
     wait_until(&service, "m-0001", |state| matches!(state, MatchState::Ready { .. }))
         .await;
-    assert!(matches!(service.state("m-0001"), MatchState::Ready { .. }));
+    assert!(matches!(service.status("m-0001"), MatchState::Ready { .. }));
 }
 
 #[tokio::test]
@@ -57,7 +57,7 @@ async fn concurrent_starts_of_the_same_match_run_once() {
     wait_until(&service, &match_id, |_state| runner.runs() >= 1)
         .await;
     assert_eq!(runner.runs(), 1);
-    assert_eq!(service.state(&match_id), MatchState::Running);
+    assert_eq!(service.status(&match_id), MatchState::Running);
 
     runner.gate().open();
     wait_until(&service, &match_id, |state| matches!(state, MatchState::Ready { .. }))
@@ -75,29 +75,28 @@ async fn ready_only_after_rendering_exposes_manifest_and_gzipped_segments() {
     wait_until(&service, "m-0001", |state| matches!(state, MatchState::Ready { .. }))
         .await;
 
-    let state = service.state("m-0001");
-    let MatchState::Ready {
-        manifest, segments, ..
-    } = state
-    else {
+    let state = service.status("m-0001");
+    let MatchState::Ready { published } = state else {
         panic!("expected Ready, got {state:?}");
     };
-    assert_eq!(manifest.match_id, "m-0001");
-    assert!(!manifest.build_id.is_empty());
-    assert!(!segments.is_empty(), "at least one segment must be rendered");
-    for segment in segments.iter() {
+    assert!(!published.build_id().is_empty());
+    assert!(
+        !published.manifest_body().is_empty(),
+        "the manifest's body is published"
+    );
+    assert!(!published.is_empty(), "at least one segment must be rendered");
+    for number in 0..u32::try_from(published.len()).expect("invariant: a segment count fits in u32") {
+        let segment = published
+            .segment(number)
+            .expect("invariant: every published segment is in the index");
         assert!(
-            segment.metadata.gzipped_bytes.is_some(),
-            "gzipped byte length must be populated"
+            !segment.body.is_empty(),
+            "segment {number} carries its uncompressed body"
         );
-        assert_eq!(
-            segment.metadata.gzipped_bytes,
-            Some(segment.gzipped_bytes().len() as u64)
+        assert!(
+            !segment.gzipped_body.is_empty(),
+            "segment {number} carries its gzip coding"
         );
-        assert!(!segment.gzipped_bytes().is_empty());
-        segment
-            .decompress()
-            .expect("invariant: stored segment is valid gzip");
     }
 }
 
@@ -115,7 +114,7 @@ async fn panicking_runner_fails_and_service_keeps_working() {
     wait_until(&service, "panic-0", |state| matches!(state, MatchState::Failed { .. }))
         .await;
 
-    match service.state("panic-0") {
+    match service.status("panic-0") {
         MatchState::Failed {
             code,
             message,
@@ -138,7 +137,7 @@ async fn panicking_runner_fails_and_service_keeps_working() {
     let _ = service.start("ok-0").await;
     wait_until(&service, "ok-0", |state| matches!(state, MatchState::Ready { .. }))
         .await;
-    assert!(matches!(service.state("ok-0"), MatchState::Ready { .. }));
+    assert!(matches!(service.status("ok-0"), MatchState::Ready { .. }));
 }
 
 #[tokio::test]
@@ -158,7 +157,7 @@ async fn deterministic_failure_is_cached_and_not_rerun() {
         last_good_tick,
         retry_at,
         ..
-    } = service.state("m-0001")
+    } = service.status("m-0001")
     else {
         panic!("expected Failed");
     };
@@ -174,7 +173,7 @@ async fn deterministic_failure_is_cached_and_not_rerun() {
     assert_eq!(service.start("m-0001").await, Ok(StartOutcome::AlreadyComplete));
     assert_eq!(runner.runs(), 1, "the failure is cached, not re-run");
 
-    match service.state("m-0001") {
+    match service.status("m-0001") {
         MatchState::Failed {
             code: cached_code,
             message: cached_message,
@@ -205,12 +204,12 @@ async fn nothing_blocks_on_a_running_match() {
     // The gated match starts and runs (blocked on the gate) without
     // blocking the executor: another match completes in the meantime.
     let _ = service.start("blocked-0").await;
-    assert_eq!(service.state("blocked-0"), MatchState::Running);
+    assert_eq!(service.status("blocked-0"), MatchState::Running);
 
     let _ = service.start("ok-0").await;
     wait_until(&service, "ok-0", |state| matches!(state, MatchState::Ready { .. }))
         .await;
-    assert!(matches!(service.state("ok-0"), MatchState::Ready { .. }));
+    assert!(matches!(service.status("ok-0"), MatchState::Ready { .. }));
 
     runner.gate().open();
     wait_until(&service, "blocked-0", |state| matches!(state, MatchState::Ready { .. }))

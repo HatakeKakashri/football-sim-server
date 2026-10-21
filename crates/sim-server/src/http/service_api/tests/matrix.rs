@@ -202,7 +202,7 @@ async fn post_queued() -> Row {
     .await;
     // The second match finds no permit: it waits in the queue.
     let _ = service.start("m-1").await;
-    assert_eq!(service.state("m-1"), MatchState::Queued);
+    assert_eq!(service.status("m-1"), MatchState::Queued);
 
     let mut row = Row::new(
         "post: a queued match is 202",
@@ -326,7 +326,7 @@ async fn get_queued() -> Row {
     })
     .await;
     let _ = service.start("m-1").await;
-    assert_eq!(service.state("m-1"), MatchState::Queued);
+    assert_eq!(service.status("m-1"), MatchState::Queued);
 
     let mut row = Row::new(
         "get: a queued match is 202",

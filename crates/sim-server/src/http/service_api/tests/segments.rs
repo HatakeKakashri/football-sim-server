@@ -47,26 +47,34 @@ async fn ready_service(match_id: &str) -> Arc<MatchService> {
 
 /// The first segment of a ready match, as the manifest publishes it and
 /// as the service stores it.
+///
+/// The manifest is read from the published bytes the client receives,
+/// so the test pins the URLs and the hashes the client actually sees.
 fn first_segment(service: &Arc<MatchService>, match_id: &str) -> Segment {
-    let MatchState::Ready {
-        manifest, segments, ..
-    } = service.state(match_id)
-    else {
+    let MatchState::Ready { published } = service.status(match_id) else {
         panic!("invariant: the match under test is ready");
     };
-    let row = manifest
-        .segments
-        .first()
-        .expect("invariant: a rendered match has at least one segment");
-    let rendered = segments
-        .first()
-        .expect("invariant: a rendered match has at least one segment");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&published.manifest_body()[..])
+            .expect("invariant: the published manifest body is JSON");
+    let row = &manifest["segments"][0];
+    let number = u32::try_from(row["segment"].as_u64().expect("invariant: a segment number"))
+        .expect("invariant: a segment number fits in u32");
+    let published_segment = published
+        .segment(number)
+        .expect("invariant: the manifest lists the segment");
     Segment {
-        url: row.url.clone(),
-        build_id: manifest.build_id.clone(),
-        number: row.segment,
-        sha256: row.sha256.clone(),
-        gzipped: rendered.gzipped_bytes().to_vec(),
+        url: row["url"]
+            .as_str()
+            .expect("invariant: the manifest publishes a segment URL")
+            .to_string(),
+        build_id: published.build_id().to_string(),
+        number,
+        sha256: row["sha256"]
+            .as_str()
+            .expect("invariant: the manifest publishes a segment hash")
+            .to_string(),
+        gzipped: published_segment.gzipped_body.to_vec(),
     }
 }
 
@@ -113,14 +121,6 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
-}
-
-/// The value of a header, or the empty string when it is absent.
-fn header_value(headers: &HeaderMap, name: header::HeaderName) -> String {
-    headers
-        .get(name)
-        .map(|value| value.to_str().unwrap_or_default().to_string())
-        .unwrap_or_default()
 }
 
 /// A ready segment is 200 and carries the immutable cache headers.

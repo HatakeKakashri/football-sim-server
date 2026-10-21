@@ -37,7 +37,9 @@
 //! the match again.
 //!
 //! `Ready` is set only after rendering is complete, and the raw
-//! completed match is dropped afterwards.
+//! completed match is dropped afterwards. The ready case keeps the
+//! published bytes of the match: they are the match's one
+//! representation, and the routes serve them as they are.
 //!
 //! The service does not use any wait or notify primitive: callers read
 //! state, and the state map's lock is never held across an await point.
@@ -418,10 +420,10 @@ fn run_and_render(
             drop(completed);
             // The published bytes are kept with the ready state: a
             // caller that is told the match is ready reads the
-            // manifest's bytes and a segment's bytes from there.
+            // manifest's bytes and a segment's bytes from there. The
+            // rendered manifest and the segment list are dropped: the
+            // published bytes are the match's one representation.
             MatchState::Ready {
-                manifest: Arc::new(rendered.manifest),
-                segments: Arc::from(rendered.segments),
                 published: Arc::new(rendered.published),
             }
         }

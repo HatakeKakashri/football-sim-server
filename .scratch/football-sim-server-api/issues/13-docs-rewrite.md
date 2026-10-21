@@ -2,7 +2,7 @@
 
 **What to build:** Documentation matches the new API. PRD section 10 describes the endpoints, the status matrix, the 60-second segment rule per half (replacing the 36,000-tick segment invariant and the end-to-end test that asserted it), caching rules and the manifest fields. The glossary gains terms for the HTTP layer: match service, manifest, segment, build id and runner. `AGENTS.md` reflects the new test layers.
 
-It also records guidance for the unbuilt frontend: the recovery rule when a segment returns 409 after a server restart (POST, poll the manifest until ready, retry); a sliding window of about three segments either side, parsed in a worker into typed arrays; the revisit triggers for the wire format (real gzipped total above 5 MB, or parse time or retained heap breaking the client's budget); and what is deferred until leagues (CDN with `public` caching, TTL and eviction, shared storage, fixture listing endpoint, brotli).
+It also points to the sample payloads from ticket 12 and records that the `POST` bearer token must never ship in browser code (call `POST` from a server-side layer, or leave the token unset for local use), that the frontend learns match ids (m-0001 to m-0003) from configuration because a listing endpoint is deferred, and the guidance for the unbuilt frontend: the recovery rule when a segment returns 409 after a server restart (POST, poll the manifest until ready, retry); a sliding window of about three segments either side, parsed in a worker into typed arrays; the revisit triggers for the wire format (real gzipped total above 5 MB, or parse time or retained heap breaking the client's budget); and what is deferred until leagues (CDN with `public` caching, TTL and eviction, shared storage, fixture listing endpoint, brotli).
 
 **Blocked by:** 
 
@@ -15,6 +15,7 @@ It also records guidance for the unbuilt frontend: the recovery rule when a segm
 - [ ] `AGENTS.md` describes the render, service, HTTP and real-match test layers.
 - [ ] The client recovery rule, retention guidance, wire-format revisit triggers and deferred items are written down.
 - [ ] If ticket 07 was closed as won't-do, no 503 transient row remains in the docs.
+- [ ] The docs link the sample manifest and segment payloads and state the browser-token and match-id rules.
 
 ## How to execute
 

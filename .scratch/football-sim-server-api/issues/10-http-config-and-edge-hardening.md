@@ -1,6 +1,6 @@
 # 10: Split transport config from store config and harden the edges
 
-**What to build:** Transport settings live in one `HttpConfig` (bind address, API token, CORS origins), separate from the service's policy settings (cap, tick cap), so the two can no longer diverge and fixtures stop loading twice in the serve path. The API token comparison becomes constant-time, and the CORS reflection adds `Vary: Origin`.
+**What to build:** Transport settings live in one `HttpConfig` (bind address, API token, CORS origins), separate from the service's policy settings (cap, tick cap), so the two can no longer diverge and fixtures stop loading twice in the serve path. The API token comparison becomes constant-time, and the CORS reflection adds `Vary: Origin`. Responses also expose `Retry-After` and `ETag` to browser scripts through `Access-Control-Expose-Headers`, because a cross-origin `fetch` can otherwise not read them, and the preflight allows the headers the client sends.
 
 **Blocked by:** 
 
@@ -13,6 +13,8 @@
 - [ ] The token comparison is constant-time and has a test for accept and reject.
 - [ ] Responses from the CORS middleware include `Vary: Origin`, with a test.
 - [ ] The new router tests run through the shared middleware.
+- [ ] Responses for an allowed origin include `Access-Control-Expose-Headers` listing `Retry-After` and `ETag`, with a test.
+- [ ] A preflight for `POST` with an `Authorization` header from an allowed origin succeeds, with a test.
 
 ## How to execute
 

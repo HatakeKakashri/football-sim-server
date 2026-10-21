@@ -1,4 +1,5 @@
 pub mod api;
+pub mod app;
 pub mod dispatch;
 pub mod fixtures;
 pub mod harness;

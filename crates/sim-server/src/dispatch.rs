@@ -140,20 +140,14 @@ fn serve(
     api_token: Option<String>,
     cors_origins: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use std::sync::Arc;
-
-    use crate::api::default_concurrency_cap;
-    use crate::api::runner::SimulationRunner;
     use crate::fixtures;
     use crate::http::HttpConfig;
-    use crate::service::MatchService;
 
     let cors_origins: Vec<String> = cors_origins
         .split(',')
         .map(|origin| origin.trim().to_string())
         .filter(|origin| !origin.is_empty())
         .collect();
-    let cap = max_concurrent_sims.unwrap_or_else(default_concurrency_cap);
     let http = HttpConfig {
         bind,
         api_token,
@@ -161,11 +155,10 @@ fn serve(
     };
 
     // Load and validate all fixtures once; every match the service runs
-    // is built from this set.
+    // is built from this set. The assembly itself lives in `crate::app`,
+    // so the real-match end-to-end test runs the same constructor.
     let fixture_set = fixtures::load_default()?;
-    let service = Arc::new(
-        MatchService::new(fixture_set, Arc::new(SimulationRunner)).with_cap(cap),
-    );
+    let service = crate::app::match_service(fixture_set, max_concurrent_sims);
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

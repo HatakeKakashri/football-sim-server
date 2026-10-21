@@ -60,6 +60,7 @@ use sim_core::MatchEvent;
 use super::registry::MatchFixture;
 use super::model::{CompletedMatch, ManifestTeam, MatchFrame, RosterEntry};
 use digest::{build_id, hex, sha256};
+use frame_body::FramesBody;
 use gzip::{compress, decompress};
 use ranges::{SegmentRange, segment_ranges};
 
@@ -67,9 +68,12 @@ pub use gzip::{GZIP_LEVEL, GzipError};
 pub use published::{ManifestBody, PublishedMatch, PublishedSegment};
 
 mod digest;
+mod frame_body;
 mod gzip;
 mod published;
 mod ranges;
+#[cfg(test)]
+mod frame_body_tests;
 #[cfg(test)]
 mod gzip_tests;
 #[cfg(test)]
@@ -243,6 +247,10 @@ pub struct RenderedMatch {
 /// The shape carries the segment's own tick range, the events that
 /// happened inside it and the animation frames it covers. Positions and
 /// ticks are absolute, so a segment can be read on its own.
+///
+/// A frame names its players by their roster index; the body writer
+/// resolves the index back to the fixture id when it writes the frame,
+/// so the bytes on the wire are the bytes the earlier format produced.
 #[derive(Debug, Serialize)]
 struct SegmentBody<'a> {
     /// The segment number.
@@ -260,7 +268,7 @@ struct SegmentBody<'a> {
     /// The events whose tick falls inside the segment.
     events: Vec<&'a MatchEvent>,
     /// The frames whose tick falls inside the segment.
-    frames: Vec<&'a MatchFrame>,
+    frames: FramesBody<'a>,
 }
 
 /// Render a completed match: the manifest plus its 60-second segments.
@@ -380,6 +388,10 @@ impl StoredSegment {
 }
 
 /// Render the body of one segment: its events and its frames.
+///
+/// The frames are written from the captured frames, resolved against
+/// the roster the manifest publishes: the ids are borrowed from the
+/// roster, never copied into the body.
 fn render_body(completed: &CompletedMatch, range: &SegmentRange) -> Vec<u8> {
     let events: Vec<&MatchEvent> = completed
         .events
@@ -402,7 +414,7 @@ fn render_body(completed: &CompletedMatch, range: &SegmentRange) -> Vec<u8> {
         from_tick: range.from_tick,
         to_tick: range.to_tick,
         events,
-        frames,
+        frames: FramesBody::new(&frames, &completed.roster),
     };
     serde_json::to_vec(&body).expect("invariant: a segment body is JSON-serialisable")
 }

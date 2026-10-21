@@ -20,7 +20,8 @@ use sim_math::Vec2;
 
 use super::registry::{MatchFixture, MatchRegistry};
 use super::model::{
-    CompletedMatch, FrameBall, FramePlayer, HalfBoundaries, ManifestTeam, MatchFrame, RosterEntry,
+    CompletedMatch, FrameBall, FrameBallState, FramePlayer, HalfBoundaries, ManifestTeam, MatchFrame,
+    RosterEntry, RosterIndex,
 };
 use crate::fixtures::{FixtureSet, load};
 
@@ -101,6 +102,9 @@ fn pass(seq: u64, tick: u64, clock: &MatchClock) -> MatchEvent {
 }
 
 /// One animation frame at a tick.
+///
+/// The players are named by their roster row: row 0 is the home
+/// keeper, row 1 the away keeper.
 fn frame(tick: u64, half: u8) -> MatchFrame {
     MatchFrame {
         tick,
@@ -108,17 +112,17 @@ fn frame(tick: u64, half: u8) -> MatchFrame {
         ball: FrameBall {
             x: 525,
             y: 340,
-            state: "free".to_string(),
+            state: FrameBallState::Free,
             possessor: None,
         },
         players: vec![
             FramePlayer {
-                id: "test-home-p00".to_string(),
+                roster_index: RosterIndex::new(0),
                 x: 100,
                 y: 200,
             },
             FramePlayer {
-                id: "test-away-p00".to_string(),
+                roster_index: RosterIndex::new(1),
                 x: 900,
                 y: 400,
             },

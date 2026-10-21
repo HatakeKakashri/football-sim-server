@@ -14,6 +14,8 @@ pub mod runner;
 #[cfg(test)]
 mod manifest_tests;
 #[cfg(test)]
+mod memory_tests;
+#[cfg(test)]
 pub(crate) mod render_doubles;
 #[cfg(test)]
 mod render_tests;

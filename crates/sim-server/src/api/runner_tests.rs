@@ -8,7 +8,7 @@
 //! test, so the tests drive the classification around it.
 
 use super::runner::{
-    FailureKind, MatchOutcome, RESOURCE_FAILURE_CODE, ResourceError, copy_string, resource_failure,
+    FailureKind, MatchOutcome, RESOURCE_FAILURE_CODE, ResourceError, resource_failure,
 };
 
 /// A capacity overflow: the reservation cannot be satisfied, and the
@@ -51,12 +51,4 @@ fn a_failed_reservation_names_the_buffer() {
         "the message must name the buffer: {}",
         error.message()
     );
-}
-
-/// The capture copies the text it is given.
-#[test]
-fn the_capture_copies_its_text() {
-    let copied = copy_string("home-p00").expect("invariant: a short string fits in memory");
-
-    assert_eq!(copied, "home-p00");
 }

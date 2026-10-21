@@ -2,8 +2,9 @@
 //!
 //! The runner builds a [`CompletedMatch`] from a simulation; the render
 //! step turns it into a manifest and its immutable segments. Positions
-//! are integer decimetres and ids are the fixture's roster ids, so the
-//! same match always renders the same bytes.
+//! are integer decimetres and the frames name their players by the
+//! manifest's roster index, so the same match always renders the same
+//! bytes.
 
 use serde::{Deserialize, Serialize};
 use sim_core::MatchEvent;
@@ -37,49 +38,127 @@ pub fn to_decimetres(metres: f32) -> i32 {
 
 /// Ball state discriminator on the wire (`free` | `possessed` |
 /// `in_flight` | `dead`, PRD §9.4).
-#[must_use]
-pub const fn ball_state_str(state: sim_components::BallState) -> &'static str {
-    match state {
-        sim_components::BallState::Free => "free",
-        sim_components::BallState::Possessed => "possessed",
-        sim_components::BallState::InFlight => "in_flight",
-        sim_components::BallState::Dead => "dead",
+///
+/// The frame holds the state as a code, not as a string: a string per
+/// frame is one allocation per frame the runner does not need, and the
+/// wire spelling is derived from the code when the body is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameBallState {
+    /// The ball is free to be played.
+    Free,
+    /// A player possesses the ball.
+    Possessed,
+    /// The ball is in flight.
+    InFlight,
+    /// The ball is dead: a restart is pending.
+    Dead,
+}
+
+impl FrameBallState {
+    /// The wire spelling of the state.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Possessed => "possessed",
+            Self::InFlight => "in_flight",
+            Self::Dead => "dead",
+        }
+    }
+}
+
+impl From<sim_components::BallState> for FrameBallState {
+    fn from(state: sim_components::BallState) -> Self {
+        match state {
+            sim_components::BallState::Free => Self::Free,
+            sim_components::BallState::Possessed => Self::Possessed,
+            sim_components::BallState::InFlight => Self::InFlight,
+            sim_components::BallState::Dead => Self::Dead,
+        }
+    }
+}
+
+/// A player's row in the manifest's roster.
+///
+/// The manifest publishes the roster as rows — the home side's players
+/// first, then the away side's — and a frame names its players by the
+/// row they occupy. The index is the mapping between a frame and the
+/// manifest: the manifest's roster row `i` is the player a frame's
+/// index `i` names.
+///
+/// The runner captures the index, never the player's id: an id string
+/// per player per frame is 1,188,066 allocations and 69 MB more
+/// resident memory for one match's frames. The ids live once, in the
+/// roster, and the render step borrows them from there when it writes
+/// the body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RosterIndex(u8);
+
+impl RosterIndex {
+    /// The row of a player in the manifest's roster.
+    #[must_use]
+    pub const fn new(row: u8) -> Self {
+        Self(row)
+    }
+
+    /// The row's position in the manifest's roster, counted from zero.
+    #[must_use]
+    pub const fn position(self) -> u8 {
+        self.0
+    }
+
+    /// The roster row this index names.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the roster has no row at this index, which cannot
+    /// happen for a frame captured against the same roster.
+    #[must_use]
+    pub fn row(self, roster: &[RosterEntry]) -> &RosterEntry {
+        roster
+            .get(usize::from(self.0))
+            .expect("invariant: the roster has a row for every captured index")
     }
 }
 
 /// One 10 Hz animation frame (PRD §9.4): pure positions, no extra
 /// frames at event ticks. Coordinates are integer decimetres.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The frame names its players by their roster index — the row they
+/// occupy in the manifest's roster — so a captured frame holds no
+/// player id string. The render step resolves the index back to the
+/// fixture id when it writes the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchFrame {
     /// Global tick of the frame.
     pub tick: u64,
     /// Half in progress when the frame was captured.
     pub half: u8,
-    /// Ball position, state and possessor roster id (if any).
+    /// Ball position, state and possessor (if any).
     pub ball: FrameBall,
-    /// All 22 players: roster id + position.
+    /// All 22 players: roster index + position.
     pub players: Vec<FramePlayer>,
 }
 
 /// Ball projection inside a [`MatchFrame`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameBall {
     /// Ball x in decimetres.
     pub x: i32,
     /// Ball y in decimetres.
     pub y: i32,
-    /// Ball state discriminator.
-    pub state: String,
-    /// Roster id of the possessor, if any.
-    pub possessor: Option<String>,
+    /// Ball state.
+    pub state: FrameBallState,
+    /// The possessor's roster index, if any.
+    pub possessor: Option<RosterIndex>,
 }
 
 /// Player projection inside a [`MatchFrame`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FramePlayer {
-    /// Stable roster id: the fixture's `player_id`, the same id the
-    /// manifest's roster row carries.
-    pub id: String,
+    /// The player's row in the manifest's roster: the manifest's
+    /// roster row `i` is the player this index names.
+    pub roster_index: RosterIndex,
     /// Player x in decimetres.
     pub x: i32,
     /// Player y in decimetres.
@@ -146,7 +225,8 @@ pub struct CompletedMatch {
     pub seed: u64,
     /// Full event log in emission order.
     pub events: Vec<MatchEvent>,
-    /// 10 Hz frames in tick order.
+    /// 10 Hz frames in tick order. Every frame names its players by
+    /// their roster index.
     pub frames: Vec<MatchFrame>,
     /// 22 roster rows: home rows first, then away rows, each in the
     /// fixture's roster order.

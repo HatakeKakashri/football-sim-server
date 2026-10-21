@@ -2,14 +2,15 @@
 //!
 //! The manifest must describe the fixture that actually ran: each side's
 //! formation, mentality and tactic come from the fixture, the roster
-//! rows are the fixture's own players, and the player ids in the frames
-//! are the manifest's roster ids.
+//! rows are the fixture's own players, and the frames name the players
+//! by the manifest's roster rows.
 
 use std::path::{Path, PathBuf};
 
+use sim_components::{Player, PlayerIdentity, Position};
 use sim_core::Simulation;
 
-use super::model::{CompletedMatch, HalfBoundaries};
+use super::model::{CompletedMatch, HalfBoundaries, to_decimetres};
 use super::registry::MatchFixture;
 use super::render::render_match;
 use super::runner::{build_roster, capture_frame, manifest_teams};
@@ -256,8 +257,14 @@ fn manifest_roster_lists_the_fixture_players_by_roster_index() {
     assert_eq!(roster[11].1, "away");
 }
 
+/// The frame names the manifest's roster rows: the manifest's roster
+/// row `i` is the player the frame's index `i` names, for both sides,
+/// for every committed fixture.
+///
+/// The frame holds no player id string — it holds the row — so the
+/// mapping from a frame to the manifest is what this pins.
 #[test]
-fn frame_player_ids_are_the_manifest_roster_ids() {
+fn frame_players_name_the_manifest_roster_rows() {
     let set = committed_fixtures();
 
     for match_id in ["m-0001", "m-0002", "m-0003"] {
@@ -268,19 +275,135 @@ fn frame_player_ids_are_the_manifest_roster_ids() {
             &fixture.away_team,
         );
         let roster = build_roster(&sim, &fixture);
-        let frame = capture_frame(&sim, &roster.ids).expect("invariant: the frame fits in memory");
+        let frame = capture_frame(&sim, &roster).expect("invariant: the frame fits in memory");
 
-        let mut frame_ids: Vec<String> = frame.players.iter().map(|p| p.id.clone()).collect();
-        let mut roster_ids: Vec<String> = roster.entries.iter().map(|e| e.id.clone()).collect();
-        frame_ids.sort();
-        roster_ids.sort();
+        // Every roster row is named exactly once.
+        let mut rows: Vec<u8> = frame
+            .players
+            .iter()
+            .map(|player| player.roster_index.position())
+            .collect();
+        rows.sort_unstable();
+        let expected_rows: Vec<u8> = (0..u8::try_from(roster.entries.len()).expect(
+            "invariant: a roster of two squads fits in u8",
+        ))
+        .collect();
+        assert_eq!(
+            rows, expected_rows,
+            "{match_id}: the frame must name every roster row exactly once"
+        );
 
-        assert_eq!(frame_ids, roster_ids, "{match_id}: the frame names the manifest's players");
-        assert!(
-            frame_ids.iter().all(|id| !id.starts_with("e-")),
-            "{match_id}: no frame may carry an invented id"
+        // Every player carries the roster row that names it: the row
+        // is the one that carries the player's fixture id on its own
+        // side. A mirror match has the same ids on both sides, so the
+        // side is what tells the two rows apart.
+        for entity in sim.world().iter_entities() {
+            let (Some(identity), Some(_player)) =
+                (entity.get::<PlayerIdentity>(), entity.get::<Player>())
+            else {
+                continue;
+            };
+            let row = roster
+                .rows
+                .get(&entity.id().to_bits())
+                .expect("invariant: every fixture player carries a roster entry");
+            assert_eq!(
+                roster.entries[usize::from(row.position())].id, identity.id,
+                "{match_id}: a player's roster row must be the row that carries its id"
+            );
+        }
+
+        // Row `i` names the player the manifest's row `i` names: the
+        // home side's rows come first, in the world's spawn order,
+        // which is the fixture's player order.
+        let expected_ids = roster_ids_in_row_order(&sim);
+        assert_eq!(
+            expected_ids.len(),
+            roster.entries.len(),
+            "{match_id}: the roster must have a row per player"
+        );
+        for player in &frame.players {
+            let row = usize::from(player.roster_index.position());
+            assert_eq!(
+                roster.entries[row].id, expected_ids[row],
+                "{match_id}: roster row {row} must name the player the frame's index names"
+            );
+        }
+    }
+}
+
+/// A frame names the player whose position the frame reports.
+///
+/// The frame holds no id — it holds the roster row — so the id comes
+/// from the manifest's roster. The check ties the two together: the
+/// player the frame puts at a position is the player the world has
+/// there.
+#[test]
+fn a_frame_names_the_player_at_the_position_it_reports() {
+    let set = committed_fixtures();
+
+    for match_id in ["m-0001", "m-0002", "m-0003"] {
+        let fixture = fixture_for(&set, match_id);
+        let sim = Simulation::new_from_fixture(
+            &fixture.validated_match,
+            &fixture.home_team,
+            &fixture.away_team,
+        );
+        let roster = build_roster(&sim, &fixture);
+        let frame = capture_frame(&sim, &roster).expect("invariant: the frame fits in memory");
+
+        // The world's players: where they stand and who they are.
+        let mut world: Vec<(i32, i32, String)> = Vec::new();
+        for entity in sim.world().iter_entities() {
+            let (Some(identity), Some(position)) =
+                (entity.get::<PlayerIdentity>(), entity.get::<Position>())
+            else {
+                continue;
+            };
+            world.push((
+                to_decimetres(position.0.x),
+                to_decimetres(position.0.y),
+                identity.id.clone(),
+            ));
+        }
+        world.sort();
+
+        // The frame's players: where the frame puts them and who the
+        // roster says they are.
+        let mut framed: Vec<(i32, i32, String)> = frame
+            .players
+            .iter()
+            .map(|player| {
+                let row = usize::from(player.roster_index.position());
+                (player.x, player.y, roster.entries[row].id.clone())
+            })
+            .collect();
+        framed.sort();
+
+        assert_eq!(
+            framed, world,
+            "{match_id}: the frame must name the player it puts at each position"
         );
     }
+}
+
+/// The manifest's roster ids in row order: the home side's players
+/// first, then the away side's, each in the world's spawn order.
+///
+/// The world's spawn order is the fixture's player order (pinned by
+/// `world_spawn_order_matches_the_fixture_player_order`), so the
+/// n-th player of a side is the n-th row of that side.
+fn roster_ids_in_row_order(sim: &Simulation) -> Vec<String> {
+    let mut ids: Vec<String> = spawned_players(sim, "home")
+        .iter()
+        .map(|(_, id)| (*id).to_string())
+        .collect();
+    ids.extend(
+        spawned_players(sim, "away")
+            .iter()
+            .map(|(_, id)| (*id).to_string()),
+    );
+    ids
 }
 
 /// One side's players in world spawn order, as `(roster index, id)`.

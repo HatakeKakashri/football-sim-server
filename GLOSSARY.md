@@ -252,8 +252,9 @@ from `Entity::to_bits()` (the fixture `player_id` string is carried by
 **PlayerIdentity** — `sim_components::PlayerIdentity`, a per-player
 `Component`: the fixture's `player_id` and the player's index in its side's
 fixture roster. Inserted by `sim_core::Simulation::new_from_fixture`, so the
-API's manifest and frames name players by their fixture id (PRD §9.1) instead
-of an id invented from the spawn order.
+API's manifest names players by their fixture id (PRD §9.1) instead of an id
+invented from the spawn order. A captured frame names them by their **roster**
+row instead, and the segment body spells the fixture id back out.
 
 **PlayerProfile** — `sim_components::PlayerProfile`: 30 validated attribute
 slots (PRD §6); goalkeeper vs outfield defaults.
@@ -288,6 +289,13 @@ tick.
 **transient failure** waits before a later start may try the match again. A
 start inside the window reports the failure with the remaining wait; a start
 after it schedules the match again, exactly like a fresh start.
+
+**roster** — The manifest's list of the 22 players of a match: one row per
+fixture player, home rows first then away rows, each in the fixture's roster
+order. The row is what a captured frame names its players by
+(`sim_server::api::model::RosterIndex`): the manifest's roster row `i` is the
+player a frame's index `i` names, and the segment body spells the fixture id
+back out of it.
 
 **RuleEvent** — `sim_components::RuleEvent`: `OutOfBounds`, `Goal`,
 `KickoffRestart`, `HalfTimeStart`, `FullTimeStart`, `Foul`. Emitted as
@@ -375,10 +383,12 @@ the wire format is due for a revisit. Reproduce with
 **transient failure** — `sim_server::api::runner::FailureKind::Transient`. A
 resource failure: the run could not get a resource it needed. Today the one
 catchable source is the memory for the animation frames
-(`RESOURCE_FAILURE_CODE`): a full match's frame capture holds ~145 MB
-resident, so a host under memory pressure cannot serve it. The pressure belongs
-to the host, not to the match, so the failure carries a **retry window**
-instead of being cached forever. Contrast with **deterministic failure**.
+(`RESOURCE_FAILURE_CODE`): a full match's frame capture holds ~62 MB
+resident (it held ~143 MB before a frame named its players by their **roster**
+row instead of their fixture id), so a host under memory pressure cannot serve
+it. The pressure belongs to the host, not to the match, so the failure carries
+a **retry window** instead of being cached forever. Contrast with
+**deterministic failure**.
 
 ## U
 

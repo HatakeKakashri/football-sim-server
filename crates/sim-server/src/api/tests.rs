@@ -6,6 +6,7 @@
 use sim_core::Simulation;
 
 use super::default_concurrency_cap;
+use super::model::{FrameBall, FrameBallState, FramePlayer};
 use super::registry::MatchRegistry;
 use super::runner::{MatchOutcome, build_roster, capture_frame, run_match_blocking};
 
@@ -55,7 +56,25 @@ fn frame_capture_runs_every_sixth_tick_with_22_players() {
     );
     let roster = build_roster(&sim, &fixture);
     assert_eq!(roster.entries.len(), 22);
-    let frame = capture_frame(&sim, &roster.ids).expect("invariant: the frame fits in memory");
+    let frame = capture_frame(&sim, &roster).expect("invariant: the frame fits in memory");
     assert_eq!(frame.players.len(), 22);
-    assert_eq!(frame.ball.state, "free");
+    assert_eq!(frame.ball.state, FrameBallState::Free);
+}
+
+/// A captured frame names its players by their roster row, so it holds
+/// no player id string.
+///
+/// The sizes are the proxy: a frame player that carried an id string
+/// would be at least as big as a `String`, and a frame ball that
+/// carried the state's string would be as big as two of them.
+#[test]
+fn a_captured_frame_holds_no_player_id_string() {
+    assert!(
+        size_of::<FramePlayer>() < size_of::<String>(),
+        "a frame player must hold a roster row, not an id string"
+    );
+    assert!(
+        size_of::<FrameBall>() < size_of::<String>() * 2,
+        "a frame ball must hold a state code and a roster row, not strings"
+    );
 }

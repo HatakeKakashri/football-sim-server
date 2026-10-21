@@ -6,7 +6,6 @@ use sim_components::{
 };
 use sim_math::Vec2;
 use sim_physics::SimRng;
-use sim_physics::PLAYER_MAX_ACCEL_PER_TICK;
 use smallvec::smallvec;
 
 use crate::execution::player_action_execution_system;

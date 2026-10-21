@@ -354,8 +354,8 @@ pub fn ball_physics_system(
     }
 
     // Update ball state based on velocity (single writer: ResMut<Ball>).
-    /// Threshold for InFlight -> Free transition. Lower = ball becomes
-    /// InFlight at lower speeds. 0.05 m/tick = 3 m/s (10.8 km/h).
+    // Threshold for `InFlight` -> `Free` transition. Lower = ball becomes
+    // `InFlight` at lower speeds. 0.05 m/tick = 3 m/s (10.8 km/h).
     if vel.0.length() > 0.05 {
         ball.state = sim_components::BallState::InFlight;
     } else if ball.possessor.is_some() {

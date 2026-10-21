@@ -24,7 +24,7 @@ use sim_components::{
     pass_error_spread,
 };
 use sim_math::{Tuning, Vec2};
-use sim_physics::{KICK_SPEED_DRIBBLE, KICK_SPEED_PASS, KICK_SPEED_SHOT, PLAYER_MAX_ACCEL_PER_TICK, SimRng};
+use sim_physics::{KICK_SPEED_DRIBBLE, KICK_SPEED_PASS, KICK_SPEED_SHOT};
 use sim_rules::{CurrentTick, PendingRuleOutcome, PendingPassState, PendingShotState};
 use sim_telemetry::TelemetryConfig;
 
@@ -32,9 +32,9 @@ use sim_telemetry::TelemetryConfig;
 /// process and could otherwise collide on `(tick, from_pid)`; the atomic
 static NEXT_PASS_FLOW_ID: AtomicU64 = AtomicU64::new(1);
 ///
-/// Runs after `player_action_execution_system` in the same `Execution` set
-/// (so it sees this tick's resolved intent and velocity) and before the
-/// `Physics` set integrates the ball's velocity into its position.
+/// Runs after `player_action_execution_system`, before `Physics`.
+///
+/// (so it sees this tick's resolved intent and velocity)
 ///
 /// Clears `ball.possessor` on every kick so the ball goes properly loose
 /// (`BallState::InFlight`) rather than getting stuck reporting `Possessed`

@@ -116,10 +116,6 @@ impl Intent {
     #[must_use]
     pub fn kick(&self, perception: &PerceptionSnapshot, player_vel: Vec2) -> Option<Vec2> {
         let player_pos = perception.self_position;
-        let nearest_teammate_pos = || -> Option<Vec2> {
-            closest_by_distance(&perception.nearby_teammates)
-                .map(|t| t.relative_position + player_pos)
-        };
 
         match self {
             Self::Movement(MovementIntent::ChaseBall) => Some(player_vel.normalized()),
@@ -141,8 +137,7 @@ impl Intent {
                             .partial_cmp(&b_goal_dist)
                             .unwrap_or(std::cmp::Ordering::Equal)
                     })
-                    .map(|t| t.relative_position + player_pos)
-                    .unwrap_or(perception.ball_position);
+                    .map_or(perception.ball_position, |t| t.relative_position + player_pos);
                 let dir = best_target - player_pos;
                 Some(dir.normalized())
             }

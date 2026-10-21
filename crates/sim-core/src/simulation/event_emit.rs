@@ -48,7 +48,6 @@ use sim_physics::SimRng;
 use sim_rules::{PendingOutOfBounds, PendingRuleOutcome};
 use sim_components::shot_pipeline::shot_accuracy;
 
-use super::SimulationSet;
 use super::events::{
     CrossOutcome, EventLog, HeaderKind, HeaderOutcome, PossessionChangeCause, RestartKind,
     attribute_goal, build_cross_event, build_goal_event, build_header_event,
@@ -801,51 +800,4 @@ pub fn emit_oob_and_restart_events(
     // Clear so the next emitter run is a no-op until the next OOB
     // restart. Defensive: leave the resource cleared if the run
     // was somehow re-entered (Bevy schedules a single run per tick).
-}
-
-/// Register the event-emission systems into the simulation
-/// schedule. Called from `construct::register_systems`.
-pub fn register_event_systems(schedule: &mut Schedule) {
-    // Pass-event resolution and possession_change emission both
-    // run in the `Rules` set, after the rule writers have settled
-    // their signals. The order is:
-    // 1. `out_of_bounds_system` (writes `PendingOutOfBounds`)
-    // 2. `possession_resolution_system` (sets `Ball.possessor`)
-    // 3. `restart_system` (consumes OOB, stashes `RuleOutcome.oob_restart`;
-    //    consumes post-goal kickoff, stashes `RuleOutcome.kickoff`)
-    // 4. `goal_detection_system` (credits the score, stashes
-    //    `RuleOutcome.goal`)
-    // 5. `resolve_shot_events` (reads `RuleOutcome.goal` +
-    //    `RuleOutcome.oob_restart` + `Ball`; emits `shot`, then `save`)
-    // 6. `emit_goal_events` (reads `RuleOutcome.goal`; emits `goal`, then
-    //    `possession_change` with cause `goal`)
-    // 7. `emit_kickoff_restart_events` (drains `RuleOutcome.kickoff`;
-    //    emits `kickoff` with `reason = after_goal`)
-    // 8. `emit_oob_and_restart_events` (drains `RuleOutcome.oob_restart`)
-    // 9. `emit_possession_change_on_oob` / `..._on_acquisition`
-    // 10. `resolve_pass_events` (reads `RuleOutcome.pass` and
-    //    `RuleOutcome.goal`; drains `RuleOutcome.pass` and clears
-    //    `RuleOutcome.goal` last).
-    //
-    // Shot/goal ordering is causal: the resolving `shot` (+ `save`)
-    // precedes the `goal` it produced. The OOB+restart pair is
-    // emitted back-to-back (one step produces `out_of_bounds` at seq
-    // N, then `restart` at seq N+1) to satisfy the ticket 09 ordering
-    // invariant. Possession_change follows wherever it falls — its
-    // placement is irrelevant to that invariant.
-    schedule.add_systems(
-        (
-            resolve_shot_events,
-            emit_goal_events,
-            emit_kickoff_restart_events,
-            emit_tackle_events,
-            emit_cross_header_events,
-            emit_oob_and_restart_events,
-            emit_possession_change_on_oob,
-            emit_possession_change_on_acquisition,
-            resolve_pass_events,
-        )
-            .chain()
-            .in_set(SimulationSet::Rules),
-    );
 }

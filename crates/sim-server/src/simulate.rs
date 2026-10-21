@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use sim_core::{Simulation, Termination, TickHook, run_match_driver, TICK_CAP};
 use sim_telemetry::TraceMetadata;
-use tracing_subscriber::EnvFilter;
 
 use crate::telemetry_cli::{TraceOptions, plan_trace};
 
@@ -153,7 +152,6 @@ pub fn run_simulate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sim_core::Simulation;
 
     #[test]
     fn test_simulate_runs() {

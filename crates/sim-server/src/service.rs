@@ -440,6 +440,9 @@ fn run_and_render(
             let rendered = render_match(fixture, &completed);
             // The raw completed match is dropped now that it is rendered.
             drop(completed);
+            // The published bytes are dropped with the rendered match:
+            // the ready case carries the manifest and the segments
+            // until the published match joins it.
             MatchState::Ready {
                 manifest: Arc::new(rendered.manifest),
                 segments: Arc::from(rendered.segments),

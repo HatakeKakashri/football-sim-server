@@ -22,15 +22,21 @@
 //!
 //! # Storage
 //!
-//! A rendered segment is stored gzipped. Each segment is compressed as
-//! it is rendered and its uncompressed bytes are dropped immediately,
-//! so the render step's extra memory is about one segment rather than
-//! the whole uncompressed match. Only the compressed bytes (shared
-//! between clones, never mutated) and the uncompressed SHA-256 are
-//! kept.
+//! A rendered segment is stored gzipped, and its uncompressed bytes
+//! are published beside it (see the publishing section below). Both are
+//! shared between clones and never mutated, so serving a segment costs
+//! no copy of either.
 //!
 //! A client that does not accept gzip is served the decompressed bytes
 //! on demand; see [`RenderedSegment::decompress`].
+//!
+//! # Publishing
+//!
+//! A rendered match is published as immutable bytes: the manifest's
+//! answer body and every segment's body, indexed by segment number.
+//! The bytes are produced once, at render time, and are never derived
+//! again, so a served manifest is a copy of bytes rather than a value
+//! re-serialised per request. See [`PublishedMatch`].
 //!
 //! # Identity
 //!
@@ -49,21 +55,25 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use sim_components::time::{HALF_LENGTH_TICKS, TICKS_PER_SECOND};
-use sim_components::KickoffReason;
 use sim_core::MatchEvent;
 
 use super::registry::MatchFixture;
 use super::model::{CompletedMatch, ManifestTeam, MatchFrame, RosterEntry};
 use digest::{build_id, hex, sha256};
 use gzip::{compress, decompress};
+use ranges::{SegmentRange, segment_ranges};
 
 pub use gzip::{GZIP_LEVEL, GzipError};
+pub use published::{ManifestBody, PublishedMatch, PublishedSegment};
 
 mod digest;
 mod gzip;
+mod published;
+mod ranges;
 #[cfg(test)]
 mod gzip_tests;
+#[cfg(test)]
+mod published_tests;
 
 /// Wire format version of the manifest and the segment bodies.
 ///
@@ -82,12 +92,6 @@ pub const SEGMENT_TICKS: u64 = 60 * 60;
 /// does not is served the decompressed bytes, so the coding is
 /// negotiated per request and the URL stays the same either way.
 pub const ENCODING_GZIP: &str = "gzip";
-
-/// Display minutes per half (PRD §8.3).
-///
-/// The second half's display minutes continue after the first half's,
-/// so a segment of the second half starts at minute 45.
-const MINUTES_PER_HALF: u64 = HALF_LENGTH_TICKS / (TICKS_PER_SECOND * 60);
 
 /// Pitch dimensions as published in the manifest (PRD §9.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,8 +191,9 @@ pub struct Manifest {
 ///
 /// The body is stored gzipped and shared between clones of the
 /// segment, so serving a segment from several places costs one copy of
-/// the bytes. The uncompressed body is not kept: it is reproduced on
-/// demand by [`RenderedSegment::decompress`].
+/// the bytes. The uncompressed body is published beside it (see
+/// [`PublishedSegment`]) and is reproduced on demand by
+/// [`RenderedSegment::decompress`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedSegment {
     /// The manifest row for this segment.
@@ -206,9 +211,10 @@ impl RenderedSegment {
 
     /// The uncompressed body bytes.
     ///
-    /// The bytes are reproduced on demand, so a client that does not
-    /// accept gzip costs one segment's worth of memory, not a whole
-    /// match's.
+    /// The bytes are reproduced on demand from the stored coding. The
+    /// published match keeps a copy of them too (see
+    /// [`PublishedSegment`]), so a caller that serves the body itself
+    /// does not have to reproduce it.
     ///
     /// # Errors
     ///
@@ -227,23 +233,9 @@ pub struct RenderedMatch {
     pub manifest: Manifest,
     /// The segments, in manifest order.
     pub segments: Vec<RenderedSegment>,
-}
-
-/// The tick range of one segment, before it is rendered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SegmentRange {
-    /// The segment number, counted from zero across the whole match.
-    number: u32,
-    /// The half the segment belongs to.
-    half: u8,
-    /// First global tick of the segment (inclusive).
-    from_tick: u64,
-    /// Last global tick of the segment (inclusive).
-    to_tick: u64,
-    /// Display minute the segment starts in.
-    from_minute: u64,
-    /// Display minute the segment ends in (exclusive).
-    to_minute: u64,
+    /// The published bytes: the manifest's answer body and the
+    /// segments indexed by their number.
+    pub published: PublishedMatch,
 }
 
 /// The published body of one segment.
@@ -276,10 +268,10 @@ struct SegmentBody<'a> {
 /// The step is pure and deterministic: the same fixture and the same
 /// completed match always render the same bytes and the same hashes.
 ///
-/// Each segment is rendered, hashed and compressed in turn, and its
-/// uncompressed bytes are dropped as soon as it is compressed, so the
-/// step's extra memory is about one segment rather than the whole
-/// uncompressed match.
+/// Each segment is rendered, hashed and compressed in turn, and the
+/// result is published as immutable bytes: the manifest's answer body
+/// and every segment's body, indexed by segment number. The bytes are
+/// produced here, once, and are never derived again.
 #[must_use]
 pub fn render_match(fixture: &MatchFixture, completed: &CompletedMatch) -> RenderedMatch {
     let ranges = segment_ranges(completed);
@@ -290,24 +282,27 @@ pub fn render_match(fixture: &MatchFixture, completed: &CompletedMatch) -> Rende
     let hashes: Vec<[u8; 32]> = stored.iter().map(|segment| segment.hash).collect();
     let build_id = build_id(fixture, &hashes);
 
+    let rows: Vec<ManifestSegment> = stored
+        .iter()
+        .map(|segment| ManifestSegment {
+            segment: segment.range.number,
+            half: segment.range.half,
+            from_tick: segment.range.from_tick,
+            to_tick: segment.range.to_tick,
+            url: segment_url(&completed.match_id, &build_id, segment.range.number),
+            encoding: ENCODING_GZIP.to_string(),
+            uncompressed_bytes: segment.uncompressed_bytes,
+            sha256: hex(&segment.hash),
+            gzipped_bytes: Some(segment.gzipped_bytes),
+        })
+        .collect();
+
     let segments: Vec<RenderedSegment> = stored
         .iter()
-        .map(|segment| {
-            let metadata = ManifestSegment {
-                segment: segment.range.number,
-                half: segment.range.half,
-                from_tick: segment.range.from_tick,
-                to_tick: segment.range.to_tick,
-                url: segment_url(&completed.match_id, &build_id, segment.range.number),
-                encoding: ENCODING_GZIP.to_string(),
-                uncompressed_bytes: segment.uncompressed_bytes,
-                sha256: hex(&segment.hash),
-                gzipped_bytes: Some(segment.gzipped_bytes),
-            };
-            RenderedSegment {
-                metadata,
-                gzipped_body: Arc::clone(&segment.body),
-            }
+        .zip(&rows)
+        .map(|(segment, row)| RenderedSegment {
+            metadata: row.clone(),
+            gzipped_body: Arc::clone(&segment.body),
         })
         .collect();
 
@@ -334,13 +329,16 @@ pub fn render_match(fixture: &MatchFixture, completed: &CompletedMatch) -> Rende
             event_count: u64::try_from(completed.events.len()).unwrap_or(u64::MAX),
             state_hash: completed.state_hash,
         },
-        segments: segments
-            .iter()
-            .map(|segment| segment.metadata.clone())
-            .collect(),
+        segments: rows,
     };
 
-    RenderedMatch { manifest, segments }
+    let published = PublishedMatch::publish(&manifest, &stored);
+
+    RenderedMatch {
+        manifest,
+        segments,
+        published,
+    }
 }
 
 /// One segment as it is stored: its range, the hash of its
@@ -356,15 +354,16 @@ struct StoredSegment {
     gzipped_bytes: u64,
     /// The gzipped body, shared between clones.
     body: Arc<[u8]>,
+    /// The uncompressed body, shared between clones.
+    uncompressed_body: Arc<[u8]>,
 }
 
 impl StoredSegment {
-    /// Render one segment, compress it and keep only the compressed
-    /// bytes.
+    /// Render one segment, compress it and keep both bodies.
     ///
-    /// The uncompressed body is dropped as soon as it is compressed:
-    /// the render step never holds more than one segment's worth of
-    /// uncompressed bytes.
+    /// The uncompressed body is kept because it is published: it is
+    /// the body the manifest's hash covers, and the one a client that
+    /// does not accept gzip is served.
     fn render(completed: &CompletedMatch, range: SegmentRange) -> Self {
         let body = render_body(completed, &range);
         let hash = sha256(&body);
@@ -375,93 +374,9 @@ impl StoredSegment {
             uncompressed_bytes: u64::try_from(body.len()).unwrap_or(u64::MAX),
             gzipped_bytes: u64::try_from(gzipped.len()).unwrap_or(u64::MAX),
             body: Arc::from(gzipped),
+            uncompressed_body: Arc::from(body),
         }
     }
-}
-
-/// The tick ranges of every segment of a completed match.
-///
-/// Each half is cut from its own first tick at [`SEGMENT_TICKS`]
-/// boundaries and its last segment runs to the whistle, so no segment
-/// crosses a half boundary. The number of segments follows from the
-/// length of the half: 45 segments for the regular 45 minutes plus
-/// one per added minute.
-fn segment_ranges(completed: &CompletedMatch) -> Vec<SegmentRange> {
-    let first_half_end = completed.boundaries.first_half_end;
-    let second_half_start = second_half_start(completed);
-    let first = cut_half(1, 0, first_half_end, 0, 0);
-    let first_count = u32::try_from(first.len()).unwrap_or(u32::MAX);
-    let second = cut_half(
-        2,
-        second_half_start,
-        completed.boundaries.full_time,
-        first_count,
-        MINUTES_PER_HALF,
-    );
-    first.into_iter().chain(second).collect()
-}
-
-/// Cut one half into 60-second segments.
-///
-/// `start` is the half's first tick and `end` the whistle that ends
-/// it. The segments are cut at [`SEGMENT_TICKS`] boundaries from
-/// `start`; the last one runs to the whistle and absorbs the
-/// remainder, so the half's tick range is covered exactly once.
-fn cut_half(
-    half: u8,
-    start: u64,
-    end: u64,
-    first_number: u32,
-    minute_base: u64,
-) -> Vec<SegmentRange> {
-    let mut ranges = Vec::new();
-    if end < start {
-        return ranges;
-    }
-    let span = end - start;
-    let count = span.div_ceil(SEGMENT_TICKS).max(1);
-    for index in 0..count {
-        let from_tick = start + index * SEGMENT_TICKS;
-        let to_tick = if index + 1 == count {
-            end
-        } else {
-            (from_tick + SEGMENT_TICKS - 1).min(end)
-        };
-        ranges.push(SegmentRange {
-            number: first_number + u32::try_from(index).unwrap_or(u32::MAX),
-            half,
-            from_tick,
-            to_tick,
-            from_minute: minute_base + (from_tick - start) / SEGMENT_TICKS,
-            to_minute: minute_base + (to_tick - start + 1) / SEGMENT_TICKS,
-        });
-    }
-    ranges
-}
-
-/// The tick at which the second half's match clock starts.
-///
-/// The second half begins at its own kickoff, where the clock resets
-/// to zero, so the second half's segments are anchored there and every
-/// one of them covers exactly 60 s of match time. A match whose event
-/// log carries no second-half kickoff falls back to the tick after the
-/// first half's whistle.
-fn second_half_start(completed: &CompletedMatch) -> u64 {
-    let after_whistle = completed.boundaries.first_half_end.saturating_add(1);
-    completed
-        .events
-        .iter()
-        .find_map(|event| match event {
-            MatchEvent::Kickoff { envelope, payload }
-                if payload.reason == KickoffReason::SecondHalf =>
-            {
-                Some(envelope.tick)
-            }
-            _ => None,
-        })
-        // The second half always starts after the first half's whistle,
-        // whatever the event log says.
-        .map_or(after_whistle, |tick| tick.max(after_whistle))
 }
 
 /// Render the body of one segment: its events and its frames.

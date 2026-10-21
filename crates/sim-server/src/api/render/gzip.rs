@@ -1,9 +1,10 @@
 //! The gzip coding of the stored segment bodies (server-API ticket 04).
 //!
 //! Segments are compressed as they are rendered, at the fixed level
-//! [`GZIP_LEVEL`], and only the compressed bytes are kept. A client
-//! that does not accept gzip is served the decompressed bytes, so the
-//! decompressor lives here next to the compressor.
+//! [`GZIP_LEVEL`]. The compressed bytes are kept, and the uncompressed
+//! body is published beside them (see [`super::PublishedSegment`]), so
+//! a client that does not accept gzip is served the decompressed bytes.
+//! The decompressor lives here next to the compressor.
 //!
 //! The level is fixed so the stored bytes are reproducible: the same
 //! body always compresses to the same bytes, on any machine, with any

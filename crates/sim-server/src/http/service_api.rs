@@ -41,6 +41,10 @@
 //! A failed body keeps the wire shape the old error stream used
 //! (`code`, `message`, `last_good_tick`) next to the `state` field.
 //!
+//! The manifest's `ready` state is declared with the body that carries
+//! it, in the render module: the wire format of a manifest body lives
+//! in one place.
+//!
 //! The 200 manifest is the only answer of the start and manifest
 //! routes that may be cached: it carries an `ETag` (the content-derived
 //! build id) and `Cache-Control: no-cache`. Every other answer of
@@ -60,7 +64,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing};
 use serde::Serialize;
 
-use crate::api::render::Manifest;
+use crate::api::render::{Manifest, ManifestBody};
 use crate::http::HttpConfig;
 use crate::service::{MatchService, MatchState, StartError, StartOutcome};
 
@@ -88,9 +92,6 @@ const STATE_QUEUED: &str = "queued";
 
 /// The `state` a response reports for a running match.
 const STATE_RUNNING: &str = "running";
-
-/// The `state` a response reports for a ready match.
-const STATE_READY: &str = "ready";
 
 /// The `state` a response reports for a failed match.
 const STATE_FAILED: &str = "failed";
@@ -146,16 +147,6 @@ struct FailureBody {
     /// the failure is deterministic and is never retried.
     #[serde(skip_serializing_if = "Option::is_none")]
     retry_after_ms: Option<u64>,
-}
-
-/// The body of a 200: the manifest, plus the state that produced it.
-#[derive(Debug, Serialize)]
-struct ManifestBody {
-    /// The manifest, flattened into the body.
-    #[serde(flatten)]
-    manifest: Manifest,
-    /// Always `ready`.
-    state: &'static str,
 }
 
 /// The routes of the match service: start a match, read its manifest,
@@ -294,11 +285,11 @@ fn pending_response(state: &'static str, match_id: &str) -> Response {
 }
 
 /// The 200: the manifest, with the state that produced it.
+///
+/// The body is the render module's own body type, so the wire format
+/// of a manifest lives in one place.
 fn manifest_response(manifest: &Manifest) -> Response {
-    let body = ManifestBody {
-        manifest: manifest.clone(),
-        state: STATE_READY,
-    };
+    let body = ManifestBody::ready(manifest.clone());
     let mut response = (StatusCode::OK, Json(body)).into_response();
     // The build id is a digest of the rendered content, so it is a
     // strong validator for the manifest.

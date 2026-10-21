@@ -302,6 +302,7 @@ fn rendered_stream_bodies_are_byte_identical() {
         events: Vec::new(),
         frames: Vec::new(),
         roster: Vec::new(),
+        teams: Vec::new(),
         score: (2, 1),
         state_hash: 99,
         added_time_ticks: (300, 420),
@@ -361,8 +362,17 @@ fn short_run_fails_on_tick_cap_with_last_good_tick() {
 
 #[test]
 fn frame_capture_runs_every_sixth_tick_with_22_players() {
-    let sim = Simulation::new(42);
-    let roster = build_roster(&sim);
+    let fixture = MatchRegistry::single_test("m-0000", 42)
+        .fixtures
+        .into_values()
+        .next()
+        .expect("test fixture");
+    let sim = Simulation::new_from_fixture(
+        &fixture.validated_match,
+        &fixture.home_team,
+        &fixture.away_team,
+    );
+    let roster = build_roster(&sim, &fixture);
     assert_eq!(roster.entries.len(), 22);
     let frame = capture_frame(&sim, &roster.ids);
     assert_eq!(frame.players.len(), 22);

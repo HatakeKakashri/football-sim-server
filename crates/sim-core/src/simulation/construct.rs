@@ -8,7 +8,8 @@ use sim_ai_player::{
     player_decision_system, tackle_recovery_system,
 };
 use sim_components::{
-    PerceptionSnapshot, PitchBounds, PlayerProfile, RoleComponent, Skill, Stamina, TacticParameters,
+    PerceptionSnapshot, PitchBounds, PlayerIdentity, PlayerProfile, RoleComponent, Skill, Stamina,
+    TacticParameters,
 };
 use sim_physics::{
     apply_kick_velocity_system, ball_physics_system, pitch_control_system, player_movement_system,
@@ -594,6 +595,13 @@ impl Simulation {
             world
                 .entity_mut(player_entity)
                 .insert(fixture_player.profile);
+            // Ticket 02: carry the fixture's own identity on the entity, so
+            // consumers name the player by its fixture `player_id` instead of
+            // an id invented from the spawn order (PRD §9.1).
+            world.entity_mut(player_entity).insert(PlayerIdentity::from_fixture_player(
+                fixture_player,
+                slot_index,
+            ));
             // Store the fixture's trained positions so the execution hot
             // path can compute the per-player fit multiplier (PRD §6.5).
             world
@@ -689,6 +697,13 @@ impl Simulation {
             world
                 .entity_mut(player_entity)
                 .insert(fixture_player.profile);
+            // Ticket 02: carry the fixture's own identity on the entity, so
+            // consumers name the player by its fixture `player_id` instead of
+            // an id invented from the spawn order (PRD §9.1).
+            world.entity_mut(player_entity).insert(PlayerIdentity::from_fixture_player(
+                fixture_player,
+                slot_index,
+            ));
             // Store the fixture's trained positions so the execution hot
             // path can compute the per-player fit multiplier (PRD §6.5).
             world

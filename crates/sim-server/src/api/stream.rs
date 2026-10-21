@@ -16,6 +16,12 @@ use sim_core::MatchEvent;
 /// Ticks per 10-minute segment: `10 min × 60 s × 60 ticks`.
 pub const SEGMENT_TICKS: u64 = 10 * 60 * 60;
 
+/// The home side, as published on the wire.
+pub const SIDE_HOME: &str = "home";
+
+/// The away side, as published on the wire.
+pub const SIDE_AWAY: &str = "away";
+
 /// One SSE message: the `id` is the message index the client sends
 /// back as `Last-Event-ID` to resume after message *n* (PRD §10.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,8 +203,8 @@ pub struct FrameBall {
 /// Player projection inside a [`StreamFrame`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FramePlayer {
-    /// Stable roster id (`p-home-00` … `p-away-10`; provisional
-    /// until Phase 3 fixtures mint real `player_id`s).
+    /// Stable roster id: the fixture's `player_id`, the same id the
+    /// manifest's roster row carries.
     pub id: String,
     /// Player x in decimetres.
     pub x: i32,
@@ -209,16 +215,51 @@ pub struct FramePlayer {
 /// One roster row published in the manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RosterEntry {
-    /// Stable roster id.
+    /// Stable roster id: the fixture's `player_id`.
     pub id: String,
     /// Team side (`home` | `away`).
     pub team: String,
-    /// Provisional display name (fixture names land in Phase 3).
+    /// Display name from the fixture.
     pub name: String,
-    /// Squad number 1–11.
+    /// Squad number from the fixture.
     pub number: u8,
     /// Formation slot (`GK`, `DC`, …).
     pub position: String,
+}
+
+/// One side's lineup setup as published in the manifest (PRD §10.2).
+///
+/// The three values come from the fixture's per-side setup
+/// (`[match.home_setup]` / `[match.away_setup]`, PRD §5.4), so the
+/// manifest describes the match that actually ran instead of a
+/// hardcoded default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestTeam {
+    /// Side (`home` | `away`).
+    pub id: String,
+    /// Formation name, e.g. `4-3-3`.
+    pub formation: String,
+    /// Mentality name, e.g. `attack`.
+    pub mentality: String,
+    /// Tactic name, e.g. `counter_attack`.
+    pub tactic: String,
+}
+
+impl ManifestTeam {
+    /// Build the manifest row for one side from the fixture's setup.
+    ///
+    /// The setup's spellings are the fixture's own (PRD §5.4), so the
+    /// published names round-trip through `Formation::from_name` and
+    /// friends.
+    #[must_use]
+    pub fn from_setup(side: &str, setup: &sim_components::fixture::ValidatedSide) -> Self {
+        Self {
+            id: side.to_string(),
+            formation: setup.formation.name().to_string(),
+            mentality: setup.mentality.name().to_string(),
+            tactic: setup.tactic.name().to_string(),
+        }
+    }
 }
 
 /// A completed match: everything [`build_stream`] needs. Built by
@@ -233,8 +274,11 @@ pub struct CompletedMatch {
     pub events: Vec<MatchEvent>,
     /// 10 Hz frames in tick order.
     pub frames: Vec<StreamFrame>,
-    /// 22 roster rows in id order.
+    /// 22 roster rows: home rows first, then away rows, each in the
+    /// fixture's roster order.
     pub roster: Vec<RosterEntry>,
+    /// The two sides' lineup setups, home first.
+    pub teams: Vec<ManifestTeam>,
     /// Final score `(home, away)`.
     pub score: (u8, u8),
     /// Deterministic state hash at full time.
@@ -276,10 +320,7 @@ pub fn build_stream(completed: &CompletedMatch) -> Vec<SseMessage> {
         data: serde_json::json!({
             "match_id": completed.match_id,
             "seed": completed.seed,
-            "teams": [
-                {"id": "home", "formation": "4-4-2", "mentality": "balance", "tactic": "possession"},
-                {"id": "away", "formation": "4-4-2", "mentality": "balance", "tactic": "possession"},
-            ],
+            "teams": completed.teams,
             "roster": completed.roster,
             "pitch": {"length": 1050, "width": 680, "unit": "decimetres"},
             "ticks_per_second": 60,

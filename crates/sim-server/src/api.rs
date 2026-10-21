@@ -27,6 +27,8 @@ pub mod stream;
 #[cfg(test)]
 mod failure_tests;
 #[cfg(test)]
+mod manifest_tests;
+#[cfg(test)]
 pub(crate) mod test_doubles;
 #[cfg(test)]
 mod tests;

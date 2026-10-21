@@ -36,6 +36,47 @@ pub struct Team {
     attack_direction: i8,
 }
 
+/// Fixture identity of a player entity (PRD §5.4 roster).
+///
+/// PRD §9.1: *"Players are identified by stable fixture `player_id`,
+/// never by engine entity ids."* The component carries that identity
+/// on the entity, so a consumer (the API's manifest and the frames it
+/// publishes) can name a player without inventing an id from the spawn
+/// order.
+///
+/// It is inserted when the match is built from fixture data
+/// (`sim_core::Simulation::new_from_fixture`); a world built from
+/// placeholders has no fixture players to name.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct PlayerIdentity {
+    /// The fixture's `player_id` (e.g. `"p-alpha-01"`).
+    pub id: String,
+    /// The player's index in its side's fixture roster (0–10).
+    pub roster_index: u8,
+}
+
+impl PlayerIdentity {
+    /// Build the identity of a fixture player.
+    ///
+    /// `roster_index` is the player's index in its side's fixture roster
+    /// (0–10); the fixture's `player_id` is the id itself.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `roster_index` does not fit in a `u8`, which cannot
+    /// happen for a validated squad of eleven players.
+    #[must_use]
+    pub fn from_fixture_player(
+        player: &crate::fixture::ValidatedPlayer,
+        roster_index: usize,
+    ) -> Self {
+        Self {
+            id: player.id.clone(),
+            roster_index: u8::try_from(roster_index).expect("invariant: a squad has 11 players"),
+        }
+    }
+}
+
 /// Tag component: maps an entity to a team id.
 #[derive(Component, Debug, Clone)]
 pub struct TeamIdComponent(pub TeamId);

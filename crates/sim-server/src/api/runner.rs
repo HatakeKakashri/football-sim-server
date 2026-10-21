@@ -8,12 +8,12 @@
 
 use std::collections::HashMap;
 
-use sim_components::{Ball, FormationSlot, Match, MatchClock, Player, Position, Team};
+use sim_components::{Ball, Match, MatchClock, Player, PlayerIdentity, Position, Team};
 use sim_core::{EventLog, MatchEvent, Simulation, Termination, TickHook, run_match_driver};
 
 use super::stream::{
-    CompletedMatch, FrameBall, FramePlayer, HalfBoundaries, RosterEntry, StreamFrame,
-    ball_state_str, to_decimetres,
+    CompletedMatch, FrameBall, FramePlayer, HalfBoundaries, ManifestTeam, RosterEntry, SIDE_AWAY,
+    SIDE_HOME, StreamFrame, ball_state_str, to_decimetres,
 };
 /// Result of running one match to completion on its OS thread.
 #[derive(Debug)]
@@ -140,7 +140,7 @@ pub fn run_match_blocking(
         &fixture.away_team,
     );
     let attack_start = attack_directions(&sim);
-    let roster = build_roster(&sim);
+    let roster = build_roster(&sim, fixture);
     let match_id = fixture.validated_match.id.clone();
     let seed = fixture.validated_match.seed;
 
@@ -228,6 +228,7 @@ pub fn run_match_blocking(
         events,
         frames,
         roster: roster.entries,
+        teams: manifest_teams(fixture),
         score: match_res.score,
         state_hash: sim.get_state_hash(),
         added_time_ticks,
@@ -256,50 +257,76 @@ pub(crate) fn attack_directions(sim: &Simulation) -> (i8, i8) {
     (home_dir, away_dir)
 }
 
-/// Roster built from the live world: players sorted by entity bits,
-/// indexed per team to stable `p-home-NN` / `p-away-NN` ids.
+/// The manifest's per-side lineup setups, taken from the fixture.
+///
+/// The fixture is the source of truth (PRD §5.4): the home and away
+/// setups are published independently, so a match whose sides play
+/// different formations or tactics says so.
+pub(crate) fn manifest_teams(fixture: &crate::api::MatchFixture) -> Vec<ManifestTeam> {
+    vec![
+        ManifestTeam::from_setup(SIDE_HOME, &fixture.validated_match.home_setup),
+        ManifestTeam::from_setup(SIDE_AWAY, &fixture.validated_match.away_setup),
+    ]
+}
+
+/// Roster published in the manifest: one row per fixture player, in the
+/// fixture's roster order, plus the entity → roster id map the frames
+/// use.
 pub(crate) struct Roster {
     pub(crate) entries: Vec<RosterEntry>,
     pub(crate) ids: HashMap<u64, String>,
 }
 
-pub(crate) fn build_roster(sim: &Simulation) -> Roster {
-    let mut players: Vec<(u64, sim_components::TeamId, String)> = Vec::new();
+/// Build the roster from the fixture.
+///
+/// The rows are the fixture's own players — their `player_id`, name and
+/// squad number — in the fixture's roster order, and each row's
+/// position is the formation slot the player occupies (the fixture's
+/// formation table at the player's roster index).
+///
+/// The entity → id map comes from the world's [`PlayerIdentity`]
+/// components, so a frame names the same player the manifest lists.
+pub(crate) fn build_roster(sim: &Simulation, fixture: &crate::api::MatchFixture) -> Roster {
+    let mut entries = side_roster(
+        SIDE_HOME,
+        &fixture.home_team,
+        &fixture.validated_match.home_setup,
+    );
+    entries.extend(side_roster(
+        SIDE_AWAY,
+        &fixture.away_team,
+        &fixture.validated_match.away_setup,
+    ));
+
+    let mut ids = HashMap::with_capacity(entries.len());
     for entity in sim.world().iter_entities() {
-        if let Some(player) = entity.get::<Player>() {
-            let slot = entity
-                .get::<FormationSlot>()
-                .map_or_else(|| "UNK".to_string(), |slot| format!("{}", slot.position));
-            players.push((entity.id().to_bits(), player.team_id, slot));
+        if let Some(identity) = entity.get::<PlayerIdentity>() {
+            ids.insert(entity.id().to_bits(), identity.id.clone());
         }
     }
-    players.sort_by_key(|(bits, _, _)| *bits);
-    let mut home_seen = 0_u8;
-    let mut away_seen = 0_u8;
-    let mut entries = Vec::with_capacity(players.len());
-    let mut ids = HashMap::with_capacity(players.len());
-    for (bits, team, slot) in players {
-        let (side, number) = if team == sim_components::TeamId(0) {
-            home_seen += 1;
-            ("home", home_seen)
-        } else {
-            away_seen += 1;
-            ("away", away_seen)
-        };
-        let index = u32::from(number) - 1;
-        let id = format!("p-{side}-{index:02}");
-        let side_name = if side == "home" { "Home" } else { "Away" };
-        entries.push(RosterEntry {
-            id: id.clone(),
-            team: side.to_string(),
-            name: format!("{side_name} {number}"),
-            number,
-            position: slot,
-        });
-        ids.insert(bits, id);
-    }
-    entries.sort_by(|a, b| a.id.cmp(&b.id));
     Roster { entries, ids }
+}
+
+/// One side's roster rows: the fixture's players in roster order.
+fn side_roster(
+    side: &str,
+    team: &sim_components::fixture::ValidatedTeam,
+    setup: &sim_components::fixture::ValidatedSide,
+) -> Vec<RosterEntry> {
+    let slots = setup.formation.table().slots;
+    team.players
+        .iter()
+        .enumerate()
+        .map(|(index, player)| RosterEntry {
+            id: player.id.clone(),
+            team: side.to_string(),
+            name: player.name.clone(),
+            number: player.number,
+            position: slots
+                .get(index)
+                .map_or_else(|| "UNK".to_string(), |slot| slot.position.to_string()),
+        })
+        .collect()
 }
 
 /// Capture one 10 Hz frame: ball + all players in integer decimetres.
@@ -315,22 +342,27 @@ pub(crate) fn capture_frame(sim: &Simulation, roster_ids: &HashMap<u64, String>)
     let possessor = ball
         .possessor
         .and_then(|entity| roster_ids.get(&entity.to_bits()).cloned());
-    let mut players: Vec<FramePlayer> = Vec::new();
+    let mut players: Vec<(u8, FramePlayer)> = Vec::new();
     for entity in world.iter_entities() {
-        if entity.get::<Player>().is_none() {
+        let Some(player) = entity.get::<Player>() else {
             continue;
-        }
+        };
         let bits = entity.id().to_bits();
-        let id = roster_ids.get(&bits).map_or_else(
-            || format!("e-{bits}"),
-            std::clone::Clone::clone,
-        );
+        // Every fixture player carries a `PlayerIdentity`, so a frame
+        // never names a player with an id invented from the entity bits.
+        let id = roster_ids
+            .get(&bits)
+            .expect("invariant: every fixture player carries a PlayerIdentity")
+            .clone();
         let (x, y) = entity.get::<Position>().map_or((0, 0), |pos| {
             (to_decimetres(pos.0.x), to_decimetres(pos.0.y))
         });
-        players.push(FramePlayer { id, x, y });
+        players.push((player.team_id.0, FramePlayer { id, x, y }));
     }
-    players.sort_by(|a, b| a.id.cmp(&b.id));
+    // Sorted by id, then by side: a mirror match puts the same fixture
+    // ids on both sides, and the side breaks the tie deterministically.
+    players.sort_by(|left, right| left.1.id.cmp(&right.1.id).then(left.0.cmp(&right.0)));
+    let players = players.into_iter().map(|(_, player)| player).collect();
     let half = world
         .get_resource::<MatchClock>()
         .map_or(1, |clock| clock.half);

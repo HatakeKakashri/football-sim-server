@@ -194,7 +194,14 @@ per-cell attacker-win probability; rebuilt each tick by `pitch_control_system`.
 **Player** — `sim_components::Player` component: `team_id`, `intent`.
 
 **PlayerId** — `sim_components::PlayerId(u64)`: stable player identity minted
-from `Entity::to_bits()` (fixture `player_id` pending per PRD §9.1).
+from `Entity::to_bits()` (the fixture `player_id` string is carried by
+`PlayerIdentity`).
+
+**PlayerIdentity** — `sim_components::PlayerIdentity`, a per-player
+`Component`: the fixture's `player_id` and the player's index in its side's
+fixture roster. Inserted by `sim_core::Simulation::new_from_fixture`, so the
+API's manifest and frames name players by their fixture id (PRD §9.1) instead
+of an id invented from the spawn order.
 
 **PlayerProfile** — `sim_components::PlayerProfile`: 30 validated attribute
 slots (PRD §6); goalkeeper vs outfield defaults.

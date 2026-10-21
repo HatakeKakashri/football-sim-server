@@ -3,7 +3,7 @@
 //! Shared by the store-level failure tests and the HTTP-level failure
 //! test, so both drive the same scripted behaviour.
 
-use super::runner::{MatchOutcome, MatchRunner};
+use super::runner::{MatchOutcome, MatchRunner, manifest_teams};
 use super::spawn::{OsThreadSpawner, SpawnError, ThreadSpawner};
 use super::stream::{CompletedMatch, HalfBoundaries};
 use super::MatchFixture;
@@ -20,19 +20,20 @@ impl MatchRunner for ScriptedRunner {
             "injected runner panic for {}",
             fixture.validated_match.id
         );
-        MatchOutcome::Finished(completed_match(&fixture.validated_match.id))
+        MatchOutcome::Finished(completed_match(fixture))
     }
 }
 
 /// A finished match with no events and no frames: enough to build the
 /// 12-message stream the API serves.
-pub fn completed_match(match_id: &str) -> CompletedMatch {
+pub fn completed_match(fixture: &MatchFixture) -> CompletedMatch {
     CompletedMatch {
-        match_id: match_id.to_string(),
-        seed: 42,
+        match_id: fixture.match_id.clone(),
+        seed: fixture.validated_match.seed,
         events: Vec::new(),
         frames: Vec::new(),
         roster: Vec::new(),
+        teams: manifest_teams(fixture),
         score: (0, 0),
         state_hash: 1,
         added_time_ticks: (0, 0),

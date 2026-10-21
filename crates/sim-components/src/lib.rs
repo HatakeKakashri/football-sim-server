@@ -39,8 +39,8 @@ pub use ball_touch::{
 };
 pub use command::{CommandError, ManagerCommand};
 pub use components::{
-    BallMarker, Player, Position, RoleComponent, Skill, Stamina, TackleRecovery, Team,
-    TeamIdComponent, Velocity,
+    BallMarker, Player, PlayerIdentity, Position, RoleComponent, Skill, Stamina, TackleRecovery,
+    Team, TeamIdComponent, Velocity,
 };
 pub use enums::{
     CardColor, Formation, MatchState, Mentality, Role, StrengthMode, Tactic,

@@ -12,6 +12,11 @@
 //! plain one — is decided by one shared rule, not per route; it lives
 //! in the `content_negotiation` module.
 //!
+//! Whether a client revalidates what it already holds is decided by one
+//! shared rule as well; it lives in the `conditional` module. Only the
+//! manifest route revalidates: a segment's bytes never change behind
+//! their URL, so there is nothing to revalidate there.
+//!
 //! Security (PRD §4):
 //! - `POST` requires `Authorization: Bearer <token>` when
 //!   [`HttpConfig::api_token`] is set; missing/invalid tokens get 401.
@@ -33,6 +38,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 
 mod auth;
+pub(crate) mod conditional;
 pub(crate) mod content_negotiation;
 pub mod service_api;
 

@@ -26,6 +26,7 @@ use crate::test_support::{
 
 mod cors;
 mod matrix;
+mod revalidation;
 mod routes;
 mod segments;
 

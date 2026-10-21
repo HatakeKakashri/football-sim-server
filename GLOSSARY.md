@@ -282,6 +282,14 @@ radius).
 turns a fixture plus a completed match into a manifest and a list of
 segments. Same input, same bytes, every time.
 
+**revalidation** — `sim_server::http::conditional`. A client that asks whether
+what it already holds is still current: it sends the validator it has in
+`If-None-Match`, and the server answers `304` when that validator names the
+resource's current one. The manifest is the only revalidatable resource: its
+validator is the `ETag: "<build_id>"` the 200 carries, and the comparison is
+the weak one (RFC 9110 §13.1.2), so a weak `W/` validator and a list of
+validators both match.
+
 **Resource** — Bevy ECS singleton (`Match`, `Ball`, `MatchClock`, `SimRng`, …).
 Contrast with `Component`.
 

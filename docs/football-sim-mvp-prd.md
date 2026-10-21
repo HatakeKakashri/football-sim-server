@@ -446,17 +446,21 @@ The match service has three routes. A match is simulated and rendered once, in f
 | queued | `202` + `Retry-After` | `202` + `Retry-After` | `409` `not_ready` |
 | running | `202` + `Retry-After` | `202` + `Retry-After` | `409` `not_ready` |
 | ready | `200` + manifest | `200` + manifest | `200` + segment |
+| ready, revalidated | `200` + manifest | `304`, no body | `200` + segment |
 | failed, deterministic | `500` | `500` | `409` `not_ready` |
 | failed, transient | `503` + `Retry-After` | `503` + `Retry-After` | `409` `not_ready` |
 | missing/invalid token on `POST` | `401` | — | — |
 
 The segment route has one more row: a ready match answers an unknown build id or unknown segment number with `404` (`no_segment`). A stored body that cannot be decompressed answers `500` (`broken`).
 
+One more row of the matrix is a condition on the request rather than a state of the match: a `GET /manifest` whose `If-None-Match` names the manifest's current validator is answered with `304` and no body, because the client already holds those bytes. The comparison is the weak one (RFC 9110 §13.1.2), so a weak `W/` validator and a list of validators both match; a client that names no validator, or names another one, is answered with the whole manifest. Only a ready match has a manifest to revalidate — every other state keeps its answer — and only the manifest route revalidates: `POST /start` always answers with the manifest.
+
 Every JSON body carries a `state` field. The values are `queued`, `running`, `ready`, `failed`, `not_started`, `not_ready`, `no_segment`, `unknown`, `unauthorized` and `broken`.
 
 | Response | Body |
 |---|---|
 | `200` on start/manifest | the manifest (below) flattened with `state: "ready"` |
+| `304` | none; the client already holds the manifest |
 | `202` | `{ state, match_id, retry_after_ms }`; `Retry-After` is 1 second and the body repeats the wait for cross-origin `fetch` |
 | `409` | `{ state, match_id, message }` |
 | `401` | `{ state: "unauthorized", match_id, message }` |
@@ -505,7 +509,7 @@ A segment covers 60 seconds of match time: `SEGMENT_TICKS = 3,600`. Each half is
 
 - The same fixture (seed, rosters, setups) on the same binary and platform produces the same `build_id`, the same manifest bytes and byte-identical uncompressed segment bodies. Gzip uses a fixed level and the pure-Rust backend, but a segment's identity and the build id are computed over the uncompressed body, so compression never changes a URL or a hash.
 - A segment URL is immutable: the build id changes when the rendered bytes change, so an old URL never returns new content. Segment `200`s carry `Cache-Control: private, max-age=31536000, immutable` and `Vary: Accept-Encoding`; the body is `private`, not `public`, until a CDN exists.
-- The manifest `200` carries `ETag: "<build_id>"` and `Cache-Control: no-cache`, so a client may revalidate it; every other answer of the start and manifest routes is `no-store`.
+- The manifest `200` carries `ETag: "<build_id>"` and `Cache-Control: no-cache`, and a client that revalidates it is answered rather than merely permitted: a `GET /manifest` whose `If-None-Match` names that validator gets `304` and no body, carrying the same `ETag` and the same `Cache-Control: no-cache`. The comparison is the weak one (RFC 9110 §13.1.2), so a weak `W/` validator and a list of validators both match. Every other answer of the start and manifest routes is `no-store`.
 - The ready result lives in memory for the life of the process. There is no TTL, no eviction and no `410` path. A process restart forgets every rendered match: its manifest and segments answer `404`/`409` until the client starts it again.
 - Deterministic failures are cached like successes, so retries are stable. A transient failure is retried only after its retry window.
 

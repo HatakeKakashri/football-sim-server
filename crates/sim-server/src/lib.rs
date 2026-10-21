@@ -4,6 +4,7 @@ pub mod fixtures;
 pub mod harness;
 pub mod http;
 pub mod simulate;
+pub mod service;
 pub mod telemetry_cli;
 pub mod trace_filter;
 

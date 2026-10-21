@@ -20,12 +20,33 @@
 //! tick. The half-time break between the two halves is not match time
 //! and belongs to no segment.
 //!
+//! # Storage
+//!
+//! A rendered segment is stored gzipped. Each segment is compressed as
+//! it is rendered and its uncompressed bytes are dropped immediately,
+//! so the render step's extra memory is about one segment rather than
+//! the whole uncompressed match. Only the compressed bytes (shared
+//! between clones, never mutated) and the uncompressed SHA-256 are
+//! kept.
+//!
+//! A client that does not accept gzip is served the decompressed bytes
+//! on demand; see [`RenderedSegment::decompress`].
+//!
+//! # Identity
+//!
+//! A segment's identity is its *uncompressed* SHA-256, never its
+//! compressed bytes: the manifest's `sha256` and the [`Manifest::build_id`]
+//! are computed over the uncompressed bodies, so changing the
+//! compression level never changes a URL or a build id.
+//!
 //! # Build id
 //!
 //! [`Manifest::build_id`] is a content digest: SHA-256 over the
 //! fixture's contents, the format version and every segment's hash. It
 //! changes whenever the rendered bytes change and depends on nothing
 //! else (no crate version, no git hash — neither exists here).
+
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sim_components::time::{HALF_LENGTH_TICKS, TICKS_PER_SECOND};
@@ -35,8 +56,14 @@ use sim_core::MatchEvent;
 use super::registry::MatchFixture;
 use super::stream::{CompletedMatch, ManifestTeam, RosterEntry, StreamFrame};
 use digest::{build_id, hex, sha256};
+use gzip::{compress, decompress};
+
+pub use gzip::{GZIP_LEVEL, GzipError};
 
 mod digest;
+mod gzip;
+#[cfg(test)]
+mod gzip_tests;
 
 /// Wire format version of the manifest and the segment bodies.
 ///
@@ -48,12 +75,13 @@ pub const FORMAT_VERSION: u32 = 1;
 /// Ticks per segment: 60 s of match time at 60 ticks per second.
 pub const SEGMENT_TICKS: u64 = 60 * 60;
 
-/// The content coding of the published segment bodies.
+/// The content coding of the stored segment bodies.
 ///
-/// The bodies are published as rendered: plain JSON, no compression.
-/// Ticket 04 stores them pre-gzipped and fills the manifest's gzipped
-/// byte length.
-pub const ENCODING_IDENTITY: &str = "identity";
+/// The bodies are stored gzipped, at the fixed level [`GZIP_LEVEL`]. A
+/// client that accepts gzip is served the stored bytes; a client that
+/// does not is served the decompressed bytes, so the coding is
+/// negotiated per request and the URL stays the same either way.
+pub const ENCODING_GZIP: &str = "gzip";
 
 /// Display minutes per half (PRD §8.3).
 ///
@@ -117,8 +145,8 @@ pub struct ManifestSegment {
     pub sha256: String,
     /// Length of the gzipped body in bytes.
     ///
-    /// Always `null` for now: the segments are published uncompressed
-    /// and ticket 04 stores them pre-gzipped.
+    /// Always populated: the body is stored gzipped, so the transfer
+    /// budget is known before a client asks for anything.
     pub gzipped_bytes: Option<u64>,
 }
 
@@ -157,12 +185,40 @@ pub struct Manifest {
 }
 
 /// One rendered segment: the manifest row plus the body it describes.
+///
+/// The body is stored gzipped and shared between clones of the
+/// segment, so serving a segment from several places costs one copy of
+/// the bytes. The uncompressed body is not kept: it is reproduced on
+/// demand by [`RenderedSegment::decompress`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedSegment {
     /// The manifest row for this segment.
     pub metadata: ManifestSegment,
+    /// The gzipped body bytes.
+    pub gzipped_body: Arc<[u8]>,
+}
+
+impl RenderedSegment {
+    /// The stored gzipped bytes.
+    #[must_use]
+    pub fn gzipped_bytes(&self) -> &[u8] {
+        &self.gzipped_body
+    }
+
     /// The uncompressed body bytes.
-    pub body: Vec<u8>,
+    ///
+    /// The bytes are reproduced on demand, so a client that does not
+    /// accept gzip costs one segment's worth of memory, not a whole
+    /// match's.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GzipError`] when the stored bytes are not a valid
+    /// gzip stream, which cannot happen for a segment this module
+    /// rendered.
+    pub fn decompress(&self) -> Result<Vec<u8>, GzipError> {
+        decompress(&self.gzipped_body)
+    }
 }
 
 /// A rendered match: the manifest and the segments it lists.
@@ -221,35 +277,38 @@ struct SegmentBody<'a> {
 ///
 /// The step is pure and deterministic: the same fixture and the same
 /// completed match always render the same bytes and the same hashes.
+///
+/// Each segment is rendered, hashed and compressed in turn, and its
+/// uncompressed bytes are dropped as soon as it is compressed, so the
+/// step's extra memory is about one segment rather than the whole
+/// uncompressed match.
 #[must_use]
 pub fn render_match(fixture: &MatchFixture, completed: &CompletedMatch) -> RenderedMatch {
     let ranges = segment_ranges(completed);
-    let bodies: Vec<Vec<u8>> = ranges
+    let stored: Vec<StoredSegment> = ranges
         .iter()
-        .map(|range| render_body(completed, range))
+        .map(|range| StoredSegment::render(completed, *range))
         .collect();
-    let hashes: Vec<[u8; 32]> = bodies.iter().map(|body| sha256(body)).collect();
+    let hashes: Vec<[u8; 32]> = stored.iter().map(|segment| segment.hash).collect();
     let build_id = build_id(fixture, &hashes);
 
-    let segments: Vec<RenderedSegment> = ranges
+    let segments: Vec<RenderedSegment> = stored
         .iter()
-        .zip(bodies.iter())
-        .zip(hashes.iter())
-        .map(|((range, body), hash)| {
+        .map(|segment| {
             let metadata = ManifestSegment {
-                segment: range.number,
-                half: range.half,
-                from_tick: range.from_tick,
-                to_tick: range.to_tick,
-                url: segment_url(&completed.match_id, &build_id, range.number),
-                encoding: ENCODING_IDENTITY.to_string(),
-                uncompressed_bytes: u64::try_from(body.len()).unwrap_or(u64::MAX),
-                sha256: hex(hash),
-                gzipped_bytes: None,
+                segment: segment.range.number,
+                half: segment.range.half,
+                from_tick: segment.range.from_tick,
+                to_tick: segment.range.to_tick,
+                url: segment_url(&completed.match_id, &build_id, segment.range.number),
+                encoding: ENCODING_GZIP.to_string(),
+                uncompressed_bytes: segment.uncompressed_bytes,
+                sha256: hex(&segment.hash),
+                gzipped_bytes: Some(segment.gzipped_bytes),
             };
             RenderedSegment {
                 metadata,
-                body: body.clone(),
+                gzipped_body: Arc::clone(&segment.body),
             }
         })
         .collect();
@@ -284,6 +343,42 @@ pub fn render_match(fixture: &MatchFixture, completed: &CompletedMatch) -> Rende
     };
 
     RenderedMatch { manifest, segments }
+}
+
+/// One segment as it is stored: its range, the hash of its
+/// uncompressed body and the gzipped bytes themselves.
+struct StoredSegment {
+    /// The segment's tick range and numbering.
+    range: SegmentRange,
+    /// SHA-256 of the uncompressed body.
+    hash: [u8; 32],
+    /// Length of the uncompressed body in bytes.
+    uncompressed_bytes: u64,
+    /// Length of the gzipped body in bytes.
+    gzipped_bytes: u64,
+    /// The gzipped body, shared between clones.
+    body: Arc<[u8]>,
+}
+
+impl StoredSegment {
+    /// Render one segment, compress it and keep only the compressed
+    /// bytes.
+    ///
+    /// The uncompressed body is dropped as soon as it is compressed:
+    /// the render step never holds more than one segment's worth of
+    /// uncompressed bytes.
+    fn render(completed: &CompletedMatch, range: SegmentRange) -> Self {
+        let body = render_body(completed, &range);
+        let hash = sha256(&body);
+        let gzipped = compress(&body);
+        Self {
+            range,
+            hash,
+            uncompressed_bytes: u64::try_from(body.len()).unwrap_or(u64::MAX),
+            gzipped_bytes: u64::try_from(gzipped.len()).unwrap_or(u64::MAX),
+            body: Arc::from(gzipped),
+        }
+    }
 }
 
 /// The tick ranges of every segment of a completed match.

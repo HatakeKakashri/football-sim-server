@@ -114,6 +114,22 @@ half attack direction, not last touch.
 
 **GLOSSARY.md** — This file; the domain language for this codebase.
 
+**gzip** — `sim_server::api::render::gzip`. The coding the segment
+bodies are stored in: gzip at the fixed level `GZIP_LEVEL` (6), through
+the pure-Rust backend, so the stored bytes never depend on the
+platform's zlib. The level is a constant, not a knob.
+
+**gzipped_body** — `sim_server::api::render::RenderedSegment::gzipped_body`.
+The stored body of a segment: the gzip bytes, shared between clones
+(`Arc<[u8]>`) and never mutated. The uncompressed body is not kept;
+`RenderedSegment::decompress` reproduces it on demand for a client
+that does not accept gzip.
+
+**gzipped_bytes** — `sim_server::api::render::ManifestSegment::gzipped_bytes`.
+The length of the stored gzip bytes, published per segment in the
+manifest: the transfer cost of a match is known from the manifest
+alone, before a client asks for a byte.
+
 ## H
 
 **half-time** — `MatchState::HalfTime`. Transition driven by
@@ -147,8 +163,9 @@ buffered through `PendingBallTouches`.
 describes a rendered match: its metadata (match id, seed, teams, roster, pitch
 dimensions, tick rates, attack direction), the end-of-match summary under
 `result`, the wire format version, the `build_id`, and one row per segment
-(number, half, tick range, immutable URL, encoding, byte length, SHA-256).
-Replaces the SSE `manifest` message of the old stream.
+(number, half, tick range, immutable URL, encoding, uncompressed byte length,
+gzipped byte length, SHA-256). Replaces the SSE `manifest` message of the old
+stream.
 
 **Match** — `sim_components::Match`, a `Resource`: id, team entities, score,
 state, seed. Source of truth for match score/state.
@@ -257,7 +274,9 @@ Standards gotcha on deferred commands.
 slice of match time (3,600 ticks), cut from a half's own first tick. The last
 segment of a half runs to the whistle and absorbs the remainder, so no
 segment crosses a half boundary. A half yields 45 segments plus one per
-added minute; the count always comes from the match.
+added minute; the count always comes from the match. Its body is stored
+gzipped (`gzipped_body`); its identity is the SHA-256 of the *uncompressed*
+body, never of the compressed bytes.
 
 **Simulation / SimulationSet** — `sim_core::Simulation`: owns `World` +
 `Schedule` + `tick()`. `SimulationSet` = the seven ordered phases.
@@ -299,6 +318,12 @@ detect `FullTime`).
 
 **TouchKind** — `sim_components::TouchKind`: `Restart` (placement) or `Play`
 (active kick/possession).
+
+**transfer budget** — The 5 MB a whole match's gzipped segments must fit
+in. Measured on m-0001 (110 segments, 110 minutes of match time): 6.5 MB
+gzipped, 137.2 MB uncompressed, a 4.7% ratio — **over** the budget, so
+the wire format is due for a revisit. Reproduce with
+`cargo test --release -p sim-server --lib -- --ignored a_real_match_reports --nocapture`.
 
 ## U
 

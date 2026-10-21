@@ -4,6 +4,12 @@
 //! segmentation's boundary cases — the segment edges, the half-time
 //! whistle, the break and the full-time whistle — land on exact,
 //! readable ticks.
+//!
+//! The committed fixtures live here too, so both render test modules
+//! resolve them the same way: from this crate's manifest directory,
+//! never from the working directory.
+
+use std::path::{Path, PathBuf};
 
 use sim_components::time::HALF_LENGTH_TICKS;
 use sim_components::{KickoffReason, MatchClock, PlayerId, TeamId};
@@ -16,6 +22,36 @@ use super::registry::{MatchFixture, MatchRegistry};
 use super::stream::{
     CompletedMatch, FrameBall, FramePlayer, HalfBoundaries, ManifestTeam, RosterEntry, StreamFrame,
 };
+use crate::fixtures::{FixtureSet, load};
+
+/// The committed fixtures, resolved from this crate's manifest
+/// directory so a test does not depend on the working directory.
+pub fn committed_fixtures() -> FixtureSet {
+    let dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    load(&dir).expect("committed fixtures must load")
+}
+
+/// One committed match fixture with both validated teams.
+pub fn committed_fixture(set: &FixtureSet, match_id: &str) -> MatchFixture {
+    let validated_match = set
+        .matches
+        .get(match_id)
+        .unwrap_or_else(|| panic!("committed match fixture {match_id} must exist"));
+    let home_team = set
+        .teams
+        .get(&validated_match.home)
+        .unwrap_or_else(|| panic!("home team of {match_id} must exist"));
+    let away_team = set
+        .teams
+        .get(&validated_match.away)
+        .unwrap_or_else(|| panic!("away team of {match_id} must exist"));
+    MatchFixture {
+        match_id: match_id.to_string(),
+        validated_match: validated_match.clone(),
+        home_team: home_team.clone(),
+        away_team: away_team.clone(),
+    }
+}
 
 /// Ticks between the first half's whistle and the second half's kickoff.
 pub const BREAK_TICKS: u64 = 18;

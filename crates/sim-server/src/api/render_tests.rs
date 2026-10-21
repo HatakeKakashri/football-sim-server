@@ -5,14 +5,12 @@
 //! whenever the rendered bytes change, so the rendered shape cannot
 //! drift unnoticed.
 
-use std::path::{Path, PathBuf};
-
 use super::render::{FORMAT_VERSION, SEGMENT_TICKS, RenderedMatch, render_match};
 use super::render_doubles::{
-    FIRST_WHISTLE, FULL_TIME, SECOND_KICKOFF, fixture, full_length_match, hand_built_match,
+    FIRST_WHISTLE, FULL_TIME, SECOND_KICKOFF, committed_fixture, committed_fixtures, fixture,
+    full_length_match, hand_built_match,
 };
-use super::registry::{MatchFixture, MatchRegistry};
-use crate::fixtures::{FixtureSet, load};
+use super::registry::MatchRegistry;
 
 /// The pinned SHA-256 of every segment of the hand-built match.
 ///
@@ -32,8 +30,9 @@ fn event_ticks_per_segment(rendered: &RenderedMatch) -> Vec<Vec<u64>> {
         .segments
         .iter()
         .map(|segment| {
+            let body = segment.decompress().expect("a stored segment decompresses");
             let body: serde_json::Value =
-                serde_json::from_slice(&segment.body).expect("a segment body is JSON");
+                serde_json::from_slice(&body).expect("a segment body is JSON");
             body["events"]
                 .as_array()
                 .expect("a segment body lists its events")
@@ -54,8 +53,9 @@ fn frame_ticks_per_segment(rendered: &RenderedMatch) -> Vec<Vec<u64>> {
         .segments
         .iter()
         .map(|segment| {
+            let body = segment.decompress().expect("a stored segment decompresses");
             let body: serde_json::Value =
-                serde_json::from_slice(&segment.body).expect("a segment body is JSON");
+                serde_json::from_slice(&body).expect("a segment body is JSON");
             body["frames"]
                 .as_array()
                 .expect("a segment body lists its frames")
@@ -68,35 +68,6 @@ fn frame_ticks_per_segment(rendered: &RenderedMatch) -> Vec<Vec<u64>> {
                 .collect()
         })
         .collect()
-}
-
-/// The committed fixtures, resolved from this crate's manifest
-/// directory so the test does not depend on the working directory.
-fn committed_fixtures() -> FixtureSet {
-    let dir: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
-    load(&dir).expect("committed fixtures must load")
-}
-
-/// One committed match fixture with both validated teams.
-fn committed_fixture(set: &FixtureSet, match_id: &str) -> MatchFixture {
-    let validated_match = set
-        .matches
-        .get(match_id)
-        .unwrap_or_else(|| panic!("committed match fixture {match_id} must exist"));
-    let home_team = set
-        .teams
-        .get(&validated_match.home)
-        .unwrap_or_else(|| panic!("home team of {match_id} must exist"));
-    let away_team = set
-        .teams
-        .get(&validated_match.away)
-        .unwrap_or_else(|| panic!("away team of {match_id} must exist"));
-    MatchFixture {
-        match_id: match_id.to_string(),
-        validated_match: validated_match.clone(),
-        home_team: home_team.clone(),
-        away_team: away_team.clone(),
-    }
 }
 
 #[test]
@@ -291,10 +262,11 @@ fn the_manifest_lists_the_build_id_format_version_and_every_segment_row() {
         assert_eq!(row.half, segment.metadata.half);
         assert_eq!(row.from_tick, segment.metadata.from_tick);
         assert_eq!(row.to_tick, segment.metadata.to_tick);
-        assert_eq!(row.encoding, "identity");
+        assert_eq!(row.encoding, "gzip");
         assert_eq!(
             row.uncompressed_bytes,
-            u64::try_from(segment.body.len()).expect("a body length fits in u64")
+            u64::try_from(segment.decompress().expect("a stored segment decompresses").len())
+                .expect("a body length fits in u64")
         );
         assert_eq!(row.sha256.len(), 64);
         assert!(
@@ -306,18 +278,6 @@ fn the_manifest_lists_the_build_id_format_version_and_every_segment_row() {
             row.url.ends_with(&format!("/{}.json", row.segment)),
             "the segment URL embeds the segment number: {}",
             row.url
-        );
-    }
-}
-
-#[test]
-fn the_gzipped_byte_length_is_not_populated_yet() {
-    let rendered = render_match(&fixture(), &hand_built_match());
-
-    for segment in &rendered.manifest.segments {
-        assert_eq!(
-            segment.gzipped_bytes, None,
-            "ticket 04 fills the gzipped byte length"
         );
     }
 }
@@ -360,7 +320,10 @@ fn rendering_the_same_input_twice_is_byte_identical() {
     assert_eq!(first.manifest.build_id, second.manifest.build_id);
     assert_eq!(first.manifest, second.manifest);
     for (left, right) in first.segments.iter().zip(&second.segments) {
-        assert_eq!(left.body, right.body, "the rendered bytes are identical");
+        assert_eq!(
+            left.gzipped_body, right.gzipped_body,
+            "the stored bytes are identical"
+        );
         assert_eq!(left.metadata.sha256, right.metadata.sha256);
     }
 }

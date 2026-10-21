@@ -27,6 +27,7 @@ use crate::test_support::{
 
 mod matrix;
 mod routes;
+mod segments;
 
 /// A counter of the runs of the runner under a row.
 type RunCounter = Arc<dyn Fn() -> u32 + Send + Sync>;

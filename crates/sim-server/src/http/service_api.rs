@@ -1,24 +1,32 @@
-//! The match service's HTTP surface: start a match, read its manifest.
+//! The match service's HTTP surface: start a match, read its manifest,
+//! read its segments.
 //!
-//! Two routes, both driven by the [`MatchService`] (server-API ticket
-//! 08):
+//! Three routes, all driven by the [`MatchService`] (server-API tickets
+//! 08 and 09):
 //!
 //! - `POST /match/{match_id}/start` starts the match and reports what
 //!   the start did.
 //! - `GET /match/{match_id}/manifest` reads the manifest of a match
 //!   that has already started. It never starts work.
+//! - `GET /match/{match_id}/segments/{build_id}/{segment}` reads one
+//!   segment of a ready match from the immutable URL the manifest
+//!   publishes. It never starts work either.
 //!
 //! # The status matrix
 //!
-//! | Match state | `POST /start` | `GET /manifest` |
-//! |---|---|---|
-//! | unknown fixture | 404 | 404 |
-//! | not started | 202 (queued or running) | 409 `{state: not_started}` |
-//! | queued | 202 | 202 + `Retry-After` |
-//! | running | 202 | 202 + `Retry-After` |
-//! | ready | 200 + manifest | 200 + manifest |
-//! | failed, deterministic | 500 | 500 |
-//! | failed, transient | 503 + `Retry-After` | 503 + `Retry-After` |
+//! | Match state | `POST /start` | `GET /manifest` | `GET /segment` |
+//! |---|---|---|---|
+//! | unknown fixture | 404 | 404 | 404 |
+//! | not started | 202 (queued or running) | 409 `{state: not_started}` | 409 `{state: not_ready}` |
+//! | queued | 202 | 202 + `Retry-After` | 409 |
+//! | running | 202 | 202 + `Retry-After` | 409 |
+//! | ready | 200 + manifest | 200 + manifest | 200 + the segment |
+//! | failed, deterministic | 500 | 500 | 409 |
+//! | failed, transient | 503 + `Retry-After` | 503 + `Retry-After` | 409 |
+//!
+//! A ready match answers a segment request for an unknown build id or
+//! an unknown segment number with 404; see [`segments`] for the
+//! segment route's own matrix.
 //!
 //! # Bodies and headers
 //!
@@ -33,9 +41,15 @@
 //! A failed body keeps the wire shape the old error stream used
 //! (`code`, `message`, `last_good_tick`) next to the `state` field.
 //!
-//! The 200 manifest is the only answer that may be cached: it carries
-//! an `ETag` (the content-derived build id) and `Cache-Control:
-//! no-cache`. Every other answer is `no-store`.
+//! The 200 manifest is the only answer of the start and manifest
+//! routes that may be cached: it carries an `ETag` (the content-derived
+//! build id) and `Cache-Control: no-cache`. Every other answer of
+//! those routes is `no-store`.
+//!
+//! The segment route is the exception: a segment's bytes never change
+//! behind their URL, so its 200 carries `Cache-Control: private,
+//! max-age=31536000, immutable` and `Vary: Accept-Encoding`. See
+//! [`segments`].
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -48,6 +62,8 @@ use serde::Serialize;
 
 use crate::api::render::Manifest;
 use crate::service::{MatchService, MatchState, StartError, StartOutcome};
+
+mod segments;
 
 #[cfg(test)]
 mod tests;
@@ -142,7 +158,8 @@ struct ManifestBody {
     state: &'static str,
 }
 
-/// The routes of the match service: start a match, read its manifest.
+/// The routes of the match service: start a match, read its manifest,
+/// read its segments.
 ///
 /// The routes live beside the legacy SSE routes and do not disturb
 /// them; see [`crate::http::router_with_service`].
@@ -152,6 +169,10 @@ pub fn routes(state: MatchApiState) -> Router {
         .route(
             "/match/{match_id}/manifest",
             routing::get(get_manifest_handler),
+        )
+        .route(
+            "/match/{match_id}/segments/{build_id}/{segment}",
+            routing::get(segments::get_segment_handler),
         )
         .with_state(state)
 }

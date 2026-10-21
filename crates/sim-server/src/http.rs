@@ -9,10 +9,11 @@
 //!   index is at or beyond the final message, 404 unknown id, 409
 //!   never `POST`ed, 410 result expired.
 //!
-//! The match service's own routes live beside them (server-API ticket
-//! 08): `POST /match/{match_id}/start` and
-//! `GET /match/{match_id}/manifest`. See [`service_api`] for the
-//! status matrix they implement.
+//! The match service's own routes live beside them (server-API tickets
+//! 08 and 09): `POST /match/{match_id}/start`,
+//! `GET /match/{match_id}/manifest` and
+//! `GET /match/{match_id}/segments/{build_id}/{segment}`. See
+//! [`service_api`] for the status matrix they implement.
 //!
 //! Security (PRD §4):
 //! - `POST` requires `Authorization: Bearer <token>` when

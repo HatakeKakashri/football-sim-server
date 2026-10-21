@@ -57,6 +57,11 @@ segment URL, so a URL is immutable.
 
 ## C
 
+**cacheable segment** — A segment response the browser may keep for a
+year: `Cache-Control: private, max-age=31536000, immutable`. The body is
+private to the client (`private`, not `public`, until a CDN exists) and
+never changes behind its URL, because the URL embeds the `build_id`.
+
 **clock** — See `MatchClock`.
 
 **Component** — Per-entity ECS state (`Player`, `Position`, `Team`, …). Bevy
@@ -286,7 +291,20 @@ segment of a half runs to the whistle and absorbs the remainder, so no
 segment crosses a half boundary. A half yields 45 segments plus one per
 added minute; the count always comes from the match. Its body is stored
 gzipped (`gzipped_body`); its identity is the SHA-256 of the *uncompressed*
-body, never of the compressed bytes.
+body, never of the compressed bytes. Served at
+`GET /match/{match_id}/segments/{build_id}/{number}.json`: 200 with the
+bytes when the match is ready, 409 when it is not (or when the server
+forgot it after a restart), 404 for an unknown match, an unknown build id
+or an unknown segment number.
+
+**segment route** — `sim_server::http::service_api::segments`. The one
+route that serves rendered bytes. It negotiates the coding per request: a
+client that accepts gzip gets the stored gzip bytes with
+`Content-Encoding: gzip`, every other client gets the decompressed
+bytes. Both decode to the same body, whose SHA-256 is the hash the
+manifest publishes, so the URL means the same thing either way. The 200
+carries `Vary: Accept-Encoding`, so a cache keeps the two
+representations apart.
 
 **Simulation / SimulationSet** — `sim_core::Simulation`: owns `World` +
 `Schedule` + `tick()`. `SimulationSet` = the seven ordered phases.

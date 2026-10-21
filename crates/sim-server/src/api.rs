@@ -18,9 +18,12 @@
 //!
 //! Stream layout itself lives in [`stream`](crate::api::stream);
 //! the simulation runner in [`runner`](crate::api::runner); the
-//! OS-thread spawn seam in [`spawn`](crate::api::spawn).
+//! OS-thread spawn seam in [`spawn`](crate::api::spawn); the pure
+//! render step that turns a completed match into a manifest and its
+//! segments in [`render`](crate::api::render).
 
 pub mod registry;
+pub mod render;
 pub mod runner;
 pub mod spawn;
 pub mod stream;
@@ -28,6 +31,10 @@ pub mod stream;
 mod failure_tests;
 #[cfg(test)]
 mod manifest_tests;
+#[cfg(test)]
+pub(crate) mod render_doubles;
+#[cfg(test)]
+mod render_tests;
 #[cfg(test)]
 pub(crate) mod test_doubles;
 #[cfg(test)]

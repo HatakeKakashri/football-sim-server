@@ -48,6 +48,13 @@ the `Ball` Resource.
 via `iter_entities()` + sort in `snapshot.rs`/`state_hash.rs` (known friction;
 see Blueprint on ball discovery).
 
+**build_id** — `sim_server::api::render::Manifest::build_id`. The
+content-derived digest of a rendered match: SHA-256 over the fixture's
+contents, the wire format version and every segment's hash. It changes
+whenever the rendered bytes change and depends on no crate version and no
+git hash (neither exists in this repository). It is embedded in every
+segment URL, so a URL is immutable.
+
 ## C
 
 **clock** — See `MatchClock`.
@@ -136,6 +143,13 @@ buffered through `PendingBallTouches`.
 
 ## M
 
+**manifest** — `sim_server::api::render::Manifest`. The document that
+describes a rendered match: its metadata (match id, seed, teams, roster, pitch
+dimensions, tick rates, attack direction), the end-of-match summary under
+`result`, the wire format version, the `build_id`, and one row per segment
+(number, half, tick range, immutable URL, encoding, byte length, SHA-256).
+Replaces the SSE `manifest` message of the old stream.
+
 **Match** — `sim_components::Match`, a `Resource`: id, team entities, score,
 state, seed. Source of truth for match score/state.
 
@@ -218,6 +232,10 @@ radius).
 
 ## R
 
+**render / render_match** — `sim_server::api::render`. The pure step that
+turns a fixture plus a completed match into a manifest and a list of
+segments. Same input, same bytes, every time.
+
 **Resource** — Bevy ECS singleton (`Match`, `Ball`, `MatchClock`, `SimRng`, …).
 Contrast with `Component`.
 
@@ -234,6 +252,12 @@ components on the ball entity (deferred; visible next tick) — see Coding
 Standards gotcha on deferred commands.
 
 ## S
+
+**segment** — `sim_server::api::render::RenderedSegment`. One 60-second
+slice of match time (3,600 ticks), cut from a half's own first tick. The last
+segment of a half runs to the whistle and absorbs the remainder, so no
+segment crosses a half boundary. A half yields 45 segments plus one per
+added minute; the count always comes from the match.
 
 **Simulation / SimulationSet** — `sim_core::Simulation`: owns `World` +
 `Schedule` + `tick()`. `SimulationSet` = the seven ordered phases.

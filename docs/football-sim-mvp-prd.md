@@ -2,7 +2,7 @@
 
 Status: final, decisions confirmed 17 Oct 2026. Source of truth for the Rust workspace (`sim-server` and its 10 sibling crates). Supersedes the earlier `Football Match Simulation: MVP PRD` and the provisional `client-protocol.md`; those are deleted in favour of this document. The earlier TypeScript engine is discarded and nothing from it is ported.
 
-Product framing: this repository is a **single-match simulation server**. It produces one deterministic 11v11 football match end to end — player and ball movement, referee and clock, goals, out-of-bounds restarts, and offside *detection* — and exposes it over HTTP + SSE so a separate UI repository can render the 2D pitch and consume match events. There is no manager game, no season, no transfer market, no training, no progression, no frontend, and no multiplayer in this repository; managers are static entities with predefined tactics and setups. The match engine is the product.
+Product framing: this repository is a **single-match simulation server**. It produces one deterministic 11v11 football match end to end — player and ball movement, referee and clock, goals, out-of-bounds restarts, and offside *detection* — and exposes it over HTTP as a manifest plus immutable JSON segments so a separate UI repository can render the 2D pitch and consume match events. There is no manager game, no season, no transfer market, no training, no progression, no frontend, and no multiplayer in this repository; managers are static entities with predefined tactics and setups. The match engine is the product.
 
 Behavioral reference: *Top Eleven – Be a Football Manager* (matchday experience only, not a requirement to reproduce proprietary details). Attribute reference: https://top-eleven.fandom.com/wiki/Player.
 
@@ -12,9 +12,9 @@ Confidence labels: **[Certain]** established from the codebase or an explicit de
 
 ## 1. Goal
 
-Deliver a complete, believable, deterministic 11v11 football match simulation exposed as a server. The backend is authoritative for simulation state, player decisions, match rules and event generation, and serves a precomputed match to a separate frontend over HTTP + SSE. The MVP is backend-only (no frontend in this repo).
+Deliver a complete, believable, deterministic 11v11 football match simulation exposed as a server. The backend is authoritative for simulation state, player decisions, match rules and event generation, and serves a precomputed match to a separate frontend as a manifest and immutable JSON segments. The MVP is backend-only (no frontend in this repo).
 
-A match must start, play through both halves with half-time and added time, and finish at a valid full time, with the final score equal to the count of goal events and the same seed always producing the same stream. The match must be *playable*: both teams hold the ball, the ball crosses halfway, shots occur, and goals are scored. A 0–0 match played in one corner is not acceptable.
+A match must start, play through both halves with half-time and added time, and finish at a valid full time, with the final score equal to the count of goal events and the same seed always producing the same rendered bytes. The match must be *playable*: both teams hold the ball, the ball crosses halfway, shots occur, and goals are scored. A 0–0 match played in one corner is not acceptable.
 
 ## 2. Scope
 
@@ -26,7 +26,7 @@ A match must start, play through both halves with half-time and added time, and 
 - Goals, kickoff restarts, out-of-bounds restarts (throw-in, goal kick, corner).
 - Offside *detection* and its event logging (trace/signal only; see below).
 - Structured, ordered event log including every pass.
-- HTTP + SSE API serving a precomputed match.
+- HTTP API serving a precomputed match as a manifest and immutable JSON segments.
 - Fixtures in TOML, startup validation, determinism by seed, runtime invariants, a multi-seed measurement harness.
 
 ### Out of scope (this server, permanently or for the MVP)
@@ -44,7 +44,7 @@ A match must start, play through both halves with half-time and added time, and 
 
 | Finding | Confidence |
 |---|---|
-| `sim-server` is a CLI (`simulate`, `replay`, `benchmark`, `trace-filter`, `harness`, `serve`) with an HTTP+SSE layer. `client-protocol.md` is folded into §10 of this document. | Certain |
+| `sim-server` is a CLI (`simulate`, `replay`, `benchmark`, `trace-filter`, `harness`, `serve`) with an HTTP layer. `client-protocol.md` is folded into §10 of this document. | Certain |
 | Engine runs at 60 ticks/s; a full match is about 324,019 snapshots (`elapsed_ticks` resets each half, 162,000 per half). | Certain |
 | Structured match event log exists (issues 08–10); every pass logged. | Certain |
 | Perception hardcodes `goal_position = (105, 34)` for every player; the default brain hardcodes `ShootAtGoal(105, 34)` and `MoveToPosition(52.5, 34)`. The away team attacks −x, so its shots aim at its own goal. (Phase 0 target.) | Certain |
@@ -67,13 +67,13 @@ Implication: "50 of 50 seeds reach full time" would pass today with a 0–0 matc
 ## 4. Architecture and runtime
 
 - **Stack:** `axum` + `tokio`, server code in the `sim-server` crate (and siblings), running as a Linux service.
-- **Execution:** each `POST /match/{id}` starts one dedicated OS thread running that match's full simulation up front. The simulation is CPU-bound and must not run on the async executor.
-- **Concurrency cap:** default `cores − 1` simultaneous simulations, configurable. Beyond the cap, `POST` returns `503` with `Retry-After`. Expected load is 1–4 concurrent matches; this is a design assumption, not a requirement.
-- **Cache:** finished or failed results are held in memory with a TTL (default 1 hour). After expiry `GET` returns `410`; a new `POST` re-simulates the same seed and produces an identical stream.
-- **Restart behaviour:** all in-memory state is lost on process restart; fixtures reload. A client may re-`POST` and reconnect with `Last-Event-ID` to receive an identical stream.
+- **Execution:** each `POST /match/{id}/start` runs that match's full simulation and render on a blocking thread (`spawn_blocking`). The simulation is CPU-bound and must not run on the async executor.
+- **Concurrency cap:** default `cores − 1` simultaneous simulations, configurable. A start beyond the cap is queued FIFO and reports `202` with `state: queued`; it is never rejected for being over the cap. Expected load is 1–4 concurrent matches; this is a design assumption, not a requirement.
+- **Results:** a ready match is held in memory for the life of the process. There is no TTL and no eviction. A deterministic failure is cached for the life of the process; a transient resource failure records a retry window (§10.5).
+- **Restart behaviour:** all in-memory state is lost on process restart; fixtures reload. A client may re-`POST` and poll the manifest again; a segment request made before the new run is ready answers `409` (§10.7).
 - **Performance target:** at most about 30 s release-mode wall time per full match with the full decision layer. The headless runner must not serialise per-tick snapshots.
-- **Network defaults:** bind `127.0.0.1`. Behind a reverse proxy, disable response buffering on the stream route (e.g. nginx `proxy_buffering off`).
-- **Security:** `POST` requires a static bearer token if one is configured. `GET` is open, restricted by CORS to a configured origin list. If deployment is local-only, auth and CORS may be disabled via config. Because browser `EventSource` cannot set headers, no auth is placed on `GET`.
+- **Network defaults:** bind `127.0.0.1`. The service is request/response only: there is no long-lived stream and no response-buffering setting to make on a proxy.
+- **Security:** `POST` requires a static bearer token if one is configured. `GET` is open, restricted by CORS to a configured origin list. If deployment is local-only, auth and CORS may be disabled via config. The bearer token must never be shipped in browser code: call `POST` from a server-side layer that holds the token, or leave the token unset for local use (§10.6).
 
 ### Configuration
 
@@ -82,10 +82,11 @@ Implication: "50 of 50 seeds reach full time" would pass today with a 0–0 matc
 | `bind` | `127.0.0.1:8080` | Listen address |
 | `cors_origins` | `[]` | Allowed browser origins |
 | `api_token` | unset | Bearer token required for `POST` if set |
-| `max_concurrent_sims` | `cores − 1` | Simulation thread cap |
-| `result_ttl_secs` | `3600` | Cache lifetime for finished/failed results |
-| `fixtures_dir` | `./fixtures` | TOML fixtures directory |
+| `max_concurrent_sims` | `cores − 1` | Simulation thread cap; beyond it starts queue |
+| `fixtures_dir` | `./fixtures` | TOML fixtures directory, loaded and validated at boot |
 | `tick_cap` | 400,000 | Hard stop; exceeding it fails the match |
+
+`fixtures_dir` and `tick_cap` are compiled defaults; `bind`, `cors_origins`, `api_token` and `max_concurrent_sims` are the `serve` command's runtime options.
 
 ## 5. Fixtures
 
@@ -333,7 +334,7 @@ The subset implemented follows the IFAB Laws of the Game (latest edition). Laws 
 - No fouls, cards, penalties or free kicks (Laws 12–14). Foul detection stays a trace-only signal that never stops play.
 
 ### 8.3 Clock
-- The display clock comes from the engine's match clock, never from raw tick division. Half-time ticks exist in the stream but are not match time.
+- The display clock comes from the engine's match clock, never from raw tick division. Half-time ticks exist in the tick timeline but are not match time.
 - Added time is reported as `45+n` / `90+n`: `minute` is 45 or 90 and `added_minute` is n (first minute of added time is 1).
 
 ### 8.4 Added time
@@ -430,63 +431,105 @@ Frames carry positions for animation: every 6th global tick (10 Hz), with no ext
 
 ## 10. API contract
 
-### 10.1 Endpoints
+The match service has three routes. A match is simulated and rendered once, in full, before its manifest is served; the client then reads the manifest and fetches immutable segment bodies. There is no long-lived stream, no message resumption and no server push.
 
-**`POST /match/{match_id}`** (requires `Authorization: Bearer <token>` if configured). Starts the match if not already started; never starts a second computation.
+### 10.1 Endpoints and status matrix
 
-| Status | Meaning |
+- **`POST /match/{match_id}/start`** starts a match that is not started, or reports the state of one that is. It is idempotent and single-flight: a second start never runs the match twice. It requires `Authorization: Bearer <token>` when `api_token` is configured.
+- **`GET /match/{match_id}/manifest`** reads a started match's manifest. It never starts work.
+- **`GET /match/{match_id}/segments/{build_id}/{number}.json`** reads one immutable segment from the URL the manifest publishes. It never starts work.
+
+| Match state | `POST /start` | `GET /manifest` | `GET /segments/{build_id}/{n}.json` |
+|---|---|---|---|
+| unknown `match_id` | `404` | `404` | `404` |
+| known, not started | `202` queued or running | `409` `not_started` | `409` `not_ready` |
+| queued | `202` + `Retry-After` | `202` + `Retry-After` | `409` `not_ready` |
+| running | `202` + `Retry-After` | `202` + `Retry-After` | `409` `not_ready` |
+| ready | `200` + manifest | `200` + manifest | `200` + segment |
+| failed, deterministic | `500` | `500` | `409` `not_ready` |
+| failed, transient | `503` + `Retry-After` | `503` + `Retry-After` | `409` `not_ready` |
+| missing/invalid token on `POST` | `401` | — | — |
+
+The segment route has one more row: a ready match answers an unknown build id or unknown segment number with `404` (`no_segment`). A stored body that cannot be decompressed answers `500` (`broken`).
+
+Every JSON body carries a `state` field. The values are `queued`, `running`, `ready`, `failed`, `not_started`, `not_ready`, `no_segment`, `unknown`, `unauthorized` and `broken`.
+
+| Response | Body |
 |---|---|
-| 202 | Simulation started now |
-| 200 | Already running or finished |
-| 401 | Missing or invalid token |
-| 404 | Unknown `match_id` |
-| 503 | Concurrency cap reached; `Retry-After` set |
+| `200` on start/manifest | the manifest (below) flattened with `state: "ready"` |
+| `202` | `{ state, match_id, retry_after_ms }`; `Retry-After` is 1 second and the body repeats the wait for cross-origin `fetch` |
+| `409` | `{ state, match_id, message }` |
+| `401` | `{ state: "unauthorized", match_id, message }` |
+| `404` | `{ state: "unknown" \| "no_segment", match_id, message }` |
+| `500`/`503` failure | `{ state: "failed", match_id, code, message, last_good_tick, retry_after_ms? }`; a `503` also carries `Retry-After` |
 
-Body: `{ "match_id": "...", "status": "running" | "finished" | "failed" }`.
+A failed match reports the runner's reason code and the last tick it reached. A deterministic failure (tick cap, invariant violation, panic) is cached for the life of the process: a later start reports `500` again and does not re-run it. A transient resource failure reports `503` with the remaining retry window; a start after the window schedules the run again.
 
-**`GET /match/{match_id}/stream`** (`text/event-stream`, gzip)
+### 10.2 Manifest fields
 
-| Status | Meaning |
+The manifest describes the whole rendered match. Its fields are:
+
+| Field | Meaning |
 |---|---|
-| 200 | Stream. If the simulation is still running, the connection stays open (keep-alive comment every 15 s) until the first message is ready |
-| 204 | `Last-Event-ID` is at or beyond the final message |
-| 404 | Unknown `match_id` |
-| 409 | Match not started (call `POST` first) |
-| 410 | Result expired (TTL); `POST` again to regenerate |
+| `build_id` | Content-derived SHA-256 over the fixture contents, the wire format version and every segment's uncompressed hash |
+| `format_version` | Wire format version of the manifest and segment bodies (currently `1`) |
+| `match_id` | Fixture match id |
+| `seed` | Fixture seed |
+| `teams` | Both sides' setups, home first: `{ id, formation, mentality, tactic }` |
+| `roster` | 22 rows, home first: `{ id, team, name, number, position }`; `id` is the fixture `player_id` |
+| `pitch` | `{ length, width, unit }`; currently `1050 × 680` decimetres |
+| `ticks_per_second` | Match clock rate (60) |
+| `frame_every_ticks` | Animation-frame interval (6, i.e. 10 Hz) |
+| `attack_direction` | `{ home: [first_half, second_half], away: [...] }`, `+1` attacking increasing `x` |
+| `result` | End-of-match `{ score: [home, away], event_count, state_hash }` |
+| `segments` | Ordered segment rows (below) |
+| `state` | Added to the `200` response only; always `"ready"` |
 
-### 10.2 SSE messages
-The SSE `id` is the message index, used by `Last-Event-ID` to resume after message *n*. The whole match is simulated up front and then sent instantly in order.
+Each `segments` row is `{ segment, half, from_tick, to_tick, url, encoding, uncompressed_bytes, sha256, gzipped_bytes }`. `segment` counts from zero across the match, `url` embeds the build id, `encoding` is `gzip`, `sha256` is the hash of the uncompressed body and `gzipped_bytes` is the transfer size.
 
-| id | `event:` | Content |
-|---|---|---|
-| 0 | `manifest` | `match_id`, `seed`, teams, formations, setups, player roster (`player_id`, name, number, position), pitch dimensions and unit, tick rates, attack direction per team per half, and the exact `from_tick`/`to_tick` of all 10 segments |
-| 1–10 | `segment` | `{ segment, half, from_minute, to_minute, from_tick, to_tick, events[], frames[] }` |
-| 11 | `full_time` | `{ score, event_count, state_hash }` |
-| — | `error` | Replaces the remaining messages on failure: `{ code, message, last_good_tick }` |
+### 10.3 Segment bodies
 
-### 10.3 Segmentation
-Segments never span a half boundary. Each half has exactly 5 segments:
-- First half: 0–10, 10–20, 20–30, 30–40, **40–45+added**.
-- Second half: 45–55, 55–65, 65–75, 75–85, **85–90+added**.
+Each segment body is `{ segment, half, from_minute, to_minute, from_tick, to_tick, events[], frames[] }`. Ticks and coordinates are absolute, so a segment can be read on its own. `events` are the §9 event envelopes whose tick falls in the segment; `frames` are the §9.4 animation frames in the same range. The end-of-match summary is in the manifest's `result`, not in a separate message.
 
-The last segment of each half runs to the end of that half including its added time. A match always streams as 1 manifest + 10 segments + 1 `full_time` message.
+### 10.4 Segmentation rule
 
-### 10.4 Determinism and caching
-- The same fixture (seed, rosters, setups) on the same binary and platform produces a **byte-identical uncompressed stream body**. Gzip output is excluded because it depends on library version and level.
-- Evict-and-regenerate produces identical bytes (tested).
-- Reconnecting without `Last-Event-ID` replays from message 0; with it, resumes after the given message.
-- Failures (§12) are cached like successes so retries are deterministic.
+A segment covers 60 seconds of match time: `SEGMENT_TICKS = 3,600`. Each half is cut from its own first tick at 3,600-tick boundaries, and the last segment of a half runs to the whistle and absorbs the remainder, including added time.
 
-### 10.5 Security and transport
-- `POST` requires a static bearer token if one is configured (`Authorization: Bearer <token>`); missing/invalid → `401`.
-- `GET` is open (browser `EventSource` cannot set headers), restricted by CORS to a configured origin list. Empty origin list disables CORS (local-only deployment).
-- Auth and CORS may both be disabled via config for local-only deployments.
-- Transport is gzip-compressed SSE; behind a reverse proxy, disable response buffering on the stream route (e.g. nginx `proxy_buffering off`).
-- Keep-alive comment every 15 s while a stream is waiting for the first message.
+- A half yields 45 segments plus one per added minute.
+- The segment count follows from the match and is never a constant. `m-0001`, whose halves each run into added time, yields 110 segments.
+- No segment crosses a half boundary.
+- The second half starts after the first half's last tick, so its segments are **not** globally aligned to multiples of 3,600 from tick 0.
+- Events land in the segment that covers their tick. The two halves' segments cover their match time exactly once.
 
-### 10.6 Resumability
-- `Last-Event-ID` header on `GET` resumes after the given message index.
-- `204` when `Last-Event-ID` is at or beyond the final message.
+### 10.5 Determinism, caching and lifecycle
+
+- The same fixture (seed, rosters, setups) on the same binary and platform produces the same `build_id`, the same manifest bytes and byte-identical uncompressed segment bodies. Gzip uses a fixed level and the pure-Rust backend, but a segment's identity and the build id are computed over the uncompressed body, so compression never changes a URL or a hash.
+- A segment URL is immutable: the build id changes when the rendered bytes change, so an old URL never returns new content. Segment `200`s carry `Cache-Control: private, max-age=31536000, immutable` and `Vary: Accept-Encoding`; the body is `private`, not `public`, until a CDN exists.
+- The manifest `200` carries `ETag: "<build_id>"` and `Cache-Control: no-cache`, so a client may revalidate it; every other answer of the start and manifest routes is `no-store`.
+- The ready result lives in memory for the life of the process. There is no TTL, no eviction and no `410` path. A process restart forgets every rendered match: its manifest and segments answer `404`/`409` until the client starts it again.
+- Deterministic failures are cached like successes, so retries are stable. A transient failure is retried only after its retry window.
+
+### 10.6 Security and transport
+
+- `POST` requires a static bearer token if one is configured (`Authorization: Bearer <token>`); missing or invalid → `401`.
+- **The bearer token must never ship in browser code.** A browser bundle cannot keep a secret, and `GET` carries no token. If the browser must start matches, route `POST` through a server-side layer that holds the token. For local use, leave `api_token` unset.
+- `GET` is open, restricted by CORS to the configured origin list. An empty origin list disables CORS for local-only deployment. An allowed origin is reflected in `Access-Control-Allow-Origin`; `OPTIONS` preflight is answered; every response varies on `Origin`; and `Retry-After` and `ETag` are exposed to cross-origin `fetch`.
+- Segment bodies are stored gzipped and served at `Content-Type: application/json`. A client that accepts gzip receives `Content-Encoding: gzip`; every other client receives the decompressed body. Both decode to the same bytes; the manifest's `sha256` describes the decoded body.
+- The default bind is `127.0.0.1:8080`. There is no stream route, so no reverse-proxy buffering exception is needed.
+
+### 10.7 Client guidance for the unbuilt frontend
+
+The frontend lives in a separate repository and is not built yet. The server-side contract is frozen here; the following guidance belongs with that client.
+
+- **Sample payloads:** build and test against the real `m-0001` payloads in [`docs/api-samples/README.md`](api-samples/README.md) — the [`m-0001-manifest.json`](api-samples/m-0001-manifest.json) response body and the decoded [`m-0001-segment-0.json`](api-samples/m-0001-segment-0.json). The ticket-12 end-to-end test regenerates them.
+- **Match ids come from configuration.** `m-0001`, `m-0002` and `m-0003` are the known fixtures; the client is configured with them. A fixture-listing endpoint is deferred (§10.8), so the client must not discover ids by probing the API.
+- **Recovery after a server restart:** a segment request made before the new run is ready answers `409 not_ready`. The client must `POST /match/{id}/start`, poll the manifest until it is `ready` at the `Retry-After` pace (or `retry_after_ms` in the body), then retry the segment. A `404` means the id is not a fixture; a `404 no_segment` against a ready match means the build id or segment number is wrong.
+- **Retention:** keep a sliding window of about three segments either side of the playhead. Parse segment JSON in a Web Worker into typed arrays; do not retain the parsed object graph for the whole match, and drop segments as they leave the window.
+- **Wire-format revisit triggers:** revisit the wire format when the real gzipped total for a match exceeds 5 MB, or when parse time or retained heap breaks the client's budget. The current `m-0001` render is 6,500,009 gzipped bytes (110 segments, 6.20 MiB), so the size trigger is already met; the format has not been changed yet, and that decision is recorded rather than silently ignored.
+
+### 10.8 Deferred until leagues
+
+The MVP is single-match. The following are deliberately deferred until a league/season product exists: a CDN with `public` caching; TTL and eviction of rendered matches; shared storage between server instances; a fixture-listing endpoint; and brotli (gzip only today).
 
 ## 11. Tuning struct
 
@@ -511,7 +554,7 @@ Checked in the simulation loop **in release builds too**:
 - Ball and players stay in valid states; no invalid restarts.
 - `FullTime` is reached before `tick_cap`.
 
-On any violation or cap breach: the match status becomes `failed`; the stream sends an `error` event (reason code and last good tick) and closes; the seed is logged for reproduction; the failure is cached. The existing "log a warning and stop quietly" safety net in the CLI is not acceptable in server mode. Invariant violations and tick-cap breaches never silently truncate a match.
+On any violation or cap breach: the match status becomes `failed`; the start and manifest routes report the failure's `code`, `message` and `last_good_tick` (`500` for a deterministic failure, `503` with `Retry-After` for a transient one); the seed is logged for reproduction; the failure is cached (deterministically) or given a retry window (transiently). The existing "log a warning and stop quietly" safety net in the CLI is not acceptable in server mode. Invariant violations and tick-cap breaches never silently truncate a match.
 
 ## 13. Acceptance criteria
 
@@ -534,7 +577,7 @@ All values are **provisional**, measured with the multi-seed harness and run man
 | A9 | Tactic signatures | one test per preset over several seeds on its signature statistic (pass length, average line height, press count) |
 | A10 | Attribute sensitivity | a pure-function monotonic unit test per consumed attribute (direction of effect); full-match sweeps for Shooting, Finishing, Passing, Tackling and Reflexes only. The other 25 attributes are proven only at unit level, not by a measurable match effect |
 | A11 | Attribute declarations | every one of the 30 attributes has a declared consumer or is explicitly reserved (test fails otherwise); reserved list expected empty |
-| A12 | API behaviour | status codes, `Last-Event-ID` resume, evict-and-regenerate byte equality |
+| A12 | API behaviour | status matrix, immutable segment URLs, gzip negotiation, build-id determinism and two-process byte equality |
 
 ### 13.2 Non-gating (reported)
 - Shots, corners and possession per match. Mirrored squads should show possession of 50 ± 3.
@@ -549,9 +592,10 @@ Current measured state with the default `Simulation::new(seed)` profile (fixture
 After the event log exists, run a fixed batch (four fixture tiers plus mirrors) and record goals, shots, pass counts, possession and win rates. Adjust only the tuning struct, in one commit with the batch results.
 
 ## 14. Testing approach
-- Unit and component tests (restarts, rules, attribute accessors, fixture validation, API handlers, monotonicity per attribute) run in default `cargo test`.
+- Unit and component tests (restarts, rules, attribute accessors, fixture validation, monotonicity per attribute) run in default `cargo test`.
+- The server API has four test layers, described in `AGENTS.md`: the pure render step (segmentation, manifest shape, golden segment hashes, build id), the match service driven by fake runners (lifecycle, queue, retry window), the HTTP router driven by `tower::ServiceExt::oneshot` (status matrix, headers, CORS, gzip negotiation), and the ignored real-match test that spawns `football-sim serve` and drives a full `m-0001` through the real API.
 - **Windowed smoke tests** run in default `cargo test`, capped at 3 game minutes per test, and are a deliberate exception to "no fast full-match tier". They assert that the ball crosses halfway, both teams touch it, and at least one shot occurs, so the goal-direction bug cannot return unnoticed.
-- All full-match checks (A1–A6, full-match determinism, the five-attribute sweeps, mirrored-seed batches) are `#[ignore]`d and run manually through the harness.
+- All full-match checks (A1–A6, full-match determinism, the five-attribute sweeps, mirrored-seed batches, and the real-match HTTP end-to-end test) are `#[ignore]`d and run manually through the harness or in `--release`.
 - There is no CI and no nightly sweeps for the MVP. Consequence: no automatic run catches a full-match regression between manual runs. The §12 invariants plus the windowed smoke tests are the only automatic protection, and the invariants must be on in release builds.
 - The headless harness records only aggregate metrics and does not serialise per-tick snapshots.
 
@@ -563,11 +607,11 @@ Each phase has an exit gate; nothing is built on a failed gate.
 |---|---|---|
 | **0. Playable loop** | Per-team, per-half attack direction and half-time swap; formation slots replace `MoveToPosition(52.5, 34)`; free-ball retrieval fix (use decision traces to find the cause); OOB restart fix; spawn `Referee`; wire tiered fixtures into `Simulation::new` so the playability gate runs on real players; windowed smoke tests | Smoke tests pass **and** the playability gate below holds over 10 seeds |
 | **1. Harness and event log** | Multi-seed headless runner with invariants (stall window, score = goal count, tick cap, determinism); structured events with stable ids; two-deep touch history on `Ball` (also hashed); `Referee`-based added time | Harness reports all §13 metrics; invariants fail matches explicitly |
-| **2. API slice** | One fixture match streaming real events and frames through manifest, 10 segments and `full_time`, with `Last-Event-ID` resume | Contract proven end to end on a real stream |
+| **2. API slice** | One fixture match rendered into a manifest and 60-second segments, served over the three HTTP routes with the status matrix | Contract proven end to end on a real fetched manifest and segments |
 | **3. Attribute and squad model** | 30 player attributes (Top Eleven wiki source of truth) and the two profiles; 14-position grid, fit multiplier, TOML fixtures with startup validation; five formations as 11-slot sets; a single logistic response-curve layer with monotonic tests | Fixtures validate; accessor-enum test passes |
 | **4. Mechanics** (ordered by statistical leverage) | (a) Shooting, Finishing, goalkeeper saves; (b) Passing, Tackling, Marking, Positioning; (c) Speed, Fitness, Strength; (d) Dribbling, Crossing, Heading, Bravery on the airborne state, plus the remaining goalkeeper attributes; (e) Aggression and Creativity, including goalkeeper variants; (f) AI ball pickup as an explicit intent replacing proximity-based acquisition (pickup refactor) | Every attribute has a consumer, unit-tested; reserved list finalised |
 | **5. Tactics** | Mentality, tactic and formation parameters; tackle and press costs | A9 signature tests pass |
-| **6. API hardening** | Registry, concurrency cap, TTL and eviction, auth/CORS, failure paths, finalise `client-protocol` into §10 | A12 passes |
+| **6. API hardening** | Registry, FIFO queue under the concurrency cap, transient-failure retry window, auth/CORS, failure paths, immutable segment caching, real-match end-to-end test | A12 passes |
 | **7. Calibration** | Tune the tuning struct against §13, including wiring real fixtures (closes A3/A4/A5) | Gating criteria met or thresholds revised with recorded measurements |
 
 ### Phase 0 playability gate (provisional)
@@ -592,9 +636,9 @@ Dependency flow: Phase 0 → 1 → (2 in parallel with 3) → 4 → 5 → 6 → 
 | Manager model | Static managers with predefined tactics and setups; no live commands |
 | Team input | Fixture registry by `match_id`; no inline submission in MVP |
 | Test tiers | Full-match checks manual and `#[ignore]`d; windowed smoke tests (≤ 3 game minutes) in default `cargo test`; no CI or nightly sweeps |
-| Stream layout | Manifest + 10 half-aligned segments + `full_time`; every pass logged |
+| Wire layout | Manifest + data-driven 60-second half-aligned segments; every pass logged |
 | Coordinates | Signed integer decimetres; `seq` from 0, gapless; global tick; byte-identity on the uncompressed body |
-| Lifecycle | One thread per match, cap `cores − 1`, `503` over cap, `410` after TTL until re-POST, `409` before POST, `404` unknown id |
+| Lifecycle | Blocking thread per match, cap `cores − 1`, FIFO queue over the cap, no TTL/eviction, `409` before ready, `404` unknown id |
 | Attributes | All 30 player attributes (Top Eleven wiki source of truth) get consumers (target zero reserved); unit-level monotonicity for all, full-match sweeps for five |
 | Quality | Derived, display/reporting only, never read by the simulation |
 | Half-time | Teams swap ends per IFAB Law 7; attack direction explicit per team and half |

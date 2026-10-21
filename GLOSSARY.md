@@ -174,11 +174,22 @@ describes a rendered match: its metadata (match id, seed, teams, roster, pitch
 dimensions, tick rates, attack direction), the end-of-match summary under
 `result`, the wire format version, the `build_id`, and one row per segment
 (number, half, tick range, immutable URL, encoding, uncompressed byte length,
-gzipped byte length, SHA-256). Replaces the SSE `manifest` message of the old
-stream.
+gzipped byte length, SHA-256). It is the JSON body of `GET
+/match/{match_id}/manifest` (with `state: ready` added) and the only document
+a client needs before fetching segments.
 
 **Match** — `sim_components::Match`, a `Resource`: id, team entities, score,
 state, seed. Source of truth for match score/state.
+
+**match service** — `sim_server::service::MatchService`. The single-match
+lifecycle behind the HTTP routes: it holds each fixture in `NotStarted`,
+`Queued`, `Running`, `Ready` or `Failed`, runs at most `cores − 1` matches at
+once through a fair FIFO semaphore (a start beyond the cap queues, it is never
+rejected), enforces single-flight per match, caches deterministic failures for
+the life of the process and gives transient failures a retry window. It is
+built by `sim_server::app::match_service` from the validated fixture set and a
+`runner`; `sim-server serve` and the real-match end-to-end test use that same
+constructor.
 
 **MatchClock** — `sim_components::MatchClock`: `elapsed_ticks`, `half`,
 `added_time_ticks`, `is_running`. Spec §3: a `Resource` (source of truth for
@@ -282,6 +293,14 @@ after it schedules the match again, exactly like a fresh start.
 `KickoffRestart`, `HalfTimeStart`, `FullTimeStart`, `Foul`. Emitted as
 components on the ball entity (deferred; visible next tick) — see Coding
 Standards gotcha on deferred commands.
+
+**runner** — `sim_server::api::runner::MatchRunner`, the seam the `match
+service` runs a match through. `run(fixture, tick_cap)` returns a
+`MatchOutcome` (`Ready(CompletedMatch)` or `Failed { code, message,
+last_good_tick, kind }`); production uses `SimulationRunner`, which plays the
+match and captures frames on the blocking thread, while tests inject fakes.
+Failures are classified `Deterministic` (cached forever) or `Transient` (the
+resource failure `RESOURCE_FAILURE_CODE`, retried after the retry window).
 
 ## S
 

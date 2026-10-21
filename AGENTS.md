@@ -49,10 +49,36 @@ route any unsanctioned spawn to a mid-tier model — consider doing so.
 - Workspace: 11-crate Rust (`crates/sim-math`, `sim-components`, `sim-physics`, `sim-ai-core`, `sim-ai-player`, `sim-ai-manager`, `sim-rules`, `sim-core`, `sim-replay`, `sim-telemetry`, `sim-server`). Single binary: `target/{debug,release}/football-sim`.
 - Toolchain: `edition = "2024"`, `clippy::pedantic + nursery + all` (warn) workspace-wide, `unsafe_code = "forbid"`, `bevy_ecs 0.14` (no full Bevy, ECS only).
 - Build everything: `cargo build --release`.
-- Run all tests: `cargo test --workspace`. 13 are `#[ignore]`'d (9 in `sim-core`, 4 in `sim-server`: full-match end-to-end, tactic-signature, playability gate; list them with `cargo test --workspace -- --ignored --list`); run with `cargo test --workspace -- --ignored` only when needed — they take minutes.
+- Run all tests: `cargo test --workspace`. 13 are `#[ignore]`'d (9 in `sim-core`, 4 in `sim-server`: real full-match over HTTP, harness event order, playability fixture gate, lib end-to-end; list them with `cargo test --workspace -- --ignored --list`); run with `cargo test --workspace -- --ignored` only when needed — they take minutes.
 - Run a single test: `cargo test -p sim-core --lib test_pipeline_isolation_single_tick`.
 - Phase 0 playability gate (10 full matches, prints the four gate metrics): `cargo test --release -p sim-core -- --ignored phase_0_playability_gate --nocapture`.
+- Real full match over HTTP (release, ignored): `cargo test --release -p sim-server --test real_full_match_e2e -- --ignored --nocapture`. It rewrites the sample payloads in `docs/api-samples/`.
 - Per-PR clippy (uses git diff against `origin/main`): `bash scripts/clippy-changed.sh`. Floor: `cargo clippy --workspace --all-targets -- -D warnings`.
+
+### Test layers (sim-server)
+
+The server API is tested in four layers. Keep a change in the layer that owns it,
+and do not make a lower layer depend on a higher one.
+
+1. **Render** — `crates/sim-server/src/api/render_tests.rs` (with
+   `render_doubles.rs`). The pure step from a fixture plus a completed match to a
+   manifest and 60-second segments: segmentation at half boundaries, event/frame
+   placement, manifest shape, build id and golden segment hashes. No service, no
+   sockets.
+2. **Service** — `crates/sim-server/src/service/tests/` (`lifecycle_tests`,
+   `queue_tests`, `retry_tests`). `MatchService` driven by the fake runners in
+   `test_support`: state transitions, single-flight, FIFO queue under the cap,
+   deterministic versus transient failures and the retry window. No HTTP.
+3. **HTTP** — `crates/sim-server/src/http/service_api/tests/` (`matrix`,
+   `routes`, `segments`, `cors`). The real router driven through
+   `tower::ServiceExt::oneshot` with a fake runner: every status-matrix row,
+   bodies and headers (`ETag`, `Cache-Control`, `Retry-After`, `Vary`), gzip
+   negotiation, segment hashes, auth and CORS. No socket, no simulation.
+4. **Real match** — `crates/sim-server/tests/real_full_match_e2e.rs`. The only
+   layer with a real simulation over a real socket: it spawns `football-sim
+   serve` twice, `POST`s `m-0001`, polls the manifest at the `Retry-After` pace,
+   fetches every segment, verifies each SHA-256, compares the two processes and
+   writes the sample payloads. `#[ignore]`d; `--release` only.
 
 ## Run the CLI
 
@@ -60,13 +86,14 @@ route any unsanctioned spawn to a mid-tier model — consider doing so.
 cargo run --release -p sim-server -- <subcommand> [flags]
 ```
 
-Four subcommands:
+Six subcommands:
 
 - **`simulate`** — run a match. Flags: `--seed <u64>` (default 12345), `--ticks <u64>` (default 1000), `--full-match` (324,000 ticks to `FullTime`), `-o/--output <path>`, `--trace-out <path>`, `--trace-interval-ticks <u64>` (default 600), `--trace-full-range <start>-<end>`.
 - **`replay`** — replay with manager commands. Flags: `--seed`, `--commands <path>` (JSON list of `{tick, command}`), `-o/--output`.
 - **`benchmark`** — perf baseline. Flags: `--seed`, `--ticks` (default 6000), `-o/--output` (writes JSON with `average_tick_ms`, `ticks_per_sec`).
 - **`harness`** — multi-seed headless harness (issue 07). Flags: `--seeds <path>` (file with one seed per line; blank lines and `#` comments ignored), `-o/--output` (defaults to stdout). Plays every seed to `FullTime` (or `tick_cap`), enforces the six PRD §12 invariants per tick, writes a JSON summary with per-seed reports and aggregate §13.1 metrics. Does **not** serialise per-tick snapshots. Wall time ~10 s × seed_count in release.
 - **`trace-filter`** — post-hoc filter a recorded trace. Flags: `--input <path>`, `-o/--output` (defaults to stdout), `--player <u32>`, `--from <u64>`, `--to <u64>`, `--process <Ball|Referee|Match|name>`, `--name <exact>`.
+- **`serve`** — run the match API (PRD §10). Flags: `--bind <addr>` (default `127.0.0.1:8080`), `--max-concurrent-sims <n>` (default `cores − 1`), `--api-token <token>` (unset disables `POST` auth), `--cors-origins <csv>` (empty disables CORS). Routes: `POST /match/{id}/start`, `GET /match/{id}/manifest`, `GET /match/{id}/segments/{build_id}/{n}.json`.
 
 ## Generate reports
 
@@ -122,6 +149,7 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 - **AI**: `crates/sim-ai-player/` (per-player Utility AI, 6-tick decision cadence) and `crates/sim-ai-manager/` (weighted-table manager; effectively no-op today).
 - **Rules**: `crates/sim-rules/` — goals, OOB (law-correct throw-in / goal-kick / corner), possession, clock + added time. Offside detection and foul detection are **out of MVP scope** (PRD §2); any stubs should be removed or disabled.
 - **CLI**: `crates/sim-server/src/lib.rs` (subcommand enum + dispatch), one module per subcommand (`simulate.rs`, `trace_filter.rs`, `telemetry_cli.rs`, `harness.rs`). `main.rs` is 13 lines — keep logic in `lib` (standard §7).
+- **HTTP API**: `crates/sim-server/src/api/` (`render`, `runner`, `registry`, `model`), `src/service/` (`MatchService` lifecycle and queue), `src/http/` (router, auth, CORS, the three routes), `src/app.rs` (production composition shared by `serve` and the real-match test). Add API behaviour at the layer that owns it, not in the CLI.
 
 ## Conventions to follow
 
@@ -146,6 +174,8 @@ Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_
 ## Where specs / design docs live
 
 - `docs/football-sim-mvp-prd.md` — **authoritative product specification (single source of truth, 17 Oct 2026)**. Covers the match engine, player model, rules, event model, API contract, acceptance criteria. Rewritten from the earlier MVP PRD; all superseded design docs have been deleted.
+- `docs/api-samples/` — real payloads from the ticket-12 end-to-end run: `README.md`, `m-0001-manifest.json` (the `200` manifest body) and `m-0001-segment-0.json` (decoded first segment). The frontend builds against these; the real-match test regenerates them.
+- `GLOSSARY.md` — domain vocabulary, including the HTTP layer (`match service`, `runner`, `manifest`, `segment`, `build_id`).
 - `docs/CODING_STANDARDS.md` — authoritative coding standard.
 - `docs/agents/{issue-tracker,triage-labels,domain}.md` — agent workflow docs.
 - Trace telemetry (Chrome/Perfetto) is implemented in `crates/sim-telemetry`; its schema lives in code, not in docs.
@@ -229,174 +259,3 @@ Five canonical roles: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-fo
 ### Domain docs
 
 Single-context: one `CONTEXT.md` at repo root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.
-
-## Build & test
-
-- Workspace: 11-crate Rust (`crates/sim-math`, `sim-components`, `sim-physics`, `sim-ai-core`, `sim-ai-player`, `sim-ai-manager`, `sim-rules`, `sim-core`, `sim-replay`, `sim-telemetry`, `sim-server`). Single binary: `target/{debug,release}/football-sim`.
-- Toolchain: `edition = "2024"`, `clippy::pedantic + nursery + all` (warn) workspace-wide, `unsafe_code = "forbid"`, `bevy_ecs 0.14` (no full Bevy, ECS only).
-- Build everything: `cargo build --release`.
-- Run all tests: `cargo test --workspace`. 13 are `#[ignore]`'d (9 in `sim-core`, 4 in `sim-server`: full-match end-to-end, tactic-signature, playability gate; list them with `cargo test --workspace -- --ignored --list`); run with `cargo test --workspace -- --ignored` only when needed — they take minutes.
-- Run a single test: `cargo test -p sim-core --lib test_pipeline_isolation_single_tick`.
-- Phase 0 playability gate (10 full matches, prints the four gate metrics): `cargo test --release -p sim-core -- --ignored phase_0_playability_gate --nocapture`.
-- Per-PR clippy (uses git diff against `origin/main`): `bash scripts/clippy-changed.sh`. Floor: `cargo clippy --workspace --all-targets -- -D warnings`.
-
-## Run the CLI
-
-```
-cargo run --release -p sim-server -- <subcommand> [flags]
-```
-
-Four subcommands:
-
-- **`simulate`** — run a match. Flags: `--seed <u64>` (default 12345), `--ticks <u64>` (default 1000), `--full-match` (324,000 ticks to `FullTime`), `-o/--output <path>`, `--trace-out <path>`, `--trace-interval-ticks <u64>` (default 600), `--trace-full-range <start>-<end>`.
-- **`replay`** — replay with manager commands. Flags: `--seed`, `--commands <path>` (JSON list of `{tick, command}`), `-o/--output`.
-- **`benchmark`** — perf baseline. Flags: `--seed`, `--ticks` (default 6000), `-o/--output` (writes JSON with `average_tick_ms`, `ticks_per_sec`).
-- **`harness`** — multi-seed headless harness (issue 07). Flags: `--seeds <path>` (file with one seed per line; blank lines and `#` comments ignored), `-o/--output` (defaults to stdout). Plays every seed to `FullTime` (or `tick_cap`), enforces the six PRD §12 invariants per tick, writes a JSON summary with per-seed reports and aggregate §13.1 metrics. Does **not** serialise per-tick snapshots. Wall time ~10 s × seed_count in release.
-- **`trace-filter`** — post-hoc filter a recorded trace. Flags: `--input <path>`, `-o/--output` (defaults to stdout), `--player <u32>`, `--from <u64>`, `--to <u64>`, `--process <Ball|Referee|Match|name>`, `--name <exact>`.
-
-## Generate reports
-
-**Match report (JSONL of per-tick `MatchSnapshot`):**
-```
-cargo run --release -p sim-server -- simulate --full-match --output match.json
-```
-Writes one `MatchSnapshot` per tick (324,019 lines for `--full-match`). Each line is a self-contained JSON object. First line has `tick=1, state="InPlay"`; last line has `state="FullTime"` and a `score` tuple. Wall time ~18s in release.
-
-**Trace report (Chrome / Perfetto JSON):**
-```
-cargo run --release -p sim-server -- simulate --ticks 130 \
-  --trace-out trace.json --trace-full-range 0-600
-```
-Default interval is 600 ticks (~1 snapshot / 10s). Use `--trace-full-range <start>-<end>` for every-tick resolution in a window. Load in `ui.perfetto.dev`.
-
-## How to read the reports
-
-**JSONL `match.json`:**
-```bash
-wc -l match.json                              # 324,019 for full match
-head -1 match.json | jq .                     # first frame
-tail -1 match.json | jq .                     # final frame
-jq -r '.tick' match.json | wc -l              # confirm line count == ticks
-jq 'select(.tick == 162000)' match.json       # jump to a specific tick
-jq -r '.ball.position' match.json             # stream ball positions
-```
-Per-tick frame shape (see `crates/sim-core/src/lib.rs:21-67`):
-```json
-{
-  "tick": 1,
-  "match_state": { "state": "InPlay" },
-  "ball": { "position": [x,y], "velocity": [vx,vy], "spin": 0.0, "state": "Free|Possessed|InFlight|Dead", "possessor": <entity_id|null> },
-  "players": [ { "entity_id", "team_id": 0|1, "position", "velocity", "stamina", "role", "skill", "perception_ball_position" }, ... 22 entries ],
-  "score": [home, away],
-  "clock": { "elapsed_ticks", "half": 1|2, "added_time_ticks", "is_running" },
-  "state_hash": <u64>
-}
-```
-Constants: `PITCH_LENGTH=105`, `PITCH_WIDTH=68`, `GOAL_Y=[26.68, 41.32]`, `TICKS_PER_SECOND=60`, `HALF_LENGTH_TICKS=162000`, `TOTAL_MATCH_TICKS=324018` (the loop runs +1 tick to detect `FullTime` so the file has 324,019 lines).
-
-**Trace `trace.json` (Chrome format):** array of events. PIDs: `1`=Ball, `2`=Referee (the match's single `Referee` is spawned at construction, but the process only appears once it emits a card or stoppage), `4`=Match, `1000+i`=player `i` (so PID 1007 = player index 7). Threads: `1`=Position, `2`=Decision. Timestamps are microseconds (`ts = tick * 1_000_000 / 60 + seq`); header sets `displayTimeUnit = "us"`. Open in `https://ui.perfetto.dev`.
-
-## Determinism
-
-Same seed → byte-identical output (verified). `sim_core::MatchSnapshot::state_hash` is a deterministic FNV-1a-64 hash; the binary prints `final_state_hash: <u64>` after every run. Two runs with the same seed should print the same hash. If they diverge, suspect: non-deterministic iteration order, wall-clock reads in sim, RNG misuse outside `SimRng`.
-
-## Project structure (where to add code)
-
-- **ECS components / types**: `crates/sim-components/src/lib.rs` (Player, Team, Ball, MatchClock, RuleEvent, Intent, Position, Velocity, etc.). Types follow the `Foo` / `FooMarker` / `FooView` / `FooSnapshot` convention.
-- **Simulation driver**: `crates/sim-core/src/simulation/` (tick.rs, construct.rs, lifecycle.rs, snapshot.rs, state_hash.rs). `Simulation::new(seed)` and `Simulation::tick()` are the entry points.
-- **System-set order**: `SimulationSet` enum in `crates/sim-core/src/simulation.rs` — `Perception → Decision → Execution → Physics → Possession → Rules → MatchAdmin`. Add new systems to the right set in `register_systems` (`construct.rs:37`).
-- **AI**: `crates/sim-ai-player/` (per-player Utility AI, 6-tick decision cadence) and `crates/sim-ai-manager/` (weighted-table manager; effectively no-op today).
-- **Rules**: `crates/sim-rules/` — goals, OOB (law-correct throw-in / goal-kick / corner), possession, clock + added time. Offside detection and foul detection are **out of MVP scope** (PRD §2); any stubs should be removed or disabled.
-- **CLI**: `crates/sim-server/src/lib.rs` (subcommand enum + dispatch), one module per subcommand (`simulate.rs`, `trace_filter.rs`, `telemetry_cli.rs`, `harness.rs`). `main.rs` is 13 lines — keep logic in `lib` (standard §7).
-
-## Conventions to follow
-
-- Authoritative coding standard: `docs/CODING_STANDARDS.md` (read before touching anything beyond a trivial fix).
-- No `unsafe` (workspace-forbid). No `unwrap` in new code — use `expect("invariant: …")`.
-- Every `#[allow(...)]` / `#[expect(...)]` must carry `reason = "…"`.
-- Bevy system params (`Query`, `Res`, …) are taken **by value**, not reference (workspace allow on `needless_pass_by_value`).
-- File-size budget: see coding-standards §6. Split before exceeding.
-- Don't leave `TODO` / `FIXME` comments — the codebase is intentionally TODO-free. Plan the work, then write it.
-- Keep `main.rs` thin; logic goes in `lib.rs` and per-subcommand modules.
-
-## Gotchas
-
-- **Bevy ECS deferred commands**: `commands.entity(e).insert(...)` is not visible to queries in the same system run. If you need system-A to write a marker that system-B reads in the **same** tick, use a `Resource`, not a component. (This is why the OOB system can mark the ball entity `RuleEvent::OutOfBounds` but the restart system's query doesn't see it until the next tick — pre-existing bug; the ball can get stuck at center for long stretches.)
-- **`simulation/snapshot.rs:42`** sorts `ball_entity_candidates` per `get_state()` call even though there's exactly one ball. At per-tick call rates this matters.
-- **No CI**. No `.github/workflows/`. The only CI-adjacent script is `scripts/clippy-changed.sh` (run manually per PR).
-- **No `rustfmt.toml` / `.editorconfig` / `rust-toolchain`**. Uses workspace defaults. If you add formatting, do it workspace-wide.
-- **Telemetry is opt-in**. Without `sim.enable_telemetry(...)` (called only when `--trace-out` is set), the `TraceGate` stays all-false and zero overhead.
-- **`test_end_to_end_full_match_simulation` is `#[ignore]`'d** in `crates/sim-server/src/lib.rs:556-577` (takes minutes). Don't un-ignore without a reason.
-
-## Where specs / design docs live
-
-- `docs/football-sim-mvp-prd.md` — **authoritative product specification (single source of truth, 17 Oct 2026)**. Covers the match engine, player model, rules, event model, API contract, acceptance criteria. Rewritten from the earlier MVP PRD; all superseded design docs have been deleted.
-- `docs/CODING_STANDARDS.md` — authoritative coding standard.
-- `docs/agents/{issue-tracker,triage-labels,domain}.md` — agent workflow docs.
-- Trace telemetry (Chrome/Perfetto) is implemented in `crates/sim-telemetry`; its schema lives in code, not in docs.
-
-## 🚫 Merge/Push Authorization Rule
-
-### Never Execute Merge or Push Commands Without Authorization
-
-**Rule Description:**
-This repository enforces strict authorization controls for destructive git operations. Merge and push commands are protected to prevent accidental or unauthorized changes to the codebase.
-
-**Protected Operations:**
-- Git merge operations
-- Git push operations
-- Force push operations (`git push --force`)
-- Branch deletion operations
-
-**Authorization Requirement:**
-All merge and push operations MUST be explicitly authorized by the human maintainer before execution. This includes:
-
-1. **Merge Operations:** `git merge <branch>` or `git cherry-pick <commit>`
-2. **Push Operations:** `git push origin <branch>` or `git push origin <branch>:<target>`
-3. **Force Operations:** Any operation with `--force` flag
-4. **Deletion Operations:** `git branch -D <branch>` or `git push origin --delete <branch>`
-
-**Authorization Process:**
-Before executing any protected operation:
-
-1. **Explicit Confirmation:** The maintainer must provide explicit authorization using one of these formats:
-   - "✅ AUTHORIZE MERGE <branch>`
-   - "✅ AUTHORIZE PUSH <branch> to <target>`
-   - "✅ AUTHORIZE FORCE <operation>`
-
-2. **Context Documentation:** Include context about:
-   - What changes are being integrated
-   - Why the operation is needed
-   - Expected impact on the repository
-   - Any relevant test results or verification steps
-
-3. **Verification Steps:** After authorization, document:
-   - Branch status before operation
-   - Test results (cargo check, build, clippy, test)
-   - Any potential risks or impacts
-
-**Emergency Override:**
-- For critical security fixes or urgent bug repairs that cannot wait for authorization, use the format:
-  "⚠️ URGENT AUTHORIZATION NEEDED for <operation> - <brief justification>`
-  
-- The human maintainer must respond within 2 hours with "✅ APPROVED" or "❌ REJECT".
-
-**Documentation:**
-- All authorization requests and approvals must be logged
-- Merge/push operations must include the authorization reference in their commit message
-- Critical overrides should be logged with a note about the urgency
-
-**Consequences:**
-- Unauthorized merge/push operations will be blocked
-- Unauthorized operations that are executed will be subject to rollback
-- Repeat unauthorized attempts may result in access restrictions
-
-**Training:**
-New contributors should receive this training before gaining access to branches with protected operations.
-
-This rule ensures repository integrity and prevents accidental or malicious changes to the codebase.
-
----
-*Rule added by: AI Assistant - Automated enforcement workflow* 
-*Effective: [Current Date]*
-*Version: 1.0*

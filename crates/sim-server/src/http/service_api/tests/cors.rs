@@ -1,9 +1,9 @@
 //! The CORS edge behaviour of the shared middleware (server-API ticket
 //! 10).
 //!
-//! Every case goes through `router_with_service`, so the assertions are
-//! about the middleware's effect on the real router, not about a helper
-//! called directly.
+//! Every case goes through `router`, so the assertions are about the
+//! middleware's effect on the real router, not about a helper called
+//! directly.
 
 use super::*;
 
@@ -26,7 +26,7 @@ fn with_origin(mut request: Request<Body>, origin: &str) -> Request<Body> {
 #[tokio::test]
 async fn an_allowed_origin_response_varies_on_origin() {
     let service = service_with(as_dyn(Arc::new(InstantRunner)), &["m-0001"], 1);
-    let router = router_with_service(test_store(), service, http_config(None, &[ORIGIN]));
+    let router = router(service, http_config(None, &[ORIGIN]));
 
     let response = router
         .oneshot(with_origin(
@@ -60,7 +60,7 @@ async fn an_allowed_origin_can_read_retry_after_and_etag() {
         matches!(state, MatchState::Ready { .. })
     })
     .await;
-    let router = router_with_service(test_store(), service, http_config(None, &[ORIGIN]));
+    let router = router(service, http_config(None, &[ORIGIN]));
 
     let response = router
         .oneshot(with_origin(
@@ -97,7 +97,7 @@ async fn an_allowed_origin_can_read_retry_after_and_etag() {
 #[tokio::test]
 async fn preflight_for_post_with_authorization_from_an_allowed_origin_succeeds() {
     let service = service_with(as_dyn(Arc::new(InstantRunner)), &["m-0001"], 1);
-    let router = router_with_service(test_store(), service, http_config(None, &[ORIGIN]));
+    let router = router(service, http_config(None, &[ORIGIN]));
 
     let mut request = with_origin(request(Method::OPTIONS, "/match/m-0001/start"), ORIGIN);
     request.headers_mut().insert(

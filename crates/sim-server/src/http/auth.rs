@@ -1,4 +1,4 @@
-//! Bearer-token authentication shared by the legacy and service routes.
+//! Bearer-token authentication for the service routes.
 //!
 //! The token is compared in constant time, so the comparison does not
 //! reveal where a candidate first differs from the configured secret.

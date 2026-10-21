@@ -17,8 +17,7 @@ use axum::http::{Method, Request, StatusCode, header};
 use tower::ServiceExt;
 
 use crate::api::runner::MatchRunner;
-use crate::api::{MatchRegistry, MatchStore, ServerConfig};
-use crate::http::{HttpConfig, router_with_service};
+use crate::http::{HttpConfig, router};
 use crate::service::{MatchService, MatchState, StartOutcome};
 use crate::test_support::{
     AlwaysTransientRunner, GateGuard, GatedRunner, InstantRunner, TickCapFailureRunner, as_dyn,
@@ -132,14 +131,6 @@ fn request(method: Method, path: &str) -> Request<Body> {
         .uri(path)
         .body(Body::empty())
         .expect("invariant: a test request is a valid HTTP request")
-}
-
-/// The legacy store the router needs; the new routes do not use it.
-fn test_store() -> Arc<MatchStore> {
-    let mut registry = MatchRegistry::default();
-    let single = MatchRegistry::single_test("m-0000", 7);
-    registry.fixtures.extend(single.fixtures);
-    Arc::new(MatchStore::new(ServerConfig::default(), registry))
 }
 
 /// The status, the headers and the body of a response.

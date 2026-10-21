@@ -19,8 +19,8 @@ use sim_core::{
 use sim_math::Vec2;
 
 use super::registry::{MatchFixture, MatchRegistry};
-use super::stream::{
-    CompletedMatch, FrameBall, FramePlayer, HalfBoundaries, ManifestTeam, RosterEntry, StreamFrame,
+use super::model::{
+    CompletedMatch, FrameBall, FramePlayer, HalfBoundaries, ManifestTeam, MatchFrame, RosterEntry,
 };
 use crate::fixtures::{FixtureSet, load};
 
@@ -101,8 +101,8 @@ fn pass(seq: u64, tick: u64, clock: &MatchClock) -> MatchEvent {
 }
 
 /// One animation frame at a tick.
-fn frame(tick: u64, half: u8) -> StreamFrame {
-    StreamFrame {
+fn frame(tick: u64, half: u8) -> MatchFrame {
+    MatchFrame {
         tick,
         half,
         ball: FrameBall {

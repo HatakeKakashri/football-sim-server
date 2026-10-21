@@ -3,8 +3,8 @@
 //! [`run_match_blocking`] drives a [`Simulation`][sim_core::Simulation]
 //! to `FullTime` (or the tick cap), enforces the six PRD §12 invariants
 //! per tick, captures 10 Hz frames, and assembles the
-//! [`CompletedMatch`][crate::api::stream::CompletedMatch] the stream
-//! builder consumes.
+//! [`CompletedMatch`][crate::api::model::CompletedMatch] the render
+//! step consumes.
 
 use std::collections::HashMap;
 use std::collections::TryReserveError;
@@ -12,9 +12,9 @@ use std::collections::TryReserveError;
 use sim_components::{Ball, Match, MatchClock, Player, PlayerIdentity, Position, Team};
 use sim_core::{EventLog, MatchEvent, Simulation, Termination, TickHook, run_match_driver};
 
-use super::stream::{
-    CompletedMatch, FrameBall, FramePlayer, HalfBoundaries, ManifestTeam, RosterEntry, SIDE_AWAY,
-    SIDE_HOME, StreamFrame, ball_state_str, to_decimetres,
+use super::model::{
+    CompletedMatch, FrameBall, FramePlayer, HalfBoundaries, ManifestTeam, MatchFrame, RosterEntry,
+    SIDE_AWAY, SIDE_HOME, ball_state_str, to_decimetres,
 };
 /// Result of running one match to completion on its OS thread.
 #[derive(Debug)]
@@ -187,7 +187,7 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 /// Per-tick hook for the API runner: captures 10 Hz frames every 6 ticks.
 struct RunnerHook<'a> {
     roster_ids: &'a HashMap<u64, String>,
-    frames: &'a mut Vec<StreamFrame>,
+    frames: &'a mut Vec<MatchFrame>,
 }
 
 impl TickHook for RunnerHook<'_> {
@@ -230,7 +230,7 @@ pub fn run_match_blocking(
     let match_id = fixture.validated_match.id.clone();
     let seed = fixture.validated_match.seed;
 
-    let mut frames: Vec<StreamFrame> = Vec::new();
+    let mut frames: Vec<MatchFrame> = Vec::new();
     let mut hook = RunnerHook {
         roster_ids: &roster.ids,
         frames: &mut frames,
@@ -417,7 +417,7 @@ fn side_roster(
 pub(crate) fn capture_frame(
     sim: &Simulation,
     roster_ids: &HashMap<u64, String>,
-) -> Result<StreamFrame, ResourceError> {
+) -> Result<MatchFrame, ResourceError> {
     let world = sim.world();
     let ball = world
         .get_resource::<Ball>()
@@ -465,7 +465,7 @@ pub(crate) fn capture_frame(
     let half = world
         .get_resource::<MatchClock>()
         .map_or(1, |clock| clock.half);
-    Ok(StreamFrame {
+    Ok(MatchFrame {
         tick: sim.current_tick(),
         half,
         ball: FrameBall {

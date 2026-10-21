@@ -121,31 +121,29 @@ pub fn dispatch(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Commands::Serve {
             bind,
             max_concurrent_sims,
-            result_ttl_secs,
             api_token,
             cors_origins,
         } => {
             // The fixtures are loaded once, inside `serve`, and shared by
-            // the legacy store and the match service.
-            serve(bind, max_concurrent_sims, result_ttl_secs, api_token, cors_origins)?;
+            // every match the service runs.
+            serve(bind, max_concurrent_sims, api_token, cors_origins)?;
         }
     }
     Ok(())
 }
 
-/// Inlined `serve` path — builds the store and blocks on the axum
-/// server (kept private so `dispatch` stays short).
+/// Inlined `serve` path — builds the match service and blocks on the
+/// axum server (kept private so `dispatch` stays short).
 fn serve(
     bind: String,
     max_concurrent_sims: Option<usize>,
-    result_ttl_secs: u64,
     api_token: Option<String>,
     cors_origins: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::Arc;
 
+    use crate::api::default_concurrency_cap;
     use crate::api::runner::SimulationRunner;
-    use crate::api::{MatchRegistry, MatchStore, ServerConfig, default_concurrency_cap};
     use crate::fixtures;
     use crate::http::HttpConfig;
     use crate::service::MatchService;
@@ -156,39 +154,22 @@ fn serve(
         .filter(|origin| !origin.is_empty())
         .collect();
     let cap = max_concurrent_sims.unwrap_or_else(default_concurrency_cap);
-    let config = ServerConfig {
-        max_concurrent_sims: cap,
-        result_ttl_secs,
-        tick_cap: sim_core::TICK_CAP,
-    };
     let http = HttpConfig {
         bind,
         api_token,
         cors_origins,
     };
 
-    // Load and validate all fixtures once; both the legacy store and the
-    // match service are built from this set.
+    // Load and validate all fixtures once; every match the service runs
+    // is built from this set.
     let fixture_set = fixtures::load_default()?;
-    let mut registry = MatchRegistry::default();
-    for (match_id, validated_match) in &fixture_set.matches {
-        let home_team = fixture_set.teams.get(&validated_match.home)
-            .expect("invariant: validated match references existing home team");
-        let away_team = fixture_set.teams.get(&validated_match.away)
-            .expect("invariant: validated match references existing away team");
-        registry.insert(match_id, validated_match.clone(), home_team.clone(), away_team.clone());
-    }
-
-    let store = Arc::new(MatchStore::new(config, registry));
-    // The match service runs the matches the new routes start: the
-    // real runner, the same concurrency cap as the legacy store.
     let service = Arc::new(
-        MatchService::new(fixture_set.clone(), Arc::new(SimulationRunner)).with_cap(cap),
+        MatchService::new(fixture_set, Arc::new(SimulationRunner)).with_cap(cap),
     );
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(crate::http::serve(store, service, http))?;
+        .block_on(crate::http::serve(service, http))?;
     Ok(())
 }
 

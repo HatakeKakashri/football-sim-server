@@ -161,8 +161,7 @@ struct ManifestBody {
 /// The routes of the match service: start a match, read its manifest,
 /// read its segments.
 ///
-/// The routes live beside the legacy SSE routes and do not disturb
-/// them; see [`crate::http::router_with_service`].
+/// They are the server's only routes; see [`crate::http::router`].
 pub fn routes(state: MatchApiState) -> Router {
     Router::new()
         .route("/match/{match_id}/start", routing::post(post_start_handler))

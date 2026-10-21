@@ -54,7 +54,7 @@ use sim_components::KickoffReason;
 use sim_core::MatchEvent;
 
 use super::registry::MatchFixture;
-use super::stream::{CompletedMatch, ManifestTeam, RosterEntry, StreamFrame};
+use super::model::{CompletedMatch, ManifestTeam, MatchFrame, RosterEntry};
 use digest::{build_id, hex, sha256};
 use gzip::{compress, decompress};
 
@@ -152,9 +152,8 @@ pub struct ManifestSegment {
 
 /// The manifest of a rendered match.
 ///
-/// It carries the match's metadata (as the old SSE `manifest` message
-/// did), the end-of-match summary, and the list of segments with their
-/// immutable URLs, sizes and hashes.
+/// It carries the match's metadata, the end-of-match summary, and the
+/// list of segments with their immutable URLs, sizes and hashes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     /// Content-derived build id: SHA-256 over the fixture's contents,
@@ -249,10 +248,9 @@ struct SegmentRange {
 
 /// The published body of one segment.
 ///
-/// The shape is the one the SSE stream used: the segment's own tick
-/// range, the events that happened inside it and the animation frames
-/// it covers. Positions and ticks are absolute, so a segment can be
-/// read on its own.
+/// The shape carries the segment's own tick range, the events that
+/// happened inside it and the animation frames it covers. Positions and
+/// ticks are absolute, so a segment can be read on its own.
 #[derive(Debug, Serialize)]
 struct SegmentBody<'a> {
     /// The segment number.
@@ -270,7 +268,7 @@ struct SegmentBody<'a> {
     /// The events whose tick falls inside the segment.
     events: Vec<&'a MatchEvent>,
     /// The frames whose tick falls inside the segment.
-    frames: Vec<&'a StreamFrame>,
+    frames: Vec<&'a MatchFrame>,
 }
 
 /// Render a completed match: the manifest plus its 60-second segments.
@@ -476,7 +474,7 @@ fn render_body(completed: &CompletedMatch, range: &SegmentRange) -> Vec<u8> {
             tick >= range.from_tick && tick <= range.to_tick
         })
         .collect();
-    let frames: Vec<&StreamFrame> = completed
+    let frames: Vec<&MatchFrame> = completed
         .frames
         .iter()
         .filter(|frame| frame.tick >= range.from_tick && frame.tick <= range.to_tick)

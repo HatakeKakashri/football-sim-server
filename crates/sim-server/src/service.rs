@@ -98,7 +98,7 @@ impl MatchService {
     /// simulation. Every fixture in `fixture_set` is known and starts in
     /// `NotStarted`; any other `match_id` is rejected. The concurrency
     /// cap defaults to the server's default (`cores − 1`, the same
-    /// value as [`crate::api::ServerConfig::max_concurrent_sims`]); use
+    /// value as [`crate::api::default_concurrency_cap`]); use
     /// [`MatchService::with_cap`] to set it explicitly.
     ///
     /// # Panics

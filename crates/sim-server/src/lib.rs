@@ -141,10 +141,11 @@ pub enum Commands {
         output: Option<PathBuf>,
     },
 
-    /// Serve one-fixture match streams over HTTP + SSE (issue 12,
-    /// PRD §10). `POST /match/{id}` simulates on a dedicated OS
-    /// thread; `GET /match/{id}/stream` streams manifest + 10
-    /// segments + `full_time`.
+    /// Serve the match API over HTTP (PRD §10). `POST
+    /// /match/{id}/start` runs a match; `GET /match/{id}/manifest`
+    /// reads its manifest once ready; `GET
+    /// /match/{id}/segments/{build_id}/{segment}` serves its immutable
+    /// segments.
     Serve {
         /// Listen address (default `127.0.0.1:8080`).
         #[arg(long, default_value = crate::http::DEFAULT_BIND)]
@@ -154,18 +155,13 @@ pub enum Commands {
         #[arg(long)]
         max_concurrent_sims: Option<usize>,
 
-        /// Cache lifetime for finished/failed results, seconds.
-        #[arg(long, default_value_t = crate::api::DEFAULT_RESULT_TTL_SECS)]
-        result_ttl_secs: u64,
-
-        /// Bearer token required for `POST /match/{id}`. Unset
+        /// Bearer token required for `POST /match/{id}/start`. Unset
         /// disables auth for local-only deployments (PRD §4).
         #[arg(long)]
         api_token: Option<String>,
 
-        /// Comma-separated allowed CORS origins for
-        /// `GET /match/{id}/stream`. Empty disables CORS
-        /// (local-only deployment) (PRD §4).
+        /// Comma-separated allowed CORS origins for the match API.
+        /// Empty disables CORS (local-only deployment) (PRD §4).
         #[arg(long, default_value = "")]
         cors_origins: String,
     },

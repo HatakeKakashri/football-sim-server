@@ -17,7 +17,7 @@ use sim_components::{Formation, Mentality, PlayerProfile, PosSlot, ProfileKind, 
 
 use crate::api::registry::MatchFixture;
 use crate::api::runner::{FailureKind, manifest_teams, MatchOutcome, MatchRunner};
-use crate::api::stream::{CompletedMatch, HalfBoundaries};
+use crate::api::model::{CompletedMatch, HalfBoundaries};
 use crate::fixtures::FixtureSet;
 use crate::service::{MatchService, MatchState};
 

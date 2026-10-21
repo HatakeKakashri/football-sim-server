@@ -9,9 +9,10 @@ use std::path::{Path, PathBuf};
 
 use sim_core::Simulation;
 
+use super::model::{CompletedMatch, HalfBoundaries};
 use super::registry::MatchFixture;
+use super::render::render_match;
 use super::runner::{build_roster, capture_frame, manifest_teams};
-use super::stream::{CompletedMatch, HalfBoundaries, build_stream};
 use crate::fixtures::{FixtureSet, load};
 
 /// The committed fixtures (PRD §5), resolved from this crate's manifest
@@ -43,7 +44,7 @@ fn fixture_for(set: &FixtureSet, match_id: &str) -> MatchFixture {
     }
 }
 
-/// The manifest message of the stream for one fixture match.
+/// The rendered manifest for one fixture match.
 ///
 /// The match is not simulated: the manifest only carries the fixture's
 /// setups and the roster the world was built with, both of which exist
@@ -73,11 +74,8 @@ fn manifest_for(set: &FixtureSet, match_id: &str) -> serde_json::Value {
         attack_home: (1, -1),
         attack_away: (-1, 1),
     };
-    build_stream(&completed)
-        .into_iter()
-        .find(|message| message.event == "manifest")
-        .expect("the stream always starts with the manifest")
-        .data
+    serde_json::to_value(render_match(&fixture, &completed).manifest)
+        .expect("invariant: a manifest is JSON-serialisable")
 }
 
 /// The manifest's `teams` rows as `(id, formation, mentality, tactic)`.

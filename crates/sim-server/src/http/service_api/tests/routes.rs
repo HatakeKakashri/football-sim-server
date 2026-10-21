@@ -8,8 +8,7 @@ use super::*;
 async fn get_on_a_never_started_match_starts_no_work() {
     let runner = Arc::new(InstantRunner);
     let service = service_with(as_dyn(Arc::clone(&runner)), &["m-0001"], 1);
-    let store = test_store();
-    let router = router_with_service(store, Arc::clone(&service), http_config(None, &[]));
+    let router = router(Arc::clone(&service), http_config(None, &[]));
 
     let response = router
         .oneshot(request(Method::GET, "/match/m-0001/manifest"))
@@ -31,8 +30,7 @@ async fn get_on_a_never_started_match_starts_no_work() {
 async fn post_on_a_never_started_match_starts_the_work() {
     let runner = Arc::new(InstantRunner);
     let service = service_with(as_dyn(Arc::clone(&runner)), &["m-0001"], 1);
-    let store = test_store();
-    let router = router_with_service(store, Arc::clone(&service), http_config(None, &[]));
+    let router = router(Arc::clone(&service), http_config(None, &[]));
 
     let response = router
         .oneshot(request(Method::POST, "/match/m-0001/start"))
@@ -52,12 +50,7 @@ async fn post_on_a_never_started_match_starts_the_work() {
 async fn post_without_the_bearer_token_is_401() {
     let runner = Arc::new(InstantRunner);
     let service = service_with(as_dyn(Arc::clone(&runner)), &["m-0001"], 1);
-    let store = test_store();
-    let router = router_with_service(
-        store,
-        Arc::clone(&service),
-        http_config(Some("secret"), &[]),
-    );
+    let router = router(Arc::clone(&service), http_config(Some("secret"), &[]));
 
     let response = router
         .oneshot(request(Method::POST, "/match/m-0001/start"))
@@ -79,12 +72,7 @@ async fn post_without_the_bearer_token_is_401() {
 async fn post_with_the_bearer_token_is_served() {
     let runner = Arc::new(InstantRunner);
     let service = service_with(as_dyn(Arc::clone(&runner)), &["m-0001"], 1);
-    let store = test_store();
-    let router = router_with_service(
-        store,
-        Arc::clone(&service),
-        http_config(Some("secret"), &[]),
-    );
+    let router = router(Arc::clone(&service), http_config(Some("secret"), &[]));
 
     let mut authorized = request(Method::POST, "/match/m-0001/start");
     authorized
@@ -97,24 +85,4 @@ async fn post_with_the_bearer_token_is_served() {
     let (status, _headers, _body) = response_parts(response).await;
 
     assert_eq!(status, StatusCode::ACCEPTED);
-}
-
-/// The legacy SSE routes keep working beside the new ones.
-#[tokio::test]
-async fn the_legacy_routes_are_mounted_beside_the_new_ones() {
-    let store = test_store();
-    let service = service_with(as_dyn(Arc::new(InstantRunner)), &["m-0001"], 1);
-    let router = router_with_service(store, service, http_config(None, &[]));
-
-    let response = router
-        .oneshot(request(Method::GET, "/match/m-0000/stream"))
-        .await
-        .expect("invariant: the router answers every request");
-    let (status, _headers, _body) = response_parts(response).await;
-
-    assert_eq!(
-        status,
-        StatusCode::CONFLICT,
-        "the legacy stream route must keep its own behaviour"
-    );
 }

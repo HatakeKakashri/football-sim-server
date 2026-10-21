@@ -20,17 +20,88 @@ use super::stream::{
 pub enum MatchOutcome {
     /// Reached `FullTime` with no invariant violation.
     Finished(CompletedMatch),
-    /// Invariant violation or tick-cap breach (PRD §12); cached like
-    /// a success so retries are deterministic.
+    /// Invariant violation, tick-cap breach or runner panic (PRD §12);
+    /// cached like a success so retries are deterministic.
     Failed {
-        /// Machine-readable reason (`tick_cap_exceeded` or the
-        /// invariant code).
+        /// Machine-readable reason (`tick_cap_exceeded`,
+        /// `runner_panic`, `thread_spawn_failed` or the invariant
+        /// code).
         code: String,
         /// Human-readable detail.
         message: String,
         /// Tick the simulation reached before failing.
         last_good_tick: u64,
     },
+}
+
+/// Injection seam over the blocking match runner.
+///
+/// The real adapter ([`SimulationRunner`]) drives the simulation;
+/// tests supply adapters that panic or fail so the store's failure
+/// handling can be exercised without relying on the tick cap.
+pub trait MatchRunner: Send + Sync + std::fmt::Debug {
+    /// Run one match to completion on the calling thread.
+    fn run(&self, fixture: &crate::api::MatchFixture, tick_cap: u64) -> MatchOutcome;
+}
+
+/// Real adapter: runs the simulation through the shared match driver.
+#[derive(Debug, Default)]
+pub struct SimulationRunner;
+
+impl MatchRunner for SimulationRunner {
+    fn run(&self, fixture: &crate::api::MatchFixture, tick_cap: u64) -> MatchOutcome {
+        run_match_blocking(fixture, tick_cap)
+    }
+}
+
+/// Run the runner, turning a panic into a cached failure outcome.
+///
+/// A panic on the simulation thread must not skip the store's
+/// completion bookkeeping: the concurrency slot would leak, the record
+/// would stay `Running` forever, and every later `GET` would wait
+/// for a match that never finishes. The panic is caught here and
+/// reported as a `runner_panic` failure, so the slot is released and
+/// the failure is cached like any other (PRD §12).
+#[must_use]
+pub fn run_catching_panic(
+    runner: &dyn MatchRunner,
+    fixture: &crate::api::MatchFixture,
+    tick_cap: u64,
+) -> MatchOutcome {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runner.run(fixture, tick_cap)
+    }));
+    match outcome {
+        Ok(outcome) => outcome,
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            tracing::error!(
+                match_id = %fixture.validated_match.id,
+                seed = fixture.validated_match.seed,
+                "simulation runner panicked: {message}"
+            );
+            MatchOutcome::Failed {
+                code: "runner_panic".to_string(),
+                message,
+                // The panic payload carries no tick count: the run is
+                // failed at tick 0 (unknown progress).
+                last_good_tick: 0,
+            }
+        }
+    }
+}
+
+/// Extract a human-readable message from a panic payload.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload.downcast_ref::<&str>().map_or_else(
+        || {
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "runner panicked".to_string())
+        },
+        |text| (*text).to_string(),
+    )
 }
 
 /// Per-tick hook for the API runner: captures 10 Hz frames every 6 ticks.
@@ -152,7 +223,7 @@ pub fn run_match_blocking(
     let attack_end = attack_directions(&sim);
 
     MatchOutcome::Finished(CompletedMatch {
-        match_id: match_id.to_string(),
+        match_id,
         seed,
         events,
         frames,

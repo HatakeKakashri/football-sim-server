@@ -11,11 +11,23 @@
 //! PRD §10.4). Beyond [`ServerConfig::max_concurrent_sims`],
 //! `POST` returns `503` with `Retry-After`.
 //!
+//! A run that panics or whose thread cannot be spawned is a failed
+//! match, not a wedged one: the concurrency slot is released, the
+//! failure is cached, and `GET` returns the terminal error stream
+//! instead of waiting for a match that never finishes.
+//!
 //! Stream layout itself lives in [`stream`](crate::api::stream);
-//! the simulation runner in [`runner`](crate::api::runner).
+//! the simulation runner in [`runner`](crate::api::runner); the
+//! OS-thread spawn seam in [`spawn`](crate::api::spawn).
 
+pub mod registry;
 pub mod runner;
+pub mod spawn;
 pub mod stream;
+#[cfg(test)]
+mod failure_tests;
+#[cfg(test)]
+pub(crate) mod test_doubles;
 #[cfg(test)]
 mod tests;
 
@@ -26,7 +38,9 @@ use std::time::Instant;
 use sim_core::TICK_CAP;
 use tokio::sync::Notify;
 
-use runner::{MatchOutcome, run_match_blocking};
+pub use registry::{MatchFixture, MatchRegistry};
+use runner::{MatchOutcome, MatchRunner, SimulationRunner, run_catching_panic};
+use spawn::{OsThreadSpawner, ThreadSpawner};
 use stream::{SseMessage, build_error_stream, build_stream, render_body};
 
 /// `Retry-After` seconds sent with `503` over the concurrency cap.
@@ -78,118 +92,6 @@ impl Default for ServerConfig {
     }
 }
 
-/// One registered fixture: a `match_id` with its validated match data and
-/// the two teams' player rosters.
-#[derive(Debug, Clone)]
-pub struct MatchFixture {
-    /// Fixture match id from the URL path.
-    pub match_id: String,
-    /// The validated match (seed, home/away team IDs, setups).
-    pub validated_match: sim_components::fixture::ValidatedMatch,
-    /// The home team's validated players.
-    pub home_team: sim_components::fixture::ValidatedTeam,
-    /// The away team's validated players.
-    pub away_team: sim_components::fixture::ValidatedTeam,
-}
-
-/// Fixture registry. Unknown `match_id`s get `404` (PRD §10.1).
-#[derive(Debug, Clone, Default)]
-pub struct MatchRegistry {
-    /// Fixtures by `match_id`.
-    pub fixtures: HashMap<String, MatchFixture>,
-}
-
-impl MatchRegistry {
-    /// Registry with a single fixture (this slice serves one fixture).
-    #[must_use]
-    pub fn single(
-        match_id: &str,
-        validated_match: sim_components::fixture::ValidatedMatch,
-        home_team: sim_components::fixture::ValidatedTeam,
-        away_team: sim_components::fixture::ValidatedTeam,
-    ) -> Self {
-        let mut registry = Self::default();
-        registry.insert(match_id, validated_match, home_team, away_team);
-        registry
-    }
-
-    /// Test-only constructor: creates a registry with a single fixture using
-    /// placeholder profiles (for tests that don't need real fixture data).
-    #[cfg(test)]
-    #[must_use]
-    pub fn single_test(match_id: &str, seed: u64) -> Self {
-        use sim_components::{
-            fixture::{ValidatedMatch, ValidatedSide, ValidatedTeam, ValidatedPlayer},
-            profile::ProfileKind,
-            Formation, Mentality, Tactic, PosSlot, PlayerProfile,
-        };
-        let mut registry = Self::default();
-
-        // Create minimal validated match with placeholder data
-        let validated_match = ValidatedMatch {
-            id: match_id.to_string(),
-            seed,
-            home: "test-home".to_string(),
-            away: "test-away".to_string(),
-            home_setup: ValidatedSide {
-                formation: Formation::FourFourTwo,
-                mentality: Mentality::Balance,
-                tactic: Tactic::Possession,
-            },
-            away_setup: ValidatedSide {
-                formation: Formation::FourFourTwo,
-                mentality: Mentality::Balance,
-                tactic: Tactic::Possession,
-            },
-        };
-
-        // Create minimal validated teams with 11 placeholder players each
-        let make_team = |id: &str, name: &str| ValidatedTeam {
-            id: id.to_string(),
-            name: name.to_string(),
-            players: (0..11).map(|i| ValidatedPlayer {
-                id: format!("{id}-p{i:02}"),
-                name: format!("Player {i}"),
-                number: (i + 1) as u8,
-                kind: if i == 0 { ProfileKind::Goalkeeper } else { ProfileKind::Outfield },
-                trained_positions: if i == 0 { vec![PosSlot::GK] } else { vec![PosSlot::MC] },
-                profile: if i == 0 { PlayerProfile::default_goalkeeper() } else { PlayerProfile::default_outfield() },
-            }).collect(),
-        };
-
-        let home_team = make_team("test-home", "Home");
-        let away_team = make_team("test-away", "Away");
-
-        registry.insert(match_id, validated_match, home_team, away_team);
-        registry
-    }
-
-    /// Add (or replace) a fixture.
-    pub fn insert(
-        &mut self,
-        match_id: &str,
-        validated_match: sim_components::fixture::ValidatedMatch,
-        home_team: sim_components::fixture::ValidatedTeam,
-        away_team: sim_components::fixture::ValidatedTeam,
-    ) {
-        self.fixtures.insert(
-            match_id.to_string(),
-            MatchFixture {
-                match_id: match_id.to_string(),
-                validated_match,
-                home_team,
-                away_team,
-            },
-        );
-    }
-
-    /// Look up a fixture by `match_id`.
-    #[must_use]
-    pub fn get(&self, match_id: &str) -> Option<&MatchFixture> {
-        self.fixtures.get(match_id)
-    }
-}
-
 /// Lifecycle of one match entry in the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobStatus {
@@ -197,8 +99,9 @@ pub enum JobStatus {
     Running,
     /// Reached `FullTime`; the 12-message stream is cached.
     Finished,
-    /// Invariant violation or tick-cap breach; the 1-message error
-    /// stream is cached (PRD §12: failures cache like successes).
+    /// Invariant violation, tick-cap breach, runner panic or failed
+    /// thread spawn; the 1-message error stream is cached (PRD §12:
+    /// failures cache like successes).
     Failed,
 }
 
@@ -259,7 +162,8 @@ enum PostDecision {
 #[derive(Debug, Clone)]
 pub struct PostResponse {
     /// HTTP status: 202 started now, 200 already known, 404 unknown
-    /// id, 503 over the concurrency cap.
+    /// id, 500 the simulation thread could not be started, 503 over
+    /// the concurrency cap.
     pub status: u16,
     /// `{ match_id, status }` body.
     pub body: serde_json::Value,
@@ -290,6 +194,12 @@ pub enum StreamResponse {
 pub struct MatchStore {
     config: ServerConfig,
     pub registry: MatchRegistry,
+    /// Seam over the blocking match runner (real adapter in
+    /// production, injected adapters in tests).
+    runner: Arc<dyn MatchRunner>,
+    /// Seam over OS-thread creation (real adapter in production,
+    /// injected adapters in tests).
+    spawner: Arc<dyn ThreadSpawner>,
     state: Mutex<StoreState>,
     finished: Notify,
 }
@@ -301,9 +211,33 @@ impl MatchStore {
         Self {
             config,
             registry,
+            runner: Arc::new(SimulationRunner),
+            spawner: Arc::new(OsThreadSpawner),
             state: Mutex::new(StoreState::default()),
             finished: Notify::new(),
         }
+    }
+
+    /// Replace the match runner (injection seam).
+    ///
+    /// Production uses [`MatchStore::new`]; tests inject a runner that
+    /// panics or fails so the store's failure handling is exercised
+    /// without relying on the tick cap.
+    #[must_use]
+    pub fn with_runner(mut self, runner: Arc<dyn MatchRunner>) -> Self {
+        self.runner = runner;
+        self
+    }
+
+    /// Replace the OS-thread spawner (injection seam).
+    ///
+    /// Production uses [`MatchStore::new`]; tests inject a spawner that
+    /// refuses to start the thread, so the slot taken before the spawn
+    /// is proven to be released.
+    #[must_use]
+    pub fn with_spawner(mut self, spawner: Arc<dyn ThreadSpawner>) -> Self {
+        self.spawner = spawner;
+        self
     }
 
     /// `true` when the record exists and its TTL has not elapsed.
@@ -320,8 +254,8 @@ impl MatchStore {
     ///
     /// # Panics
     ///
-    /// Panics if the store lock is poisoned or the OS thread spawn
-    /// fails; both are programmer errors, never client input.
+    /// Panics if the store lock is poisoned, which is a programmer
+    /// error, never client input.
     pub fn post_match(self: &Arc<Self>, match_id: &str) -> PostResponse {
         let fixture = match self.registry.get(match_id) {
             Some(fixture) => fixture.clone(),
@@ -376,18 +310,48 @@ impl MatchStore {
             PostDecision::Start => {
                 let store = Arc::clone(self);
                 let tick_cap = self.config.tick_cap;
-                let fixture = fixture.clone();
-                std::thread::Builder::new()
-                    .name(format!("sim-{match_id}"))
-                    .spawn(move || {
-                        let outcome = run_match_blocking(&fixture, tick_cap);
-                        store.finish_match(&fixture.validated_match.id, outcome);
-                    })
-                    .expect("invariant: OS thread spawn for a match simulation");
-                PostResponse {
-                    status: 202,
-                    body: serde_json::json!({"match_id": match_id, "status": "running"}),
-                    retry_after_secs: None,
+                let runner = Arc::clone(&self.runner);
+                let thread_match_id = fixture.validated_match.id.clone();
+                let spawn = self.spawner.spawn(
+                    format!("sim-{match_id}"),
+                    Box::new(move || {
+                        // A panic in the runner must not skip the
+                        // completion bookkeeping below, so it is caught
+                        // and turned into a cached failure.
+                        let outcome = run_catching_panic(runner.as_ref(), &fixture, tick_cap);
+                        store.finish_match(&thread_match_id, outcome);
+                    }),
+                );
+                match spawn {
+                    Ok(()) => PostResponse {
+                        status: 202,
+                        body: serde_json::json!({"match_id": match_id, "status": "running"}),
+                        retry_after_secs: None,
+                    },
+                    Err(error) => {
+                        // The concurrency slot was taken before the
+                        // spawn: release it and cache the failure, so
+                        // `GET` returns a terminal error instead of
+                        // waiting for a match that never starts.
+                        self.finish_match(
+                            match_id,
+                            MatchOutcome::Failed {
+                                code: "thread_spawn_failed".to_string(),
+                                message: format!(
+                                    "could not start the simulation thread: {}",
+                                    error.message
+                                ),
+                                last_good_tick: 0,
+                            },
+                        );
+                        PostResponse {
+                            status: 500,
+                            body: serde_json::json!({
+                                "error": "simulation thread could not be started",
+                            }),
+                            retry_after_secs: None,
+                        }
+                    }
                 }
             }
         }
@@ -476,6 +440,13 @@ impl MatchStore {
     /// error, never client input.
     pub async fn wait_until_done(&self, match_id: &str) {
         loop {
+            // Register for the wakeup *before* reading the state: a
+            // completion that lands between the read and the await
+            // would otherwise be missed, and the waiter would block
+            // forever on a match that is already settled.
+            let notified = self.finished.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             let settled = {
                 let state = self
                     .state
@@ -489,7 +460,7 @@ impl MatchStore {
             if settled {
                 return;
             }
-            self.finished.notified().await;
+            notified.await;
         }
     }
 }

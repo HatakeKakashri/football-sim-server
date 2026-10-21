@@ -268,6 +268,7 @@ fn sse_response(status: StatusCode, body: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::test_doubles::ScriptedRunner;
     use crate::api::{MatchRegistry, ServerConfig};
 
     fn test_state(ttl_secs: u64, tick_cap: u64) -> AppState {
@@ -691,6 +692,50 @@ mod tests {
             preflight.to_ascii_lowercase().contains("access-control-allow-methods"),
             "body was: {preflight}"
         );
+    }
+
+    /// A panicked simulation must not wedge the stream: `GET` returns
+    /// the terminal error message instead of waiting for a match that
+    /// never finishes.
+    #[tokio::test]
+    async fn get_after_a_runner_panic_returns_the_terminal_error() {
+        let mut registry = MatchRegistry::default();
+        let single = MatchRegistry::single_test("panic-0", 7);
+        registry.fixtures.extend(single.fixtures);
+        let store = Arc::new(
+            MatchStore::new(ServerConfig::default(), registry)
+                .with_runner(Arc::new(ScriptedRunner)),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("invariant: loopback bind works in tests");
+        let addr = listener
+            .local_addr()
+            .expect("invariant: bound socket has an address");
+        let server_store = store.clone();
+        tokio::spawn(async move {
+            axum::serve(listener, router(server_store, None, Vec::new()))
+                .await
+                .expect("invariant: test server serves");
+        });
+
+        assert!(
+            raw_post(addr, "/match/panic-0")
+                .await
+                .starts_with("HTTP/1.1 202")
+        );
+
+        // The stream must not wait forever: the panicked match is
+        // served as a terminal error.
+        let body = tokio::time::timeout(
+            Duration::from_secs(10),
+            raw_get(addr, "/match/panic-0/stream", ""),
+        )
+        .await
+        .expect("the stream must not wait forever after a runner panic");
+        assert!(body.starts_with("HTTP/1.1 200"), "body was: {body}");
+        assert!(body.contains("event: error"), "body was: {body}");
+        assert!(body.contains("runner_panic"), "body was: {body}");
     }
 
     /// One raw HTTP/1.1 GET over a fresh connection; returns the raw

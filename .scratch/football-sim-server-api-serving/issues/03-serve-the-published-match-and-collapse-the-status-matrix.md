@@ -12,6 +12,8 @@
 - [ ] The `state` values the wire uses (`unknown`, `not_started`, `queued`, `running`, `ready`, `failed`, `not_ready`, `no_segment`, `unauthorized`, `broken`) are declared once, in the module that owns the HTTP surface, and both route modules use them.
 - [ ] The manifest route serves the published manifest bytes: it does not clone the manifest value and it does not re-serialise it.
 - [ ] The segment route finds its segment through the published index; it does not scan the segment list.
+- [ ] The build-id check, the `.json` suffix parse and the segment lookup move out of the segment handler into the resolution step, so the handler keeps only content negotiation and headers.
+- [ ] The `Instant` import stays inside the lifecycle module: the HTTP layer never calls `Instant::now()` or computes a retry wait itself, so "time left before a retry" is the service's answer rather than the route's arithmetic.
 - [ ] The service's `is_known()` and `state()` are removed from its public interface, and every caller is updated: the routes, the service's own tests and the shared test helper that waits for a match to reach a state.
 - [ ] Every row of the status matrix still answers with the same status code, the same body shape, the same `state` value, the same `Cache-Control` and the same `Retry-After`. The existing matrix test passes unchanged.
 - [ ] The gzip and the non-gzip segment paths still serve the same bytes as before, and the decoded body still hashes to the manifest's hash.

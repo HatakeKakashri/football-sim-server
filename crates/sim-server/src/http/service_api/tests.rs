@@ -28,6 +28,7 @@ mod cors;
 mod matrix;
 mod revalidation;
 mod routes;
+mod segment_urls;
 mod segments;
 
 /// A counter of the runs of the runner under a row.
@@ -148,6 +149,41 @@ async fn response_parts(
         headers,
         String::from_utf8(bytes.to_vec()).expect("invariant: a response body is UTF-8"),
     )
+}
+
+/// The status, the headers and the raw bytes of a response.
+///
+/// The body is kept as bytes: a gzip body is not UTF-8.
+async fn response_bytes(
+    response: axum::response::Response,
+) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let (mut parts, body) = response.into_parts();
+    let headers = std::mem::take(&mut parts.headers);
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .expect("invariant: a test body fits in memory");
+    (parts.status, headers, bytes.to_vec())
+}
+
+/// A service with one ready match, driven by the instant runner.
+async fn ready_service(match_id: &str) -> Arc<MatchService> {
+    let service = service_with(as_dyn(Arc::new(InstantRunner)), &[match_id], 1);
+    let _ = service.start(match_id).await;
+    wait_until(&service, match_id, |state| {
+        matches!(state, MatchState::Ready { .. })
+    })
+    .await;
+    service
+}
+
+/// The lowercase hex of a digest.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 /// The value of a header, or the empty string when it is absent.

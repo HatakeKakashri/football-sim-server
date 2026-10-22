@@ -11,9 +11,19 @@
 //! |---|---|
 //! | unknown match id | 404 `unknown` |
 //! | not ready: never started, queued, running, failed, or forgotten by a restart | 409 `not_ready` |
+//! | ready, path is not a segment URL | 404 `no_segment` |
 //! | ready, unknown build id | 404 `no_segment` |
 //! | ready, unknown segment number | 404 `no_segment` |
 //! | ready, known segment | 200 + the segment's bytes |
+//!
+//! # The URL scheme
+//!
+//! The route's pattern, the URLs the manifest publishes and the way
+//! this route reads a path are one scheme, owned by
+//! [`SegmentUrl`](crate::api::render::SegmentUrl). This route reads
+//! the request path with that scheme's parser, so it never strips the
+//! `.json` suffix or parses a segment number itself: a path that is
+//! not a segment URL names no segment at all.
 //!
 //! # The two representations
 //!
@@ -45,13 +55,13 @@
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
-use axum::extract::{Path, State};
+use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
-use crate::api::render::{ENCODING_GZIP, PublishedMatch, PublishedSegment};
+use crate::api::render::{ENCODING_GZIP, PublishedMatch, PublishedSegment, SegmentPath, SegmentUrl};
 use crate::http::content_negotiation::accepts_gzip;
-use crate::service::{MatchService, MatchState};
+use crate::service::MatchState;
 
 use super::{
     CONTENT_TYPE_JSON, MatchApiState, STATE_BROKEN, STATE_NO_SEGMENT, STATE_NOT_READY,
@@ -69,8 +79,8 @@ const IMMUTABLE_CACHE_CONTROL: &str = "private, max-age=31536000, immutable";
 /// on the coding the client accepts.
 const VARY_ACCEPT_ENCODING: &str = "Accept-Encoding";
 
-/// The suffix every published segment URL ends in.
-const SEGMENT_SUFFIX: &str = ".json";
+/// The message of the 404 for a path that is not a segment URL.
+const NOT_A_SEGMENT_URL: &str = "not a segment URL";
 
 /// The message of the 404 for a URL that names another match's bytes.
 const UNKNOWN_BUILD_ID: &str = "unknown build id";
@@ -81,10 +91,6 @@ const UNKNOWN_SEGMENT_NUMBER: &str = "unknown segment number";
 /// What a segment request resolves to.
 #[derive(Debug)]
 enum Resolved {
-    /// The match id is not a known fixture.
-    UnknownMatch,
-    /// The match has no rendered segments yet.
-    NotReady,
     /// The build id or the segment number names nothing.
     NoSegment(&'static str),
     /// The segment's published bytes.
@@ -99,63 +105,51 @@ enum Resolved {
 /// answers with a not-found.
 pub(super) async fn get_segment_handler(
     State(state): State<MatchApiState>,
-    Path((match_id, build_id, segment)): Path<(String, String, String)>,
+    OriginalUri(original): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    match resolve_segment(&state.service, &match_id, &build_id, &segment) {
-        Resolved::UnknownMatch => unknown_response(&match_id),
-        Resolved::NotReady => not_ready_response(&match_id),
-        Resolved::NoSegment(message) => unknown_segment_response(&match_id, message),
-        Resolved::Segment(published) => segment_response(&match_id, &published, &headers),
-    }
-}
-
-/// Resolve the request against the match's published bytes.
-///
-/// The resolution is this route's own rule: the match's status says
-/// whether there is a segment at all, the build id says whether the
-/// URL names this match's bytes, and the published index says which
-/// segment the URL names.
-fn resolve_segment(
-    service: &MatchService,
-    match_id: &str,
-    build_id: &str,
-    segment: &str,
-) -> Resolved {
-    match service.status(match_id) {
-        MatchState::Ready { published } => resolve_in_match(&published, build_id, segment),
-        MatchState::UnknownFixture => Resolved::UnknownMatch,
+    let path = original.path();
+    // The match's status decides the answer before the path's shape
+    // does: a match that is not ready has no segments at all, and a
+    // match the server does not know is not a match at all. The
+    // scheme's reader names the match even when the rest of the path
+    // does not match the scheme.
+    let match_id = SegmentUrl::match_id(path).unwrap_or_default();
+    match state.service.status(match_id) {
+        MatchState::UnknownFixture => unknown_response(match_id),
         // Not started, queued, running, failed, or forgotten by a
         // restart: there is no segment to serve yet.
         MatchState::NotStarted
         | MatchState::Queued
         | MatchState::Running
-        | MatchState::Failed { .. } => Resolved::NotReady,
+        | MatchState::Failed { .. } => not_ready_response(match_id),
+        MatchState::Ready { published } => {
+            // The scheme's parser reads the path: it owns the suffix
+            // and the numbering, so this route does not.
+            let Some(parts) = SegmentUrl::parse(path) else {
+                return unknown_segment_response(match_id, NOT_A_SEGMENT_URL);
+            };
+            match resolve_in_match(&published, &parts) {
+                Resolved::NoSegment(message) => unknown_segment_response(&parts.match_id, message),
+                Resolved::Segment(found) => segment_response(&parts.match_id, &found, &headers),
+            }
+        }
     }
 }
 
 /// Resolve the request against a ready match's published bytes.
-fn resolve_in_match(published: &PublishedMatch, build_id: &str, segment: &str) -> Resolved {
-    if published.build_id() != build_id {
+///
+/// The resolution is this route's own rule: the build id says whether
+/// the URL names this match's bytes, and the published index says
+/// which segment the URL names.
+fn resolve_in_match(published: &PublishedMatch, parts: &SegmentPath) -> Resolved {
+    if published.build_id() != parts.build_id {
         return Resolved::NoSegment(UNKNOWN_BUILD_ID);
     }
-    let Some(number) = segment_number(segment) else {
-        return Resolved::NoSegment(UNKNOWN_SEGMENT_NUMBER);
-    };
-    published.segment(number).map_or_else(
+    published.segment(parts.number).map_or_else(
         || Resolved::NoSegment(UNKNOWN_SEGMENT_NUMBER),
         |found| Resolved::Segment(found.clone()),
     )
-}
-
-/// The segment number a URL names, or `None` when the path names no
-/// segment.
-///
-/// The published URLs end in `.json`; a path that does not is not a
-/// segment URL.
-fn segment_number(segment: &str) -> Option<u32> {
-    let number = segment.strip_suffix(SEGMENT_SUFFIX)?;
-    number.parse::<u32>().ok()
 }
 
 /// The 200: the segment's published bytes, in the coding the client

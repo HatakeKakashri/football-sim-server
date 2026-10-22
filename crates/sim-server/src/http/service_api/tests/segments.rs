@@ -6,11 +6,13 @@
 //!
 //! The cases cover both encodings of a ready segment and every row of
 //! the route's status matrix: an unknown match, a match that is not
-//! ready, a wrong build id and an unknown segment number.
+//! ready, a wrong build id, a path that is not a segment URL and an
+//! unknown segment number. The round trip of the URL scheme itself —
+//! every URL the manifest publishes, served by the router — lives in
+//! `segment_urls`.
 
 use std::io::Read;
 
-use axum::http::HeaderMap;
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 
@@ -32,17 +34,6 @@ struct Segment {
     sha256: String,
     /// The stored gzip bytes.
     gzipped: Vec<u8>,
-}
-
-/// A service with one ready match, driven by the instant runner.
-async fn ready_service(match_id: &str) -> Arc<MatchService> {
-    let service = service_with(as_dyn(Arc::new(InstantRunner)), &[match_id], 1);
-    let _ = service.start(match_id).await;
-    wait_until(&service, match_id, |state| {
-        matches!(state, MatchState::Ready { .. })
-    })
-    .await;
-    service
 }
 
 /// The first segment of a ready match, as the manifest publishes it and
@@ -78,20 +69,6 @@ fn first_segment(service: &Arc<MatchService>, match_id: &str) -> Segment {
     }
 }
 
-/// The status, the headers and the raw bytes of a response.
-///
-/// The body is kept as bytes: a gzip body is not UTF-8.
-async fn response_bytes(
-    response: axum::response::Response,
-) -> (StatusCode, HeaderMap, Vec<u8>) {
-    let (mut parts, body) = response.into_parts();
-    let headers = std::mem::take(&mut parts.headers);
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .expect("invariant: a test body fits in memory");
-    (parts.status, headers, bytes.to_vec())
-}
-
 /// A request for a segment, with the coding the client accepts.
 fn segment_request(url: &str, accept_encoding: Option<&str>) -> Request<Body> {
     let mut request = request(Method::GET, url);
@@ -110,16 +87,6 @@ fn gunzip(bytes: &[u8]) -> Vec<u8> {
     GzDecoder::new(bytes)
         .read_to_end(&mut out)
         .expect("invariant: a served gzip body decodes");
-    out
-}
-
-/// The lowercase hex of a digest.
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
     out
 }
 
@@ -390,4 +357,51 @@ async fn a_bad_segment_number_is_404() {
 
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body.contains("no_segment"), "body was: {body}");
+}
+
+/// A path without the `.json` suffix names no segment: 404.
+///
+/// The suffix is part of the segment's value, not of the route, so
+/// the route matches the path and the scheme's parser rejects it.
+#[tokio::test]
+async fn a_path_without_the_suffix_is_404() {
+    let service = ready_service("m-0001").await;
+    let segment = first_segment(&service, "m-0001");
+    let router = router(service, http_config(None, &[]));
+
+    let without_suffix = format!(
+        "/match/m-0001/segments/{}/{}",
+        segment.build_id, segment.number
+    );
+    let response = router
+        .oneshot(request(Method::GET, &without_suffix))
+        .await
+        .expect("invariant: the router answers every request");
+    let (status, _headers, body) = response_parts(response).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.contains("no_segment"), "body was: {body}");
+}
+
+/// A path with an extra part names no segment: 404.
+///
+/// The route matches whole path segments, so the router does not
+/// route this path at all and answers with its own not-found.
+#[tokio::test]
+async fn a_path_with_an_extra_part_is_404() {
+    let service = ready_service("m-0001").await;
+    let segment = first_segment(&service, "m-0001");
+    let router = router(service, http_config(None, &[]));
+
+    let extra = format!(
+        "/match/m-0001/segments/{}/{}.json/extra",
+        segment.build_id, segment.number
+    );
+    let response = router
+        .oneshot(request(Method::GET, &extra))
+        .await
+        .expect("invariant: the router answers every request");
+    let (status, _headers, _body) = response_parts(response).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

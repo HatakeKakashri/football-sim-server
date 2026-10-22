@@ -53,6 +53,14 @@
 //! fixture's contents, the format version and every segment's hash. It
 //! changes whenever the rendered bytes change and depends on nothing
 //! else (no crate version, no git hash — neither exists here).
+//!
+//! # The URL scheme
+//!
+//! The URL every segment is published under is built by
+//! [`SegmentUrl`], which owns the whole scheme: the path, the
+//! `.json` suffix and the order of the parts. The router routes the
+//! same scheme and the segment route reads it back, so the manifest
+//! can only publish URLs the server serves.
 
 use std::sync::Arc;
 
@@ -68,18 +76,22 @@ use ranges::{SegmentRange, segment_ranges};
 
 pub use gzip::{GZIP_LEVEL, GzipError};
 pub use published::{ManifestBody, PublishedMatch, PublishedSegment, STATE_READY};
+pub use segment_url::{SegmentPath, SegmentUrl};
 
 mod digest;
 mod frame_body;
 mod gzip;
 mod published;
 mod ranges;
+mod segment_url;
 #[cfg(test)]
 mod frame_body_tests;
 #[cfg(test)]
 mod gzip_tests;
 #[cfg(test)]
 mod published_tests;
+#[cfg(test)]
+mod segment_url_tests;
 
 /// Wire format version of the manifest and the segment bodies.
 ///
@@ -303,7 +315,7 @@ pub fn render_match(fixture: &MatchFixture, completed: &CompletedMatch) -> Rende
             half: segment.range.half,
             from_tick: segment.range.from_tick,
             to_tick: segment.range.to_tick,
-            url: segment_url(&completed.match_id, &build_id, segment.range.number),
+            url: SegmentUrl::build(&completed.match_id, &build_id, segment.range.number),
             encoding: ENCODING_GZIP.to_string(),
             uncompressed_bytes: segment.uncompressed_bytes,
             sha256: hex(&segment.hash),
@@ -423,12 +435,4 @@ fn render_body(completed: &CompletedMatch, range: &SegmentRange) -> Vec<u8> {
         frames: FramesBody::new(&frames, &completed.roster),
     };
     serde_json::to_vec(&body).expect("invariant: a segment body is JSON-serialisable")
-}
-
-/// The immutable URL a segment is served from.
-///
-/// The URL embeds the build id and the segment number, so the bytes
-/// behind it never change.
-fn segment_url(match_id: &str, build_id: &str, number: u32) -> String {
-    format!("/match/{match_id}/segments/{build_id}/{number}.json")
 }

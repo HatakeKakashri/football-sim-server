@@ -346,7 +346,8 @@ client that accepts gzip gets the stored gzip bytes with
 bytes. Both decode to the same body, whose SHA-256 is the hash the
 manifest publishes, so the URL means the same thing either way. The 200
 carries `Vary: Accept-Encoding`, so a cache keeps the two
-representations apart.
+representations apart. It reads the request path with the **URL scheme**'s
+parser, so a path that is not a segment URL names no segment.
 
 **Simulation / SimulationSet** — `sim_core::Simulation`: owns `World` +
 `Schedule` + `tick()`. `SimulationSet` = the seven ordered phases.
@@ -406,6 +407,15 @@ a **retry window** instead of being cached forever. Contrast with
 **deterministic failure**.
 
 ## U
+
+**URL scheme** — `sim_server::api::render::SegmentUrl`: the shape of the
+URLs the manifest publishes for its segments,
+`/match/{match_id}/segments/{build_id}/{number}.json`. One definition
+owns the whole scheme — the path pattern the router routes, the URL the
+manifest publishes and the parser that reads a path back into its parts
+— so the manifest can only publish URLs the server serves. The `.json`
+suffix belongs to the segment's value, not to the route: a router
+matches whole path segments, so a route cannot pin a suffix inside one.
 
 **UtilityBrain / Utility AI** — `sim-ai-player::brain`: per-player brain of
 actions × considerations × response curves; scored via geometric mean with

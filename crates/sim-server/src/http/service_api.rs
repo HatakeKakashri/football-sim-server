@@ -12,7 +12,10 @@
 //!   manifest's current validator.
 //! - `GET /match/{match_id}/segments/{build_id}/{segment}` reads one
 //!   segment of a ready match from the immutable URL the manifest
-//!   publishes. It never starts work either.
+//!   publishes. It never starts work either. The route's pattern
+//!   comes from the same scheme the manifest publishes its URLs
+//!   from, so the manifest can only publish URLs this router serves
+//!   (see [`SegmentUrl`]).
 //!
 //! # One rule, one answer
 //!
@@ -92,7 +95,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing};
 use serde::Serialize;
 
-use crate::api::render::PublishedMatch;
+use crate::api::render::{PublishedMatch, SegmentUrl};
 use crate::http::HttpConfig;
 use crate::http::conditional::if_none_match_matches;
 use crate::service::{MatchService, MatchState, StartError, StartOutcome};
@@ -208,7 +211,7 @@ pub fn routes(state: MatchApiState) -> Router {
             routing::get(get_manifest_handler),
         )
         .route(
-            "/match/{match_id}/segments/{build_id}/{segment}",
+            SegmentUrl::route_pattern(),
             routing::get(segments::get_segment_handler),
         )
         .with_state(state)

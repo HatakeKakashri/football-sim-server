@@ -9,27 +9,7 @@
 //! `tower::ServiceExt::oneshot`, so no socket is opened and no handler
 //! is called directly.
 
-use axum::Router;
-
 use super::*;
-
-/// A service with one ready match, its router, and the validator its
-/// manifest publishes.
-async fn ready_match() -> (Arc<MatchService>, Router, String) {
-    let runner = Arc::new(InstantRunner);
-    let service = service_with(as_dyn(Arc::clone(&runner)), &["m-0001"], 1);
-    let _ = service.start("m-0001").await;
-    wait_until(&service, "m-0001", |state| {
-        matches!(state, MatchState::Ready { .. })
-    })
-    .await;
-    let MatchState::Ready { published } = service.status("m-0001") else {
-        panic!("invariant: the match under test is ready");
-    };
-    let validator = format!("\"{}\"", published.build_id());
-    let router = router(Arc::clone(&service), http_config(None, &[]));
-    (service, router, validator)
-}
 
 /// A manifest request that carries this `If-None-Match`.
 fn manifest_request(if_none_match: &str) -> Request<Body> {
@@ -46,7 +26,7 @@ fn manifest_request(if_none_match: &str) -> Request<Body> {
 /// A client that names the manifest's validator is answered with a 304.
 #[tokio::test]
 async fn a_client_that_names_the_validator_is_answered_with_304() {
-    let (_service, router, _validator) = ready_match().await;
+    let (_service, router, _build_id) = ready_match().await;
 
     // The 200 the client holds: its validator is what it revalidates
     // with.
@@ -83,7 +63,8 @@ async fn a_client_that_names_the_validator_is_answered_with_304() {
 /// A client that sends no validator gets the whole manifest.
 #[tokio::test]
 async fn a_client_that_sends_no_validator_gets_the_whole_manifest() {
-    let (_service, router, validator) = ready_match().await;
+    let (_service, router, build_id) = ready_match().await;
+    let validator = identity_validator(&build_id);
 
     let response = router
         .oneshot(request(Method::GET, "/match/m-0001/manifest"))
@@ -110,7 +91,7 @@ async fn a_client_that_sends_no_validator_gets_the_whole_manifest() {
 /// A client that names another validator gets the whole manifest.
 #[tokio::test]
 async fn a_client_that_names_another_validator_gets_the_whole_manifest() {
-    let (_service, router, _validator) = ready_match().await;
+    let (_service, router, _build_id) = ready_match().await;
 
     let response = router
         .oneshot(manifest_request("\"0123456789abcdef\""))
@@ -128,7 +109,8 @@ async fn a_client_that_names_another_validator_gets_the_whole_manifest() {
 /// A list of validators matches when one of them names the manifest.
 #[tokio::test]
 async fn a_list_of_validators_matches_when_one_of_them_names_the_manifest() {
-    let (_service, router, validator) = ready_match().await;
+    let (_service, router, build_id) = ready_match().await;
+    let validator = identity_validator(&build_id);
 
     let response = router
         .oneshot(manifest_request(&format!("\"one\", {validator}, \"two\"")))
@@ -161,7 +143,8 @@ async fn a_list_of_validators_that_names_none_of_them_gets_the_whole_manifest() 
 /// A weak validator matches the manifest's strong one.
 #[tokio::test]
 async fn a_weak_validator_matches_the_manifest() {
-    let (_service, router, validator) = ready_match().await;
+    let (_service, router, build_id) = ready_match().await;
+    let validator = identity_validator(&build_id);
 
     let response = router
         .oneshot(manifest_request(&format!("W/{validator}")))
@@ -271,7 +254,8 @@ async fn a_failed_match_keeps_its_failure() {
 /// The start route does not revalidate: it answers with the manifest.
 #[tokio::test]
 async fn the_start_route_does_not_revalidate() {
-    let (service, router, validator) = ready_match().await;
+    let (service, router, build_id) = ready_match().await;
+    let validator = identity_validator(&build_id);
 
     let mut request = request(Method::POST, "/match/m-0001/start");
     request.headers_mut().insert(

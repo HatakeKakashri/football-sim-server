@@ -13,6 +13,7 @@ use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 use super::digest::{hex, sha256};
+use super::gzip;
 use super::{ManifestBody, render_match};
 use crate::api::render_doubles::{fixture, hand_built_match};
 
@@ -98,6 +99,49 @@ fn the_published_manifest_body_is_the_body_the_manifest_route_serves() {
         &rendered.published.manifest_body()[..],
         route_body.as_slice(),
         "the published bytes are the bytes the route serves"
+    );
+}
+
+/// The published manifest body has a published gzip coding, and it
+/// decodes to the same document.
+#[test]
+fn the_published_manifest_body_has_a_published_gzip_coding() {
+    let rendered = render_match(&fixture(), &hand_built_match());
+
+    let gzipped = rendered.published.gzipped_manifest_body();
+    assert!(
+        !gzipped.is_empty(),
+        "the gzip coding of the manifest is published"
+    );
+    assert_eq!(
+        gzip::decompress(&gzipped).expect("invariant: the published coding decodes"),
+        rendered.published.manifest_body().to_vec(),
+        "both representations decode to the same document"
+    );
+}
+
+/// The gzip coding of the manifest is published once, like the identity
+/// body: two renders of the same match produce the same bytes, and a
+/// clone shares them instead of copying them.
+#[test]
+fn the_gzip_coding_of_the_manifest_is_published_once() {
+    let fixture = fixture();
+    let completed = hand_built_match();
+
+    let first = render_match(&fixture, &completed);
+    let second = render_match(&fixture, &completed);
+
+    assert_eq!(
+        first.published.gzipped_manifest_body(),
+        second.published.gzipped_manifest_body(),
+        "the gzip coding is the same bytes"
+    );
+
+    let clone = first.published.clone();
+    assert_eq!(
+        clone.gzipped_manifest_body().as_ptr(),
+        first.published.gzipped_manifest_body().as_ptr(),
+        "a clone shares the gzip coding instead of copying it"
     );
 }
 

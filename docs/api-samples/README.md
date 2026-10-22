@@ -6,7 +6,7 @@ running a match.
 
 | File | What it is |
 |---|---|
-| `m-0001-manifest.json` | The exact `200` body of `GET /match/m-0001/manifest` once the match is ready. It is the manifest plus `"state": "ready"` and carries the build id, result, roster and every segment row. |
+| `m-0001-manifest.json` | The exact `200` body of `GET /match/m-0001/manifest` once the match is ready. It is the manifest plus `"state": "ready"` and carries the build id, result, roster and every segment row. It was fetched without `Accept-Encoding`, so it is the identity representation; a client that accepts gzip receives the gzip coding of the same document, with `ETag: "<build_id>-gzip"` instead of `"<build_id>"`. |
 | `m-0001-segment-0.json` | The decoded body of `GET /match/m-0001/segments/{build_id}/0.json` (the first segment: half 1, minutes 0–1). The response was fetched with `Accept-Encoding: gzip` and gunzipped, so this is the JSON the client parses. |
 
 Both files are tied to the committed `fixtures/matches/m-0001.toml` seed

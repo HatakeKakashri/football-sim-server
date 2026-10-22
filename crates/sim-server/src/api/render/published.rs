@@ -14,6 +14,11 @@
 //! next to the manifest it flattens, so the wire format of a manifest
 //! body lives in one place.
 //!
+//! The manifest is served in two representations: the body itself and
+//! its gzip coding. Both are published here, side by side, so a
+//! request picks between two sets of bytes that already exist instead
+//! of compressing or decompressing the manifest on the fly.
+//!
 //! The published match also carries the build id: the digest every
 //! published URL names. A caller that serves the bytes needs it for
 //! the manifest's validator and for the build-id check of a segment
@@ -43,6 +48,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use super::gzip::compress;
 use super::{Manifest, StoredSegment};
 
 /// The `state` a published manifest body carries.
@@ -105,6 +111,8 @@ pub struct PublishedSegment {
 pub struct PublishedMatch {
     /// The manifest's answer body, as it goes on the wire.
     manifest_body: Arc<[u8]>,
+    /// The manifest's answer body in its gzip coding.
+    gzipped_manifest_body: Arc<[u8]>,
     /// The build id of the published match.
     ///
     /// The digest every published URL of this match carries.
@@ -127,6 +135,10 @@ impl PublishedMatch {
     pub(super) fn publish(manifest: &Manifest, stored: &[StoredSegment]) -> Self {
         let body = serde_json::to_vec(&ManifestBody::ready(manifest))
             .expect("invariant: the manifest body is JSON-serialisable");
+        // The manifest has two representations, so both are produced
+        // here, once: a request picks between them and never compresses
+        // or decompresses the manifest itself.
+        let gzipped = compress(&body);
         let segments = stored
             .iter()
             .map(|segment| {
@@ -141,6 +153,7 @@ impl PublishedMatch {
             .collect();
         Self {
             manifest_body: Arc::from(body),
+            gzipped_manifest_body: Arc::from(gzipped),
             build_id: manifest.build_id.clone(),
             segments,
         }
@@ -154,6 +167,16 @@ impl PublishedMatch {
     #[must_use]
     pub fn manifest_body(&self) -> Arc<[u8]> {
         Arc::clone(&self.manifest_body)
+    }
+
+    /// The manifest's answer body in its gzip coding, as shared bytes.
+    ///
+    /// These are the bytes a client that accepts gzip is served. They
+    /// are produced once, at render time, next to the identity bytes,
+    /// and decode to the same document.
+    #[must_use]
+    pub fn gzipped_manifest_body(&self) -> Arc<[u8]> {
+        Arc::clone(&self.gzipped_manifest_body)
     }
 
     /// The build id of the published match.

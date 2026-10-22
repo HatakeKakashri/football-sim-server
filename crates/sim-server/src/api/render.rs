@@ -38,7 +38,9 @@
 //! next to the build id the published URLs carry. The bytes are
 //! produced once, at render time, and are never derived again, so a
 //! served manifest is a copy of bytes rather than a value re-serialised
-//! per request. See [`PublishedMatch`].
+//! per request. The manifest is published in two representations — the
+//! body and its gzip coding — so a request picks between two sets of
+//! bytes that already exist. See [`PublishedMatch`].
 //!
 //! # Identity
 //!

@@ -9,11 +9,14 @@
 //! This module holds the shared fixtures; the tests live in the
 //! submodules next to it.
 
+use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
+use axum::Router;
+use flate2::read::GzDecoder;
 use tower::ServiceExt;
 
 use crate::api::runner::MatchRunner;
@@ -25,7 +28,9 @@ use crate::test_support::{
 };
 
 mod cors;
+mod manifest_codings;
 mod matrix;
+mod matrix_table;
 mod revalidation;
 mod routes;
 mod segment_urls;
@@ -33,6 +38,17 @@ mod segments;
 
 /// A counter of the runs of the runner under a row.
 type RunCounter = Arc<dyn Fn() -> u32 + Send + Sync>;
+
+/// The representation a row expects the manifest in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Representation {
+    /// The row serves no manifest at all.
+    None,
+    /// The identity body.
+    Identity,
+    /// The gzip coding of the body.
+    Gzip,
+}
 
 /// One row of the status matrix: a service, a request, and what the
 /// response must say.
@@ -57,8 +73,8 @@ struct Row {
     retry_after_ms: bool,
     /// The failure's code, when the row is a failure.
     code: Option<&'static str>,
-    /// Whether the body must be the manifest.
-    manifest: bool,
+    /// The representation of the manifest the row expects.
+    representation: Representation,
     /// How many times the runner must have run, when the row proves
     /// that a start is idempotent.
     expected_runs: Option<u32>,
@@ -90,7 +106,7 @@ impl Row {
             retry_after: false,
             retry_after_ms: false,
             code: None,
-            manifest: false,
+            representation: Representation::None,
             expected_runs: None,
             runs: None,
             gate: None,
@@ -163,6 +179,71 @@ async fn response_bytes(
         .await
         .expect("invariant: a test body fits in memory");
     (parts.status, headers, bytes.to_vec())
+}
+
+/// The status, the headers and the body of a response, decoded when
+/// the response carries a gzip coding.
+///
+/// A coded body is not text, so a test that reads the document behind
+/// it decodes it first.
+async fn decoded_parts(
+    response: axum::response::Response,
+) -> (StatusCode, HeaderMap, String) {
+    let (status, headers, bytes) = response_bytes(response).await;
+    let body = if headers.contains_key(header::CONTENT_ENCODING) {
+        String::from_utf8(gunzip(&bytes)).expect("invariant: a decoded body is UTF-8")
+    } else {
+        String::from_utf8(bytes).expect("invariant: a response body is UTF-8")
+    };
+    (status, headers, body)
+}
+
+/// The gzip bytes decoded back into the body they carry.
+fn gunzip(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    GzDecoder::new(bytes)
+        .read_to_end(&mut out)
+        .expect("invariant: a served gzip body decodes");
+    out
+}
+
+/// A service with one ready match, its router, and the build id of
+/// the published match.
+async fn ready_match() -> (Arc<MatchService>, Router, String) {
+    let runner = Arc::new(InstantRunner);
+    let service = service_with(as_dyn(Arc::clone(&runner)), &["m-0001"], 1);
+    let _ = service.start("m-0001").await;
+    wait_until(&service, "m-0001", |state| {
+        matches!(state, MatchState::Ready { .. })
+    })
+    .await;
+    let MatchState::Ready { published } = service.status("m-0001") else {
+        panic!("invariant: the match under test is ready");
+    };
+    let build_id = published.build_id().to_string();
+    let router = router(Arc::clone(&service), http_config(None, &[]));
+    (service, router, build_id)
+}
+
+/// The validator of the identity representation: the quoted build id.
+fn identity_validator(build_id: &str) -> String {
+    format!("\"{build_id}\"")
+}
+
+/// The validator of the gzip representation: the quoted build id and
+/// the gzip suffix.
+fn gzip_validator(build_id: &str) -> String {
+    format!("\"{build_id}-gzip\"")
+}
+
+/// Whether the response varies on the coding the client accepts.
+fn varies_on_accept_encoding(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::VARY)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|part| part.trim().eq_ignore_ascii_case("Accept-Encoding"))
 }
 
 /// A service with one ready match, driven by the instant runner.

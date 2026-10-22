@@ -56,7 +56,7 @@ use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{OriginalUri, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use crate::api::render::{ENCODING_GZIP, PublishedMatch, PublishedSegment, SegmentPath, SegmentUrl};
@@ -65,7 +65,7 @@ use crate::service::MatchState;
 
 use super::{
     CONTENT_TYPE_JSON, MatchApiState, STATE_BROKEN, STATE_NO_SEGMENT, STATE_NOT_READY,
-    set_header, state_response_with, unknown_response,
+    VARY_ACCEPT_ENCODING, append_vary, set_header, state_response_with, unknown_response,
 };
 
 /// The `Cache-Control` of a served segment.
@@ -74,10 +74,6 @@ use super::{
 /// until a CDN exists) and never changes behind its URL
 /// (`immutable`).
 const IMMUTABLE_CACHE_CONTROL: &str = "private, max-age=31536000, immutable";
-
-/// The `Vary` header of every answer of this route: the answer depends
-/// on the coding the client accepts.
-const VARY_ACCEPT_ENCODING: &str = "Accept-Encoding";
 
 /// The message of the 404 for a path that is not a segment URL.
 const NOT_A_SEGMENT_URL: &str = "not a segment URL";
@@ -194,14 +190,6 @@ fn segment_response(
         set_header(&mut response, header::CONTENT_ENCODING, ENCODING_GZIP);
     }
     response
-}
-
-/// Add a condition to the response's `Vary` header, keeping the ones
-/// already there.
-fn append_vary(response: &mut Response, condition: &str) {
-    let value = HeaderValue::from_str(condition)
-        .expect("invariant: the server's own header values are valid header values");
-    response.headers_mut().append(header::VARY, value);
 }
 
 /// The 409: the match has no rendered segments yet.

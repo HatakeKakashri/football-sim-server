@@ -1,10 +1,12 @@
-//! The gzip coding of the stored segment bodies (server-API ticket 04).
+//! The gzip coding of the stored bodies (server-API tickets 04 and 10).
 //!
 //! Segments are compressed as they are rendered, at the fixed level
 //! [`GZIP_LEVEL`]. The compressed bytes are kept, and the uncompressed
 //! body is published beside them (see [`super::PublishedSegment`]), so
 //! a client that does not accept gzip is served the decompressed bytes.
-//! The decompressor lives here next to the compressor.
+//! The manifest is coded the same way: its body is published beside
+//! its gzip coding (see [`super::PublishedMatch`]). The decompressor
+//! lives here next to the compressor.
 //!
 //! The level is fixed so the stored bytes are reproducible: the same
 //! body always compresses to the same bytes, on any machine, with any

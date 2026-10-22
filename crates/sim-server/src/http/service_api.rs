@@ -55,11 +55,12 @@
 //!
 //! One row of the matrix is a condition on the request rather than a
 //! state of the match: a `GET /manifest` whose `If-None-Match` names
-//! the manifest's current validator is answered with a 304 and no
-//! body, because the client already holds those bytes (RFC 9110
-//! §13.1.2). The comparison is the weak one, so a weak `W/` validator
-//! and a list of validators both match. Only a ready match has a
-//! manifest to revalidate: every other state keeps its answer.
+//! the validator of the representation it would receive is answered
+//! with a 304 and no body, because the client already holds those
+//! bytes (RFC 9110 §13.1.2). The comparison is the weak one, so a weak
+//! `W/` validator and a list of validators both match. Only a ready
+//! match has a manifest to revalidate: every other state keeps its
+//! answer.
 //!
 //! # Bodies and headers
 //!
@@ -75,10 +76,23 @@
 //! (`code`, `message`, `last_good_tick`) next to the `state` field.
 //!
 //! The 200 manifest is the only answer of the start and manifest
-//! routes that may be cached: it carries an `ETag` (the content-derived
-//! build id) and `Cache-Control: no-cache`. The 304 that answers a
-//! revalidation carries the same two headers and no body. Every other
-//! answer of those routes is `no-store`.
+//! routes that may be cached: it carries an `ETag` and
+//! `Cache-Control: no-cache`. The 304 that answers a revalidation
+//! carries the same two headers and no body. Every other answer of
+//! those routes is `no-store`.
+//!
+//! # The manifest's two representations
+//!
+//! The manifest is served in two representations: the uncompressed
+//! body and its gzip coding, both published by the render step. Which
+//! one a client gets is decided by the shared negotiation rule, so the
+//! manifest is served the way the segments are. Both decode to the same
+//! document.
+//!
+//! Each representation carries its own validator — `"<build_id>"` for
+//! the identity body, `"<build_id>-gzip"` for the gzip coding — so a
+//! cache holding one is never told it is fresh against the other. See
+//! the `manifest` module.
 //!
 //! The segment route is the exception: a segment's bytes never change
 //! behind their URL, so its 200 carries `Cache-Control: private,
@@ -88,18 +102,17 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing};
 use serde::Serialize;
 
-use crate::api::render::{PublishedMatch, SegmentUrl};
+use crate::api::render::SegmentUrl;
 use crate::http::HttpConfig;
-use crate::http::conditional::if_none_match_matches;
 use crate::service::{MatchService, MatchState, StartError, StartOutcome};
 
+mod manifest;
 mod segments;
 
 #[cfg(test)]
@@ -116,11 +129,9 @@ pub const POLL_RETRY_AFTER_MS: u64 = POLL_RETRY_AFTER_SECS * 1_000;
 /// The content type of a JSON body.
 pub(crate) const CONTENT_TYPE_JSON: &str = "application/json";
 
-/// The `Cache-Control` of the manifest's answers.
-///
-/// The manifest may be cached, but it must be revalidated before it is
-/// reused, so the answer is `no-cache` and not `no-store` (PRD §10.5).
-const MANIFEST_CACHE_CONTROL: &str = "no-cache";
+/// The `Vary` header of every answer that names a representation: the
+/// answer depends on the coding the client accepts.
+const VARY_ACCEPT_ENCODING: &str = "Accept-Encoding";
 
 /// The `state` a response reports for an id that is not a fixture.
 pub(crate) const STATE_UNKNOWN: &str = "unknown";
@@ -156,6 +167,19 @@ pub struct MatchApiState {
     pub service: Arc<MatchService>,
     /// Transport settings: the bearer token this route set checks.
     pub http: HttpConfig,
+}
+
+/// Whether the route may answer a conditional request with a 304.
+///
+/// Only a `GET` revalidates: the start route always answers with the
+/// manifest, whatever the client asks for (PRD §10.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Revalidation {
+    /// The route answers a 304 when the client names the validator of
+    /// the representation it would receive.
+    Allowed,
+    /// The route always answers with the body.
+    Never,
 }
 
 /// The body of a response that carries no result: the match's state.
@@ -239,8 +263,12 @@ async fn post_start_handler(
         // "running" means the same thing in both. The service is not
         // asked for its status here: the run may already have
         // finished, and the answer would be a 200 instead of a 202.
-        Ok(StartOutcome::Started) => status_answer(&MatchState::Running, &match_id, None),
-        Ok(StartOutcome::Queued) => status_answer(&MatchState::Queued, &match_id, None),
+        Ok(StartOutcome::Started) => {
+            status_answer(&MatchState::Running, &match_id, &headers, Revalidation::Never)
+        }
+        Ok(StartOutcome::Queued) => {
+            status_answer(&MatchState::Queued, &match_id, &headers, Revalidation::Never)
+        }
         // A run is already in flight, the match is already terminal, or
         // it failed inside its retry window: the service's answer
         // decides the response, the wait before a retry included.
@@ -250,7 +278,7 @@ async fn post_start_handler(
             | StartOutcome::RetryAfter { .. },
         ) => {
             let current = state.service.status(&match_id);
-            status_answer(&current, &match_id, None)
+            status_answer(&current, &match_id, &headers, Revalidation::Never)
         }
     }
 }
@@ -260,15 +288,16 @@ async fn post_start_handler(
 ///
 /// The route never starts work: a match that was never started answers
 /// with a conflict. A client that revalidates the manifest — one that
-/// carries the manifest's current validator in `If-None-Match` — is
-/// answered with a 304 and no body: it already holds those bytes.
+/// carries the validator of the representation it would receive in
+/// `If-None-Match` — is answered with a 304 and no body: it already
+/// holds those bytes.
 async fn get_manifest_handler(
     State(state): State<MatchApiState>,
     Path(match_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
     let current = state.service.status(&match_id);
-    status_answer(&current, &match_id, Some(&headers))
+    status_answer(&current, &match_id, &headers, Revalidation::Allowed)
 }
 
 /// The answer for a match's status.
@@ -280,20 +309,22 @@ async fn get_manifest_handler(
 /// The wait before a retry is the service's answer, so the route never
 /// computes one.
 ///
-/// `revalidation` is the request's conditional headers, for the routes
-/// that answer a conditional request. The start route passes `None`:
-/// only a `GET` revalidates (PRD §10.1).
+/// `revalidation` says whether the route may answer a conditional
+/// request with a 304: only a `GET` revalidates (PRD §10.1). The
+/// representation is the client's choice on either route — the coding
+/// the client accepts.
 fn status_answer(
     status: &MatchState,
     match_id: &str,
-    revalidation: Option<&HeaderMap>,
+    headers: &HeaderMap,
+    revalidation: Revalidation,
 ) -> Response {
     match status {
         MatchState::UnknownFixture => unknown_response(match_id),
         MatchState::NotStarted => not_started_response(match_id),
         MatchState::Running => pending_response(STATE_RUNNING, match_id),
         MatchState::Queued => pending_response(STATE_QUEUED, match_id),
-        MatchState::Ready { published } => manifest_response(published, revalidation),
+        MatchState::Ready { published } => manifest::response(published, headers, revalidation),
         MatchState::Failed {
             code,
             message,
@@ -348,50 +379,6 @@ fn pending_response(state: &'static str, match_id: &str) -> Response {
         &POLL_RETRY_AFTER_SECS.to_string(),
     );
     response
-}
-
-/// The 200 or the 304: the manifest's published bytes.
-///
-/// The body is the bytes the render step published, copied into the
-/// response: the manifest is never cloned and never re-serialised, so
-/// a request costs no string per manifest row.
-///
-/// A client that revalidates the manifest — one that carries the
-/// manifest's current validator in `If-None-Match` — is answered with
-/// a 304 and no body: it already holds these bytes (RFC 9110
-/// §13.1.2).
-fn manifest_response(published: &PublishedMatch, revalidation: Option<&HeaderMap>) -> Response {
-    let validator = manifest_validator(published);
-    if revalidation.is_some_and(|headers| if_none_match_matches(headers, &validator)) {
-        return not_modified_response(&validator);
-    }
-    let body = Bytes::from_owner(published.manifest_body());
-    let mut response = (StatusCode::OK, Body::from(body)).into_response();
-    set_header(&mut response, header::CONTENT_TYPE, CONTENT_TYPE_JSON);
-    set_header(&mut response, header::ETAG, &validator);
-    set_header(&mut response, header::CACHE_CONTROL, MANIFEST_CACHE_CONTROL);
-    response
-}
-
-/// The 304: the client already holds the manifest.
-///
-/// The answer carries the validator and the cache header of the 200 and
-/// no body: the bytes are the ones the client already has. The cache
-/// header is the manifest's `no-cache`, not `no-store`: the answer is
-/// cacheable by design (PRD §10.5).
-fn not_modified_response(validator: &str) -> Response {
-    let mut response = StatusCode::NOT_MODIFIED.into_response();
-    set_header(&mut response, header::ETAG, validator);
-    set_header(&mut response, header::CACHE_CONTROL, MANIFEST_CACHE_CONTROL);
-    response
-}
-
-/// The manifest's validator: the entity tag of its published bytes.
-///
-/// The build id is a digest of the rendered content, so it is a strong
-/// validator for the manifest.
-fn manifest_validator(published: &PublishedMatch) -> String {
-    format!("\"{}\"", published.build_id())
 }
 
 /// The 500 or the 503: the match failed.
@@ -467,6 +454,17 @@ fn set_header(response: &mut Response, name: header::HeaderName, value: &str) {
     let value = HeaderValue::from_str(value)
         .expect("invariant: the server's own header values are valid header values");
     response.headers_mut().insert(name, value);
+}
+
+/// Add a condition to the response's `Vary` header, keeping the ones
+/// already there.
+///
+/// `Vary` is a list header: it is appended to, so another layer may
+/// add its own condition (an origin, say) without losing this one.
+fn append_vary(response: &mut Response, condition: &str) {
+    let value = HeaderValue::from_str(condition)
+        .expect("invariant: the server's own header values are valid header values");
+    response.headers_mut().append(header::VARY, value);
 }
 
 /// A duration in whole milliseconds.

@@ -124,10 +124,11 @@ half attack direction, not last touch.
 
 **GLOSSARY.md** — This file; the domain language for this codebase.
 
-**gzip** — `sim_server::api::render::gzip`. The coding the segment
-bodies are stored in: gzip at the fixed level `GZIP_LEVEL` (6), through
-the pure-Rust backend, so the stored bytes never depend on the
-platform's zlib. The level is a constant, not a knob.
+**gzip** — `sim_server::api::render::gzip`. The coding the segment bodies are
+stored in: gzip at the fixed level `GZIP_LEVEL` (6), through the pure-Rust
+backend, so the stored bytes never depend on the platform's zlib. The level is
+a constant, not a knob. The manifest body is coded the same way, and both
+codings are published beside their uncompressed bodies.
 
 **gzipped_body** — `sim_server::api::render::RenderedSegment::gzipped_body`.
 The stored body of a segment: the gzip bytes, shared between clones
@@ -177,6 +178,16 @@ dimensions, tick rates, attack direction), the end-of-match summary under
 gzipped byte length, SHA-256). It is the JSON body of `GET
 /match/{match_id}/manifest` (with `state: ready` added) and the only document
 a client needs before fetching segments.
+
+**manifest route** — `sim_server::http::service_api::manifest`. The route
+that serves the manifest, in one of its two representations: the identity body
+(`ETag: "<build_id>"`) and its gzip coding (`ETag: "<build_id>-gzip"`). The
+coding is negotiated per request, so the manifest is served the way the
+segments are; both representations decode to the same document. Each carries
+its own validator, so a cache holding one is never told it is fresh against
+the other, and the `304` is decided against the representation the request
+would receive. The start route serves the same two representations but never
+revalidates.
 
 **Match** — `sim_components::Match`, a `Resource`: id, team entities, score,
 state, seed. Source of truth for match score/state.
@@ -286,8 +297,9 @@ segments. Same input, same bytes, every time.
 what it already holds is still current: it sends the validator it has in
 `If-None-Match`, and the server answers `304` when that validator names the
 resource's current one. The manifest is the only revalidatable resource: its
-validator is the `ETag: "<build_id>"` the 200 carries, and the comparison is
-the weak one (RFC 9110 §13.1.2), so a weak `W/` validator and a list of
+validators are the `ETag`s the 200 carries — `"<build_id>"` for the identity
+body and `"<build_id>-gzip"` for the gzip coding — and the comparison is the
+weak one (RFC 9110 §13.1.2), so a weak `W/` validator and a list of
 validators both match.
 
 **Resource** — Bevy ECS singleton (`Match`, `Ball`, `MatchClock`, `SimRng`, …).
